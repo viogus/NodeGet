@@ -9,7 +9,7 @@ export const themeZhConfig = {
 	},
 	{
 		text: '快速上手',
-		link: '/guide/quick-start'
+		link: '/guide/install/install-script.md'
 	},
 	{
 		text: 'API',
