@@ -70,9 +70,15 @@ jobs:
           - release_for: x86_64-musl
             target: x86_64-unknown-linux-musl
             suffix: linux-x86_64-musl
+          - release_for: x86_64-gnu
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64-gnu
           - release_for: aarch64-musl
             target: aarch64-unknown-linux-musl
             suffix: linux-aarch64-musl
+          - release_for: aarch64-gnu
+            target: aarch64-unknown-linux-gnu
+            suffix: linux-aarch64-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v4
