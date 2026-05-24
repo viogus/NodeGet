@@ -494,3 +494,115 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
   }
 }
 ```
+
+## Upload Task Result
+
+Agent 通过 `task_upload_task_result` 上传任务执行结果。此方法通常由 Agent 端调用，而不是由控制端直接调用。
+
+### 方法
+
+调用方法名为 `task_upload_task_result`，需要提供以下参数：
+
+```json
+{
+  "token": "AGENT_TASK_TOKEN",
+  "task_response": {
+    "task_id": 4,
+    "agent_uuid": "AGENT_UUID_HERE",
+    "task_token": "AGENT_TASK_TOKEN",
+    "timestamp": 1769341269012,
+    "success": true,
+    "error_message": null,
+    "task_event_result": {
+      // 任务执行结果数据，结构取决于任务类型
+    }
+  }
+}
+```
+
+语义说明：
+
+1. `task_response.task_id` 为任务数据库记录的唯一 ID。
+2. `task_response.agent_uuid` 为执行该任务的 Agent UUID。
+3. `task_response.task_token` 为任务创建时生成的验证 Token。
+4. `task_response.timestamp` 为任务执行完成时间戳（毫秒）。
+5. `task_response.success` 为布尔值，表示执行是否成功。
+6. `task_response.error_message` 为可选字符串，当 `success` 为 `false` 时包含错误信息。
+7. `task_response.task_event_result` 为可选对象，包含任务的具体执行结果。
+
+### 权限要求
+
+- SuperToken 可直接调用，无需权限预检。
+- 普通 Token 需具备目标 Agent UUID Scope 下的 `Task::Write(task_type)` 权限（`task_type` 为原始任务类型名称）。
+- 服务端会在写入时校验 `task_id`、`agent_uuid` 和 `task_token` 是否匹配，防止伪造。
+- 每条任务结果只能上传一次，重复上传会返回错误。
+
+### 返回值
+
+成功时返回任务 ID：
+
+```json
+{
+  "id": 4
+}
+```
+
+### 错误码
+
+| 代码  | 说明                                     |
+|-----|----------------------------------------|
+| 102 | Permission Denied                      |
+| 103 | Database error (写入失败)                    |
+| 108 | Invalid input (任务已完成，结果已上传)             |
+| 105 | NotFound (任务验证失败：无效的 ID、UUID 或 Token) |
+
+### 完整示例
+
+请求:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "task_upload_task_result",
+  "params": {
+    "token": "AGENT_TASK_TOKEN",
+    "task_response": {
+      "task_id": 4,
+      "agent_uuid": "42e89a61-39de-4569-b6ef-e86bc3ed8f82",
+      "task_token": "aBcDeFgHiJ",
+      "timestamp": 1769341269012,
+      "success": true,
+      "error_message": null,
+      "task_event_result": {
+        "ping": 12.5
+      }
+    }
+  },
+  "id": 1
+}
+```
+
+响应:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "id": 4
+  }
+}
+```
+
+重复上传错误示例:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": 108,
+    "message": "Invalid input: Task result has already been uploaded"
+  },
+  "id": 1
+}
+```

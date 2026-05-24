@@ -45,10 +45,10 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_create",
-  "params": [
-    "TOKEN",
-    "my_database"
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "my_database"
+  },
   "id": 1
 }
 ```
@@ -79,10 +79,10 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_read",
-  "params": [
-    "TOKEN",
-    "my_database"
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "my_database"
+  },
   "id": 1
 }
 ```
@@ -115,11 +115,11 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_update",
-  "params": [
-    "TOKEN",
-    "old_name",
-    "new_name"
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "old_name",
+    "new_name": "new_name"
+  },
   "id": 1
 }
 ```
@@ -151,10 +151,10 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_delete",
-  "params": [
-    "TOKEN",
-    "my_database"
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "my_database"
+  },
   "id": 1
 }
 ```
@@ -181,9 +181,9 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_list",
-  "params": [
-    "TOKEN"
-  ],
+  "params": {
+    "token": "TOKEN"
+  },
   "id": 1
 }
 ```
@@ -221,7 +221,7 @@ pub enum Db {
 | `db_connections`  | `Option<i32>` | 当前活跃连接数                |
 | `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时 |
 | `created_at`      | i64         | 创建时间戳（毫秒）              |
-| `is_active`       | bool        | 是否正在连接池中               |
+| `is_active`       | bool        | 连接池活跃状态：创建后为 true，过期后为 false |
 
 ## Exec Sql
 
@@ -233,14 +233,12 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_exec_sql",
-  "params": [
-    "TOKEN",
-    "my_database",
-    "SELECT * FROM users WHERE age > $1",
-    [
-      18
-    ]
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "my_database",
+    "sql": "SELECT * FROM users WHERE age > $1",
+    "params": [18]
+  },
   "id": 1
 }
 ```
@@ -281,7 +279,7 @@ pub enum Db {
 
 ## Exec Templating
 
-参数化 SQL。与 `exec_sql` 功能相同，但要求 `params` 必须为数组。
+参数化 SQL。与 `exec_sql` 功能相同，但要求 `params` 必须为数组或 `null`。
 
 **请求:**
 
@@ -289,14 +287,12 @@ pub enum Db {
 {
   "jsonrpc": "2.0",
   "method": "db_exec_templating",
-  "params": [
-    "TOKEN",
-    "my_database",
-    "SELECT * FROM users WHERE name = $1",
-    [
-      "Alice"
-    ]
-  ],
+  "params": {
+    "token": "TOKEN",
+    "name": "my_database",
+    "sql": "SELECT * FROM users WHERE name = $1",
+    "params": ["Alice"]
+  },
   "id": 1
 }
 ```

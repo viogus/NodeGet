@@ -14,8 +14,7 @@
   "name": "my-site",
   "path": "sites/my-site",
   "is_http_root": false,
-  "cors": true,
-  "enable": true
+  "cors": true
 }
 ```
 
@@ -52,8 +51,7 @@
     "name": "my-site",
     "path": "sites/my-site",
     "is_http_root": false,
-    "cors": true,
-    "enable": true
+    "cors": true
   },
   "id": 1
 }
@@ -75,6 +73,8 @@
   }
 }
 ```
+
+> 注：`enable` 字段在创建时由服务端默认为 `true`，创建后可通过 [`update`](#update) 方法修改。
 
 ## Read
 

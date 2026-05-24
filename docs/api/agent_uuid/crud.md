@@ -25,12 +25,10 @@
 返回 `Vec<Uuid>` 的 JSON 数组，每个元素为一个 UUID 字符串，按字母顺序排序。
 
 ```json
-{
-  "uuids" [
+[
   "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
   "e8583352-39e8-5a5b-b66c-e450689088fd"
 ]
-}
 ```
 
 返回结果来源于 `monitoring_uuid_cache` 中的权威缓存，已过滤掉被软删除的记录。

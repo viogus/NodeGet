@@ -41,6 +41,7 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
             "edit_config",
             "ip",
             "version",
+            "dns",
         ];
 
         let mut scopes = Vec::new();
