@@ -278,8 +278,8 @@ pub enum Db {
 | `id`              | i64         | db_registry 表中的主键 ID   |
 | `name`            | String      | 数据库名称                  |
 | `file_path`       | String      | SQLite 文件在磁盘上的绝对路径     |
-| `db_connections`  | Option<i32> | 当前活跃连接数                |
-| `max_lifetime_ms` | Option<i64> | 连接空闲超时时间（毫秒），null=永不超时 |
+| `db_connections`  | `Option<i32>` | 当前活跃连接数                |
+| `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时 |
 | `created_at`      | i64         | 创建时间戳（毫秒）              |
 | `is_active`       | bool        | 是否正在连接池中（可立即使用）        |
 
@@ -364,7 +364,7 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行，其余语句（IN
 | 0  | String          | Token 字符串                     |
 | 1  | String          | 目标数据库名称                       |
 | 2  | String          | SQL 语句（支持 `$1, $2` 占位符）       |
-| 3  | Option\<Array\> | 参数数组，对应 `$1, $2`...。可传 `null` |
+| 3  | `array` / `null` | 参数数组，对应 `$1, $2`...。可传 `null` |
 
 **JSON 参数类型映射到 SeaORM Value:**
 

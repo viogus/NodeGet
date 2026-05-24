@@ -218,8 +218,8 @@ pub enum Db {
 | `id`              | i64         | db_registry 表中的主键 ID   |
 | `name`            | String      | 数据库名称                  |
 | `file_path`       | String      | SQLite 文件在磁盘上的路径       |
-| `db_connections`  | Option<i32> | 当前活跃连接数                |
-| `max_lifetime_ms` | Option<i64> | 连接空闲超时时间（毫秒），null=永不超时 |
+| `db_connections`  | `Option<i32>` | 当前活跃连接数                |
+| `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时 |
 | `created_at`      | i64         | 创建时间戳（毫秒）              |
 | `is_active`       | bool        | 是否正在连接池中               |
 
