@@ -14,18 +14,16 @@
 //! and then call `reload()` to keep the cache consistent.
 
 use crate::DB;
+use crate::cache::{DbBackedCache, load_from_db};
 use crate::entity::monitoring_uuid;
+use crate::make_global_cache;
 use nodeget_lib::error::NodegetError;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::future::Future;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::info;
 use uuid::Uuid;
-
-// ── 全局单例 ──────────────────────────────────────────────────────────
-
-static CACHE: OnceLock<MonitoringUuidCache> = OnceLock::new();
 
 struct MonitoringUuidCacheInner {
     /// `uuid` → `(id, soft_delete)`
@@ -38,71 +36,49 @@ pub struct MonitoringUuidCache {
     inner: RwLock<MonitoringUuidCacheInner>,
 }
 
-impl MonitoringUuidCache {
-    /// Initialize the global cache by loading all rows from DB.
-    pub async fn init() -> anyhow::Result<()> {
-        let cache = Self {
-            inner: RwLock::new(MonitoringUuidCacheInner {
-                by_uuid: HashMap::new(),
-                by_id: HashMap::new(),
-            }),
-        };
+make_global_cache!(MonitoringUuidCache, MONITORING_UUID_CACHE_GLOBAL);
 
-        if CACHE.set(cache).is_err() {
-            warn!(target: "monitoring_uuid_cache", "MonitoringUuidCache already initialized, reloading");
-            Self::reload().await?;
-            return Ok(());
-        }
+impl DbBackedCache for MonitoringUuidCache {
+    type Model = monitoring_uuid::Model;
 
-        Self::reload().await?;
-        info!(target: "monitoring_uuid_cache", "MonitoringUuidCache initialized");
-        Ok(())
+    fn cache_name() -> &'static str {
+        "monitoring_uuid"
     }
 
-    /// Get the global instance. Panics if `init()` has not been called.
-    pub fn global() -> &'static Self {
-        CACHE
-            .get()
-            .expect("MonitoringUuidCache not initialized — call MonitoringUuidCache::init() first")
-    }
-
-    // ── Reload ──────────────────────────────────────────────────────────
-
-    /// Rebuild the in-memory maps from the current DB state.
-    pub async fn reload() -> anyhow::Result<()> {
-        let Some(cache) = CACHE.get() else {
-            return Ok(());
-        };
-        let db = DB.get().ok_or_else(|| {
-            NodegetError::DatabaseError("Database connection not initialized".to_owned())
-        })?;
-
-        let all = monitoring_uuid::Entity::find().all(db).await.map_err(|e| {
-            NodegetError::DatabaseError(format!("Failed to reload monitoring_uuid: {e}"))
-        })?;
-
-        let mut by_uuid = HashMap::with_capacity(all.len());
-        let mut by_id = HashMap::with_capacity(all.len());
-
-        for model in all {
+    fn build_cache(models: Vec<Self::Model>) -> Self {
+        let mut by_uuid = HashMap::with_capacity(models.len());
+        let mut by_id = HashMap::with_capacity(models.len());
+        for model in models {
             let id = model.id as i16;
             by_uuid.insert(model.uuid, (id, model.soft_delete));
             by_id.insert(id, (model.uuid, model.soft_delete));
         }
+        Self {
+            inner: RwLock::new(MonitoringUuidCacheInner { by_uuid, by_id }),
+        }
+    }
 
-        let mut guard = cache.inner.write().await;
+    fn reload_from_models(&self, models: Vec<Self::Model>) {
+        let mut by_uuid = HashMap::with_capacity(models.len());
+        let mut by_id = HashMap::with_capacity(models.len());
+        for model in models {
+            let id = model.id as i16;
+            by_uuid.insert(model.uuid, (id, model.soft_delete));
+            by_id.insert(id, (model.uuid, model.soft_delete));
+        }
+        let mut guard = self.inner.blocking_write();
         guard.by_uuid = by_uuid;
         guard.by_id = by_id;
         drop(guard);
-
-        debug!(target: "monitoring_uuid_cache", "MonitoringUuidCache reloaded");
-        Ok(())
     }
 
-    // ── Read helpers ────────────────────────────────────────────────────
+    fn load_all() -> impl Future<Output = anyhow::Result<Vec<Self::Model>>> + Send {
+        load_from_db::<monitoring_uuid::Entity>()
+    }
+}
 
+impl MonitoringUuidCache {
     /// Get the `id` for a `uuid` regardless of soft-delete state.
-    /// Returns `None` only if the uuid has never been seen.
     pub async fn get_id(&self, uuid: &Uuid) -> Option<i16> {
         let guard = self.inner.read().await;
         guard.by_uuid.get(uuid).map(|(id, _)| *id)
@@ -156,15 +132,7 @@ impl MonitoringUuidCache {
         result
     }
 
-    // ── Write helpers ───────────────────────────────────────────────────
-
     /// Get or insert a `uuid` into the `monitoring_uuid` table.
-    ///
-    /// Behaviour:
-    /// - If the uuid exists and is **active** → return the id.
-    /// - If the uuid exists but is **soft-deleted** → resurrect it
-    ///   (`UPDATE soft_delete = false`) and reload the cache.
-    /// - If the uuid does **not** exist → INSERT a new row and reload.
     pub async fn get_or_insert(&self, uuid: Uuid) -> Result<i16, NodegetError> {
         // Fast path — read lock only
         {
@@ -173,7 +141,6 @@ impl MonitoringUuidCache {
                 if !soft_delete {
                     return Ok(*id);
                 }
-                // soft-deleted — fall through to resurrection
             }
         }
 
@@ -230,9 +197,6 @@ impl MonitoringUuidCache {
     }
 
     /// Soft-delete a uuid.
-    ///
-    /// Returns `Ok(true)` if the row was found and marked deleted.
-    /// Returns `Ok(false)` if the uuid does not exist.
     pub async fn soft_delete(&self, uuid: Uuid) -> Result<bool, NodegetError> {
         let db = DB.get().ok_or_else(|| {
             NodegetError::DatabaseError("Database connection not initialized".to_owned())

@@ -1,17 +1,16 @@
-use crate::DB;
+use crate::cache::{DbBackedCache, load_from_db};
 use crate::entity::crontab;
+use crate::make_global_cache;
 use cron::Schedule;
 use nodeget_lib::crontab::CronType;
-use nodeget_lib::error::NodegetError;
-use sea_orm::EntityTrait;
 use std::collections::HashMap;
+use std::future::Future;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 /// Pre-parsed crontab entry: model + parsed Schedule + parsed `CronType`.
-/// Avoids re-parsing `cron_expression` and `cron_type` on every tick.
 pub struct CachedCrontab {
     pub model: Arc<crontab::Model>,
     pub schedule: Schedule,
@@ -19,7 +18,6 @@ pub struct CachedCrontab {
 }
 
 struct CrontabCacheInner {
-    /// id -> pre-parsed entry
     by_id: HashMap<i64, CachedCrontab>,
 }
 
@@ -27,99 +25,36 @@ pub struct CrontabCache {
     inner: RwLock<CrontabCacheInner>,
 }
 
-static CACHE: OnceLock<CrontabCache> = OnceLock::new();
+make_global_cache!(CrontabCache, CRONTAB_CACHE_GLOBAL);
 
-impl CrontabCache {
-    /// Initialize the global crontab cache by loading all entries from DB.
-    /// Must be called after DB is initialized.
-    pub async fn init() -> anyhow::Result<()> {
-        let db = DB.get().ok_or_else(|| {
-            NodegetError::ConfigNotFound("Database connection not initialized".to_owned())
-        })?;
+impl DbBackedCache for CrontabCache {
+    type Model = crontab::Model;
 
-        let all = crontab::Entity::find()
-            .all(db)
-            .await
-            .map_err(|e| NodegetError::DatabaseError(format!("Failed to load crontab: {e}")))?;
+    fn cache_name() -> &'static str {
+        "crontab"
+    }
 
-        let by_id = Self::build_cache(all);
-        let count = by_id.len();
-        let cache = Self {
+    fn build_cache(models: Vec<Self::Model>) -> Self {
+        let by_id = Self::build_maps(models);
+        Self {
             inner: RwLock::new(CrontabCacheInner { by_id }),
-        };
-
-        if CACHE.set(cache).is_err() {
-            warn!(target: "crontab", "CrontabCache already initialized, reloading");
-            Self::reload().await?;
-        } else {
-            info!(target: "crontab", count, "CrontabCache initialized");
         }
-
-        Ok(())
     }
 
-    /// Get the global cache instance.
-    pub fn global() -> &'static Self {
-        CACHE
-            .get()
-            .expect("CrontabCache not initialized — call CrontabCache::init() first")
-    }
-
-    /// Reload all entries from DB into cache.
-    /// Called after any CUD operation on the crontab table.
-    pub async fn reload() -> anyhow::Result<()> {
-        let Some(cache) = CACHE.get() else {
-            return Ok(());
-        };
-        let db = DB.get().ok_or_else(|| {
-            NodegetError::ConfigNotFound("Database connection not initialized".to_owned())
-        })?;
-
-        let all = crontab::Entity::find()
-            .all(db)
-            .await
-            .map_err(|e| NodegetError::DatabaseError(format!("Failed to reload crontab: {e}")))?;
-
-        let by_id = Self::build_cache(all);
-        let mut guard = cache.inner.write().await;
+    fn reload_from_models(&self, models: Vec<Self::Model>) {
+        let by_id = Self::build_maps(models);
+        let mut guard = self.inner.blocking_write();
         guard.by_id = by_id;
         drop(guard);
-
-        debug!(target: "crontab", "CrontabCache reloaded");
-        Ok(())
     }
 
-    /// Get all enabled crontab entries with pre-parsed Schedule and `CronType`.
-    pub async fn get_enabled_entries(&self) -> Vec<(Arc<crontab::Model>, Schedule, CronType)> {
-        let guard = self.inner.read().await;
-        guard
-            .by_id
-            .values()
-            .filter(|entry| entry.model.enable)
-            .map(|entry| {
-                (
-                    Arc::clone(&entry.model),
-                    entry.schedule.clone(),
-                    entry.cron_type.clone(),
-                )
-            })
-            .collect()
+    fn load_all() -> impl Future<Output = anyhow::Result<Vec<Self::Model>>> + Send {
+        load_from_db::<crontab::Entity>()
     }
+}
 
-    /// Update `last_run_time` for a specific crontab entry in cache only.
-    /// The DB update is done separately by the caller.
-    pub async fn update_last_run_time(&self, id: i64, timestamp: i64) {
-        let mut guard = self.inner.write().await;
-        if let Some(entry) = guard.by_id.get_mut(&id) {
-            let mut updated = (*entry.model).clone();
-            updated.last_run_time = Some(timestamp);
-            entry.model = Arc::new(updated);
-        }
-    }
-
-    /// Build the cache map from a list of models.
-    /// Parses Schedule and `CronType` for each entry; skips entries with invalid data.
-    fn build_cache(models: Vec<crontab::Model>) -> HashMap<i64, CachedCrontab> {
+impl CrontabCache {
+    fn build_maps(models: Vec<crontab::Model>) -> HashMap<i64, CachedCrontab> {
         let mut by_id = HashMap::with_capacity(models.len());
         for model in models {
             let schedule = match Schedule::from_str(&model.cron_expression) {
@@ -161,5 +96,30 @@ impl CrontabCache {
             );
         }
         by_id
+    }
+
+    pub async fn get_enabled_entries(&self) -> Vec<(Arc<crontab::Model>, Schedule, CronType)> {
+        let guard = self.inner.read().await;
+        guard
+            .by_id
+            .values()
+            .filter(|entry| entry.model.enable)
+            .map(|entry| {
+                (
+                    Arc::clone(&entry.model),
+                    entry.schedule.clone(),
+                    entry.cron_type.clone(),
+                )
+            })
+            .collect()
+    }
+
+    pub async fn update_last_run_time(&self, id: i64, timestamp: i64) {
+        let mut guard = self.inner.write().await;
+        if let Some(entry) = guard.by_id.get_mut(&id) {
+            let mut updated = (*entry.model).clone();
+            updated.last_run_time = Some(timestamp);
+            entry.model = Arc::new(updated);
+        }
     }
 }
