@@ -92,9 +92,9 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
             "task_token": "k6bsrBv1hS", // 下发任务时生成的 Task Token
             "timestamp": 1769341269012, // 完成时的毫秒时间戳
             "success": true, // 是否成功
-            "error_message": "XXXXXX", // 若 success 为 false 该字段必需；若 success 为 true 该字段可选
+            "error_message": "XXXXXX", // 可选字段；建议在 success=false 时填写
             "task_event_result": {
-                // 若 success 为 true 该字段必需；若 success 为 false 该字段为空
+                // 可选字段；建议在 success=true 时填写
                 // 任务回报结构体，该结构体参考 Task 总览
             }
         }
@@ -117,9 +117,9 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
             "task_token": "k6bsrBv1hS", // 下发任务时生成的 Task Token
             "timestamp": 1769341269012, // 完成时的毫秒时间戳
             "success": true, // 是否成功
-            "error_message": "XXXXXX", // 若 success 为 false 该字段必需；若 success 为 true 该字段可选
+            "error_message": "XXXXXX", // 可选字段；建议在 success=false 时填写
             "task_event_result": {
-                // 若 success 为 true 该字段必需；若 success 为 false 该字段为空
+                // 可选字段；建议在 success=true 时填写
                 // 任务回报结构体，该结构体参考 Task 总览
             }
         }

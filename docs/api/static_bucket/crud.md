@@ -34,7 +34,7 @@
   "path": "sites/my-site",
   "is_http_root": false,
   "cors": true,
-  "enable": true
+  "enable": null
 }
 ```
 
@@ -69,12 +69,12 @@
     "path": "sites/my-site",
     "is_http_root": false,
     "cors": true,
-    "enable": true
+    "enable": null
   }
 }
 ```
 
-> 注：`enable` 字段在创建时由服务端默认为 `true`，创建后可通过 [`update`](#update) 方法修改。
+> 注：`enable` 字段创建时默认为 `null`（未启用），需通过 [`update`](#update) 显式设置为 `true`。
 
 ## Read
 
@@ -98,7 +98,7 @@
 
 ### 返回值
 
-返回配置对象；若不存在返回 `null`。
+返回配置对象；若不存在返回 JSON-RPC 错误（code 105, NotFound）。
 
 ### 完整示例
 

@@ -167,6 +167,8 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
             }
         }
 
+        const DEFAULT_LIMIT: u64 = 10_000;
+
         if is_last {
             query = query
                 .order_by(task::Column::Timestamp, Order::Desc)
@@ -180,7 +182,8 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
         } else {
             query = query
                 .order_by(task::Column::Timestamp, Order::Asc)
-                .order_by(task::Column::Id, Order::Asc);
+                .order_by(task::Column::Id, Order::Asc)
+                .limit(DEFAULT_LIMIT);
         }
 
         let mut stream = query.into_json().stream(db).await.map_err(|e| {

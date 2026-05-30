@@ -192,7 +192,7 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 语义说明：
 
 1. `token`、`target_uuid`、`task_type` 的含义与 `task_create_task` 完全一致。
-2. `timeout_ms` 为等待 Agent 返回结果的最大时间（毫秒）。超时后返回错误，但任务本身仍然存在于数据库中（Agent 后续仍可上传结果）。
+2. `timeout_ms` 为等待 Agent 返回结果的最大时间（毫秒）。最大值 300000（5 分钟），超出部分会被静默截断。超时后返回错误，但任务本身仍然存在于数据库中（Agent 后续仍可上传结果）。
 3. 内部流程：创建任务 → 发送给 Agent → 等待 Agent 上传结果 → 返回完整结果。
 
 ### 权限要求
@@ -334,6 +334,8 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 1. `condition` 使用 Task 总览中的 `TaskQueryCondition` 结构体。
 2. `cron_source` 为可选字段：若该任务由 crontab 创建，则为对应的 cron `name`；否则为 `null`。
 3. 多个条件并存时为 `AND`，即只返回满足所有条件的记录。
+
+> **默认 LIMIT**：若 `condition` 中未指定 `limit` 或 `last`，查询默认限制返回 10,000 条记录。显式指定 `limit` 可覆盖此默认值。
 
 ### 权限要求
 

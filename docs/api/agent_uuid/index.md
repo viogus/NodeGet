@@ -34,7 +34,7 @@ pub enum MonitoringUuid {
 }
 ```
 
-> `nodeget-server_list_all_agent_uuid` 与 `nodeget-server_delete_agent_uuid` 已废弃，请迁移至 `agent-uuid` 命名空间。
+> `nodeget-server_list_all_agent_uuid` 已废弃，请迁移至 `agent-uuid` 命名空间。
 
 ## 方法列表
 

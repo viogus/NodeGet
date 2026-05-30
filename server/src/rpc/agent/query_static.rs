@@ -149,6 +149,7 @@ pub async fn query_static(
                 }
             });
 
+        const DEFAULT_LIMIT: u64 = 10_000;
         const MAX_LIMIT: u64 = 10_000;
         let clamped_limit = limit_count.map(|l| std::cmp::min(l, MAX_LIMIT));
 
@@ -161,7 +162,9 @@ pub async fn query_static(
                 .order_by(static_monitoring::Column::Timestamp, Order::Desc)
                 .limit(l)
         } else {
-            query.order_by(static_monitoring::Column::Timestamp, Order::Asc)
+            query
+                .order_by(static_monitoring::Column::Timestamp, Order::Asc)
+                .limit(DEFAULT_LIMIT)
         };
 
         let field_mappings: Vec<(&str, &str)> = static_data_query

@@ -163,6 +163,7 @@ pub async fn query_dynamic_summary(
                 }
             });
 
+        const DEFAULT_LIMIT: u64 = 10_000;
         const MAX_LIMIT: u64 = 10_000;
         let clamped_limit = limit_count.map(|l| std::cmp::min(l, MAX_LIMIT));
 
@@ -175,7 +176,9 @@ pub async fn query_dynamic_summary(
                 .order_by(dynamic_monitoring_summary::Column::Timestamp, Order::Desc)
                 .limit(l)
         } else {
-            query.order_by(dynamic_monitoring_summary::Column::Timestamp, Order::Asc)
+            query
+                .order_by(dynamic_monitoring_summary::Column::Timestamp, Order::Asc)
+                .limit(DEFAULT_LIMIT)
         };
 
         execute_query(

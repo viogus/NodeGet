@@ -301,7 +301,7 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "message": "Token xxx deleted successfully by Super Token", // 删除成功提示
+  "message": "Token xxx deleted successfully by SuperToken", // 删除成功提示
   "rows_affected": 1,        // 受影响的行数
   "matched_by": "token_key"  // 匹配方式，token_key 或 username
 }

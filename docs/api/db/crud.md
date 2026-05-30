@@ -293,7 +293,7 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行，其余语句（IN
 
 ### 注意事项
 
-- SQL 类型判断使用 `trim_start_matches` + `to_uppercase` 后检查前缀
+- SQL 类型判断使用 `trim_start_matches` + `starts_with_ascii_ci` 后检查前缀
 - 多语句（含 `;`）**不被禁止**，由数据库引擎自行处理
 - 参数化查询防止 SQL 注入
 - 使用 `$1`, `$2`... 格式的命名参数（SQLite 和 PostgreSQL 均支持）

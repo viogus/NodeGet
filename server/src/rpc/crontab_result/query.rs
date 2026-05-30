@@ -60,7 +60,8 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
                     select = select.filter(crontab_result::Column::Success.eq(false));
                 }
                 CrontabResultQueryCondition::Limit(limit) => {
-                    select = select.limit(*limit);
+                    const MAX_LIMIT: u64 = 10_000;
+                    select = select.limit(std::cmp::min(*limit, MAX_LIMIT));
                 }
                 CrontabResultQueryCondition::Last => {
                     // 按 run_time 降序排序，只取第一条
@@ -84,6 +85,14 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
             .any(|c| matches!(c, CrontabResultQueryCondition::Last))
         {
             select = select.order_by_desc(crontab_result::Column::RunTime);
+        }
+
+        // 未显式指定 Limit/Last 时施加默认上限，防止无界查询
+        let has_explicit_limit = query.condition.iter().any(|c| {
+            matches!(c, CrontabResultQueryCondition::Limit(_) | CrontabResultQueryCondition::Last)
+        });
+        if !has_explicit_limit {
+            select = select.limit(1000);
         }
 
         // 执行查询

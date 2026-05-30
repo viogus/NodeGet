@@ -127,7 +127,7 @@ pub enum DynamicMonitoring {
 
 // 任务权限枚举
 // Type 字段名
-// 接受 ping / tcp_ping / http_ping / web_shell / execute / http_request / ip / version
+// 接受 ping / tcp_ping / http_ping / web_shell / execute / http_request / ip
 // 支持通配符 `*`：
 // - `"*"` 匹配所有任务类型
 // - `"tcp*"` 匹配以 tcp 开头的任务类型（如 tcp_ping）
@@ -189,9 +189,9 @@ pub enum Terminal {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeGet {
-    ListAllAgentUuid, // 列出所有 Agent Uuid
+    ListAllAgentUuid(已废弃), // 列出所有 Agent Uuid
     GetRtPool,        // 查看 JS Runtime 池信息
-    DeleteAgentUuid,  // 删除 Agent Uuid
+    DeleteAgentUuid(已废弃),  // 删除 Agent Uuid
     ExecSql,          // 执行 SQL
 }
 

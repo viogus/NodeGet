@@ -3,7 +3,8 @@
 官方脚本安装的 `nodeget-agent` 的配置路径位于 `/etc/nodeget-agent.conf`
 
 ```toml
-# 日志等级，可选 trace / debug / info / warn / error，默认 info
+# 日志等级，必填，可选 trace / debug / info / warn / error
+# 未设置时 Agent 启动会报错退出
 # 如果你正在测试或遇到问题，请至少选择 debug
 log_level = "info"
 
@@ -27,7 +28,7 @@ agent_uuid = "auto_gen"
 # 连接超时时间（毫秒），默认 1000
 connect_timeout_ms = 1000
 
-# 终端 Shell，Linux 下默认 Bash，Windows 下默认 CMD
+# 终端 Shell，Linux/macOS 下默认 `/bin/bash`（不存在时 fallback 至 `sh`），Windows 下默认 `cmd.exe`
 terminal_shell = "bash"
 
 # 执行命令输出的最大字符数量限制
@@ -154,7 +155,7 @@ ws_url = "ws://nodeget-secondary.example.com:2211/"
 
 - 若字段存在且数组**非空**，则仅统计列表中指定的项，其他项不参与汇总计算
 - 若字段不存在、为空数组，或被注释掉，则回退到默认排除逻辑：
-    - **磁盘**：按挂载点前缀自动过滤 `/tmp`、`/var/tmp`、`/dev`、`/run`、`/var/lib/containers`、`/var/lib/docker`、`/proc`、`/sys`、`/sys/fs/cgroup`、`/etc/resolv.conf`、`/etc/hosts`、`/nix/store` 等虚拟/临时挂载点
+    - **磁盘**：按挂载点前缀自动过滤 `/tmp`、`/var/tmp`、`/dev`、`/run`、`/var/lib/containers`、`/var/lib/docker`、`/proc`、`/sys`、`/sys/fs/cgroup`、`/etc/resolv.conf`、`/etc/host`、`/nix/store` 等虚拟/临时挂载点
     - **网卡**：按接口名前缀自动过滤 `br`、`cni`、`docker`、`podman`、`flannel`、`lo`、`veth`、`virbr`、`vmbr`、`tap`、`fwbr`、`fwpr` 等虚拟/隧道网卡
 
 ### 使用场景

@@ -335,7 +335,7 @@
 - `tables`: 各表名到存储大小（字节）的映射，按表名字母顺序排列
 - `total`: 所有表存储大小之和（字节）
 
-查询范围为 9 张业务表，不含 `seaql_migrations`。
+查询范围为 11 张业务表，不含 `seaql_migrations`。
 
 不同数据库后端的查询方式不同:
 
@@ -367,14 +367,16 @@
       "crontab": 4096,
       "crontab_result": 8192,
       "dynamic_monitoring": 16384,
+      "dynamic_monitoring_summary": 4096,
       "js_result": 4096,
       "js_worker": 4096,
       "kv": 8192,
+      "monitoring_uuid": 4096,
       "static_monitoring": 8192,
       "task": 4096,
       "token": 4096
     },
-    "total": 61440
+    "total": 69632
   },
   "id": 1
 }

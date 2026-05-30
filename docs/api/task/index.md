@@ -75,7 +75,7 @@ pub struct ExecuteTask {
 pub struct HttpRequestTask {
     pub url: url::Url,
     pub method: String,
-    pub headers: BTreeMap<String, String>,
+    pub headers: BTreeMap<String, String>,  // #[serde(default)]，省略时默认为空 Map
     pub body: Option<String>, // 与 body_base64 互斥
     pub body_base64: Option<String>, // 与 body 互斥
     pub ip: Option<String>, // 指定出口 IP，或 "ipv4 auto" / "ipv6 auto"

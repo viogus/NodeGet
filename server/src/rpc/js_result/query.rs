@@ -119,7 +119,8 @@ pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<Raw
         for condition in &query.condition {
             match condition {
                 JsResultQueryCondition::Limit(limit) => {
-                    limit_count = Some(*limit);
+                    const MAX_LIMIT: u64 = 10_000;
+                    limit_count = Some(std::cmp::min(*limit, MAX_LIMIT));
                 }
                 JsResultQueryCondition::Last => {
                     is_last = true;
@@ -129,6 +130,8 @@ pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<Raw
                 }
             }
         }
+
+        const DEFAULT_LIMIT: u64 = 1000;
 
         if is_last {
             select = select
@@ -143,7 +146,8 @@ pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<Raw
         } else {
             select = select
                 .order_by_desc(js_result::Column::StartTime)
-                .order_by_desc(js_result::Column::Id);
+                .order_by_desc(js_result::Column::Id)
+                .limit(DEFAULT_LIMIT);
         }
 
         let results = select
