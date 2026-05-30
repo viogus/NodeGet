@@ -2,7 +2,8 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use ng_core::permission::create::TokenCreationRequest;
 use ng_core::permission::data_structure::Limit;
-use ng_infra::server::{rpc_exec, token_identity};
+use ng_infra::rpc_exec;
+use ng_infra::server::token_identity;
 use serde_json::value::RawValue;
 use tracing::Instrument;
 

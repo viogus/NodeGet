@@ -30,6 +30,15 @@ pub mod rpc;
 #[cfg(feature = "server")]
 pub mod super_token;
 
+// ── Server-only re-exports ───────────────────────────────────────────
+
+#[cfg(feature = "server")]
+pub use get::{check_token_limit, get_token, get_token_by_key_or_username, parse_token_limit_with_compat};
+#[cfg(feature = "server")]
+pub use super_token::check_super_token;
+#[cfg(feature = "server")]
+pub use cache::TokenCache;
+
 #[cfg(feature = "server")]
 mod auth_checker_impl;
 
@@ -64,18 +73,14 @@ pub fn register_auth_checker() {
     ng_infra::server::set_auth_checker(Box::new(auth_checker_impl::TokenAuthChecker));
 }
 
-/// Build and return an `RpcModule` containing all token RPC methods.
+/// Build and return the token RPC module.
 ///
-/// The caller should merge this into the main RPC module during startup.
+/// The caller should merge this into the main RPC module during startup:
+/// ```ignore
+/// main_module.merge(ng_token::rpc_module()).unwrap();
+/// ```
 #[cfg(feature = "server")]
-pub fn rpc_module() -> jsonrpsee::RpcModule<()> {
+pub fn rpc_module() -> jsonrpsee::RpcModule<rpc::TokenRpcImpl> {
     use rpc::RpcServer;
-    let mut module = jsonrpsee::RpcModule::new(());
-    module
-        .register_method("token.get", |params| {
-            // Stub: actual method is via into_rpc()
-            Err::<(), _>(jsonrpsee::types::ErrorObject::method_not_found())
-        })
-        .ok();
-    rpc::TokenRpcImpl.into_rpc().into()
+    rpc::TokenRpcImpl.into_rpc()
 }

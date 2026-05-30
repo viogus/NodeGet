@@ -1,8 +1,10 @@
 use ng_core::error::NodegetError;
-use ng_core::permission::data_structure::{Kv, Limit, Permission, Scope, Token};
+use ng_core::permission::data_structure::{Kv, Permission, Scope, Token};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::get_local_timestamp_ms_i64;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use tracing::{debug, trace, warn};
 
@@ -19,19 +21,19 @@ pub trait TokenPermissionChecker: Send + Sync {
         token_or_auth: &TokenOrAuth,
         scopes: Vec<Scope>,
         permissions: Vec<Permission>,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
     /// Check if the token/auth is a super token.
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
     /// Get token metadata for the given token/auth.
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> impl std::future::Future<Output = anyhow::Result<Token>> + Send;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Token>> + Send + '_>>;
 }
 
 static TOKEN_CHECKER: OnceLock<Box<dyn TokenPermissionChecker>> = OnceLock::new();

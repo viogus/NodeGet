@@ -1,4 +1,5 @@
-use crate::rpc::{rpc_exec, token_identity, RpcHelper};
+use crate::rpc_exec;
+use crate::rpc::{token_identity, RpcHelper};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::proc_macros::rpc;

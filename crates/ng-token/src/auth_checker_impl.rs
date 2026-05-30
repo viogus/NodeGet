@@ -12,7 +12,7 @@ pub struct TokenAuthChecker;
 impl AuthChecker for TokenAuthChecker {
     fn check(&self, raw_token: &str) -> anyhow::Result<Token> {
         let token_or_auth = TokenOrAuth::from_full_token(raw_token)
-            .map_err(|e| ng_core::error::NodegetError::ParseError(format!("{e}")))?;
+            .map_err(|e| ng_core::error::NodegetError::ParseError(e.to_string()))?;
 
         // get_token is async but AuthChecker::check is sync.
         // We use tokio::runtime::Handle::block_on_point to bridge.

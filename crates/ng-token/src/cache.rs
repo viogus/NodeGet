@@ -1,5 +1,6 @@
 use ng_db::entity::token;
-use ng_infra::server::{DbBackedCache, load_from_db, make_global_cache};
+use ng_infra::make_global_cache;
+use ng_infra::server::{DbBackedCache, load_from_db};
 use ng_core::permission::data_structure::Limit;
 
 use crate::get::parse_token_limit_with_compat;

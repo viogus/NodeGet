@@ -2975,6 +2975,7 @@ dependencies = [
  "ng-db",
  "ng-infra",
  "sea-orm",
+ "serde",
  "serde_json",
  "tracing",
 ]
@@ -2990,14 +2991,61 @@ dependencies = [
 [[package]]
 name = "ng-monitoring"
 version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "jsonrpsee",
+ "ng-config",
+ "ng-core",
+ "ng-db",
+ "ng-infra",
+ "ng-token",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "ng-static"
 version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "dav-server",
+ "jsonrpsee",
+ "ng-config",
+ "ng-core",
+ "ng-db",
+ "ng-infra",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ng-task"
 version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "jsonrpsee",
+ "ng-core",
+ "ng-db",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "ng-terminal"
@@ -3018,6 +3066,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "tokio",
  "tracing",
 ]
 

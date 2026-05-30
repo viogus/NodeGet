@@ -88,6 +88,7 @@ impl fmt::Display for TruncatedRaw<'_> {
 /// Emits:
 /// - `debug response=<truncated> "request completed"` on success
 /// - `error error=<e> "request failed"` on failure
+#[macro_export]
 macro_rules! rpc_exec {
     ($expr:expr) => {{
         match $expr {
@@ -103,7 +104,8 @@ macro_rules! rpc_exec {
     }};
 }
 
-pub(crate) use rpc_exec;
+
+
 
 pub trait RpcHelper {
     fn try_set_json<T: Serialize>(val: T) -> anyhow::Result<ActiveValue<Value>> {
