@@ -2,6 +2,7 @@ use crate::DB;
 use crate::entity::token;
 use crate::token::cache::TokenCache;
 use crate::token::hash_string;
+use crate::token::hash_to_bytes;
 use nodeget_lib::error::NodegetError;
 use nodeget_lib::permission::token_auth::TokenOrAuth;
 use nodeget_lib::utils::generate_random_string;
@@ -141,7 +142,7 @@ pub async fn roll_super_token() -> anyhow::Result<(String, String)> {
 // 返回布尔值表示是否为超级令牌，失败时返回错误消息
 pub async fn check_super_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<bool> {
     let cache = TokenCache::global();
-    let super_entry = cache.get_super_token().await.ok_or_else(|| {
+    let super_entry = cache.get_super_token().ok_or_else(|| {
         NodegetError::NotFound("Super Token record (ID 1) not found in cache".to_owned())
     })?;
 
@@ -154,10 +155,8 @@ pub async fn check_super_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<bo
             if !key_match {
                 return Ok(false);
             }
-            let hash_match = hash_string(secret)
-                .as_bytes()
-                .ct_eq(super_entry.model.token_hash.as_bytes())
-                .into();
+            let computed = hash_to_bytes(secret);
+            let hash_match: bool = computed.ct_eq(&super_entry.token_hash_bytes).into();
             debug!(target: "token", is_super = hash_match, "Super token check completed (token auth)");
             Ok(hash_match)
         }
@@ -170,12 +169,11 @@ pub async fn check_super_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<bo
             if !username_match {
                 return Ok(false);
             }
-            let password_hash = hash_string(password);
-            let hash_match = super_entry
-                .model
-                .password_hash
-                .as_deref()
-                .is_some_and(|h| h.as_bytes().ct_eq(password_hash.as_bytes()).into());
+            let computed = hash_to_bytes(password);
+            let Some(stored) = &super_entry.password_hash_bytes else {
+                return Ok(false);
+            };
+            let hash_match: bool = computed.ct_eq(stored).into();
             debug!(target: "token", is_super = hash_match, "Super token check completed (basic auth)");
             Ok(hash_match)
         }

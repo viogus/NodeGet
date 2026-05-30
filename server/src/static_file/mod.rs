@@ -234,7 +234,7 @@ pub async fn create_static(
 
 pub async fn read_static(name: &str) -> anyhow::Result<Option<static_entity::Model>> {
     let cache = cache::StaticCache::global();
-    let model = cache.get_by_name(name).await.map(|arc| (*arc).clone());
+    let model = cache.get_by_name(name).map(|arc| (*arc).clone());
     debug!(target: "static", name = %name, found = model.is_some(), "read_static from cache");
     Ok(model)
 }
@@ -338,7 +338,6 @@ pub async fn upload_file(
     // 必须先存在对应的 static 配置，并拿到它的 path 字段
     let model = cache::StaticCache::global()
         .get_by_name(name)
-        .await
         .ok_or_else(|| NodegetError::NotFound(format!("Static '{name}' not found")))?;
 
     let data = if let Some(b) = body {
@@ -372,7 +371,6 @@ pub async fn read_file(name: &str, file_path: &str) -> anyhow::Result<String> {
     validate_name(name)?;
     let model = cache::StaticCache::global()
         .get_by_name(name)
-        .await
         .ok_or_else(|| NodegetError::NotFound(format!("Static '{name}' not found")))?;
 
     let static_path = get_static_path();
@@ -395,7 +393,6 @@ pub async fn delete_file(name: &str, file_path: &str) -> anyhow::Result<()> {
     validate_name(name)?;
     let model = cache::StaticCache::global()
         .get_by_name(name)
-        .await
         .ok_or_else(|| NodegetError::NotFound(format!("Static '{name}' not found")))?;
 
     let static_path = get_static_path();
@@ -444,7 +441,6 @@ pub async fn list_file(name: &str) -> anyhow::Result<Vec<FileInfo>> {
     validate_name(name)?;
     let model = cache::StaticCache::global()
         .get_by_name(name)
-        .await
         .ok_or_else(|| NodegetError::NotFound(format!("Static '{name}' not found")))?;
 
     let static_path = get_static_path();
@@ -469,7 +465,6 @@ pub async fn rename_file(name: &str, from: &str, to: &str) -> anyhow::Result<()>
     validate_name(name)?;
     let model = cache::StaticCache::global()
         .get_by_name(name)
-        .await
         .ok_or_else(|| NodegetError::NotFound(format!("Static '{name}' not found")))?;
 
     let static_path = get_static_path();
@@ -509,7 +504,6 @@ pub async fn rename_file(name: &str, from: &str, to: &str) -> anyhow::Result<()>
 pub async fn list_all_names() -> Vec<String> {
     let mut names: Vec<String> = cache::StaticCache::global()
         .get_all()
-        .await
         .iter()
         .map(|m| m.name.clone())
         .collect();

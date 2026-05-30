@@ -34,8 +34,7 @@ pub async fn list_all_agent_uuids_with_agent_mode(token: String) -> RpcResult<Bo
         debug!(target: "rpc", "list_all_agent_uuids_with_agent_mode: permission check passed");
 
         let uuids = crate::monitoring_uuid_cache::MonitoringUuidCache::global()
-            .list_all_with_agent_mode()
-            .await;
+            .list_all_with_agent_mode();
 
         let items: Vec<AgentUuidWithMode> = uuids
             .into_iter()

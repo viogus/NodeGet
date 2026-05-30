@@ -21,9 +21,9 @@ pub struct MonitoringLastCache {
 impl MonitoringLastCache {
     pub fn init() {
         CACHE.get_or_init(|| Self {
-            static_cache: RwLock::new(HashMap::new()),
-            dynamic_cache: RwLock::new(HashMap::new()),
-            dynamic_summary_cache: RwLock::new(HashMap::new()),
+            static_cache: RwLock::new(HashMap::with_capacity(32)),
+            dynamic_cache: RwLock::new(HashMap::with_capacity(32)),
+            dynamic_summary_cache: RwLock::new(HashMap::with_capacity(32)),
         });
     }
 
@@ -73,8 +73,8 @@ impl MonitoringLastCache {
         uuid: &Uuid,
         fields: &[StaticDataQueryField],
     ) -> Option<serde_json::Value> {
-        let full = recover_read(&self.static_cache).get(uuid)?.clone();
-        let full_obj = full.as_object()?;
+        let guard = recover_read(&self.static_cache);
+        let full_obj = guard.get(uuid)?.as_object()?;
         let mut filtered = serde_json::Map::with_capacity(fields.len() + 2);
         filtered.insert("uuid".to_owned(), full_obj.get("uuid")?.clone());
         filtered.insert("timestamp".to_owned(), full_obj.get("timestamp")?.clone());
@@ -84,6 +84,7 @@ impl MonitoringLastCache {
                 filtered.insert(key.to_owned(), v.clone());
             }
         }
+        drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Static last-cache hit");
         Some(serde_json::Value::Object(filtered))
     }
@@ -93,8 +94,8 @@ impl MonitoringLastCache {
         uuid: &Uuid,
         fields: &[DynamicDataQueryField],
     ) -> Option<serde_json::Value> {
-        let full = recover_read(&self.dynamic_cache).get(uuid)?.clone();
-        let full_obj = full.as_object()?;
+        let guard = recover_read(&self.dynamic_cache);
+        let full_obj = guard.get(uuid)?.as_object()?;
         let mut filtered = serde_json::Map::with_capacity(fields.len() + 2);
         filtered.insert("uuid".to_owned(), full_obj.get("uuid")?.clone());
         filtered.insert("timestamp".to_owned(), full_obj.get("timestamp")?.clone());
@@ -104,6 +105,7 @@ impl MonitoringLastCache {
                 filtered.insert(key.to_owned(), v.clone());
             }
         }
+        drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Dynamic last-cache hit");
         Some(serde_json::Value::Object(filtered))
     }
@@ -113,9 +115,13 @@ impl MonitoringLastCache {
         uuid: &Uuid,
         fields: &[DynamicSummaryQueryField],
     ) -> Option<serde_json::Value> {
-        let full = recover_read(&self.dynamic_summary_cache).get(uuid)?.clone();
+        let guard = recover_read(&self.dynamic_summary_cache);
+        let full = guard.get(uuid)?;
         if fields.is_empty() {
-            return Some(full);
+            let cloned = full.clone();
+            drop(guard);
+            trace!(target: "monitoring", %uuid, field_count = 0, "Dynamic-summary last-cache hit (all fields)");
+            return Some(cloned);
         }
         let full_obj = full.as_object()?;
         let mut filtered = serde_json::Map::with_capacity(fields.len() + 2);
@@ -127,6 +133,7 @@ impl MonitoringLastCache {
                 filtered.insert(key.to_owned(), v.clone());
             }
         }
+        drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Dynamic-summary last-cache hit");
         Some(serde_json::Value::Object(filtered))
     }
@@ -146,7 +153,7 @@ fn recover_write<K, V>(lock: &RwLock<HashMap<K, V>>) -> std::sync::RwLockWriteGu
     })
 }
 
-fn build_static_value(uuid: Uuid, timestamp: i64, data: &StaticMonitoringData) -> serde_json::Value {
+pub fn build_static_value(uuid: Uuid, timestamp: i64, data: &StaticMonitoringData) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(5);
     obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
     obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
@@ -162,7 +169,7 @@ fn build_static_value(uuid: Uuid, timestamp: i64, data: &StaticMonitoringData) -
     serde_json::Value::Object(obj)
 }
 
-fn build_dynamic_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringData) -> serde_json::Value {
+pub fn build_dynamic_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringData) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(9);
     obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
     obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
@@ -190,7 +197,7 @@ fn build_dynamic_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringData)
     serde_json::Value::Object(obj)
 }
 
-fn build_dynamic_summary_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringSummaryData) -> serde_json::Value {
+pub fn build_dynamic_summary_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringSummaryData) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(24);
     obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
     obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));

@@ -5,27 +5,37 @@ use crate::token::get::parse_token_limit_with_compat;
 use nodeget_lib::permission::data_structure::Limit;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-/// Pre-parsed token entry: model + parsed `token_limit`.
-/// Avoids re-parsing `serde_json::Value` on every auth call.
 pub struct CachedToken {
     pub model: Arc<token::Model>,
     pub parsed_limits: Vec<Limit>,
+    pub token_hash_bytes: [u8; 32],
+    pub password_hash_bytes: Option<[u8; 32]>,
 }
 
 struct TokenCacheInner {
-    /// `token_key` -> cached entry
     by_key: HashMap<String, Arc<CachedToken>>,
-    /// username -> cached entry (only tokens that have a username)
     by_username: HashMap<String, Arc<CachedToken>>,
-    /// super token (id=1), cached separately for fast access
     super_token: Option<Arc<CachedToken>>,
 }
 
 pub struct TokenCache {
     inner: RwLock<TokenCacheInner>,
+}
+
+fn recover_read(lock: &RwLock<TokenCacheInner>) -> std::sync::RwLockReadGuard<'_, TokenCacheInner> {
+    lock.read().unwrap_or_else(|e| {
+        tracing::warn!(target: "token_cache", "lock poisoned during read, recovering");
+        e.into_inner()
+    })
+}
+
+fn recover_write(lock: &RwLock<TokenCacheInner>) -> std::sync::RwLockWriteGuard<'_, TokenCacheInner> {
+    lock.write().unwrap_or_else(|e| {
+        tracing::warn!(target: "token_cache", "lock poisoned during write, recovering");
+        e.into_inner()
+    })
 }
 
 make_global_cache!(TokenCache, TOKEN_CACHE_GLOBAL);
@@ -48,9 +58,10 @@ impl DbBackedCache for TokenCache {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn reload_from_models(&self, models: Vec<Self::Model>) {
         let (by_key, by_username, super_token) = Self::build_maps(models);
-        let mut guard = self.inner.write().await;
+        let mut guard = recover_write(&self.inner);
         guard.by_key = by_key;
         guard.by_username = by_username;
         guard.super_token = super_token;
@@ -86,9 +97,17 @@ impl TokenCache {
                     Vec::new()
                 });
 
+            let token_hash_bytes = hex_to_bytes(&model.token_hash).unwrap_or([0u8; 32]);
+            let password_hash_bytes = model
+                .password_hash
+                .as_deref()
+                .and_then(|h| hex_to_bytes(h));
+
             let cached = Arc::new(CachedToken {
                 model: Arc::new(model),
                 parsed_limits,
+                token_hash_bytes,
+                password_hash_bytes,
             });
 
             if cached.model.id == 1 {
@@ -103,27 +122,41 @@ impl TokenCache {
         (by_key, by_username, super_token)
     }
 
-    /// Find a cached token by `token_key`.
-    pub async fn find_by_key(&self, key: &str) -> Option<Arc<CachedToken>> {
-        let guard = self.inner.read().await;
-        guard.by_key.get(key).map(Arc::clone)
+    pub fn find_by_key(&self, key: &str) -> Option<Arc<CachedToken>> {
+        recover_read(&self.inner).by_key.get(key).map(Arc::clone)
     }
 
-    /// Find a cached token by username.
-    pub async fn find_by_username(&self, username: &str) -> Option<Arc<CachedToken>> {
-        let guard = self.inner.read().await;
-        guard.by_username.get(username).map(Arc::clone)
+    pub fn find_by_username(&self, username: &str) -> Option<Arc<CachedToken>> {
+        recover_read(&self.inner).by_username.get(username).map(Arc::clone)
     }
 
-    /// Get the super token (id=1).
-    pub async fn get_super_token(&self) -> Option<Arc<CachedToken>> {
-        let guard = self.inner.read().await;
-        guard.super_token.as_ref().map(Arc::clone)
+    pub fn get_super_token(&self) -> Option<Arc<CachedToken>> {
+        recover_read(&self.inner).super_token.as_ref().map(Arc::clone)
     }
 
-    /// Get all cached tokens (for `list_all_tokens`).
-    pub async fn get_all(&self) -> Vec<Arc<CachedToken>> {
-        let guard = self.inner.read().await;
-        guard.by_key.values().map(Arc::clone).collect()
+    pub fn get_all(&self) -> Vec<Arc<CachedToken>> {
+        recover_read(&self.inner).by_key.values().map(Arc::clone).collect()
+    }
+}
+
+fn hex_to_bytes(hex_str: &str) -> Option<[u8; 32]> {
+    if hex_str.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0u8; 32];
+    for i in 0..32 {
+        let hi = hex_str.as_bytes().get(i * 2)?;
+        let lo = hex_str.as_bytes().get(i * 2 + 1)?;
+        bytes[i] = (hex_nibble(*hi)? << 4) | hex_nibble(*lo)?;
+    }
+    Some(bytes)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
 }

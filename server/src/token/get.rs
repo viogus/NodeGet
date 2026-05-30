@@ -1,5 +1,5 @@
 use crate::token::cache::TokenCache;
-use crate::token::hash_string;
+use crate::token::hash_to_bytes;
 use crate::token::super_token::check_super_token;
 use nodeget_lib::error::NodegetError;
 use nodeget_lib::permission::data_structure::{
@@ -11,29 +11,20 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
-/// 统一的身份验证失败错误消息，防止信息泄露
 const AUTH_FAILED_MESSAGE: &str = "Invalid credentials";
-
-/// 使用恒定时间比较验证哈希，防止时序攻击
-fn verify_hash_constant_time(computed_hash: &str, stored_hash: &str) -> bool {
-    computed_hash
-        .as_bytes()
-        .ct_eq(stored_hash.as_bytes())
-        .into()
-}
 
 pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
     let cache = TokenCache::global();
 
     let cached_token = match token_or_auth {
         TokenOrAuth::Token(key, secret) => {
-            let entry = cache.find_by_key(key).await.ok_or_else(|| {
+            let entry = cache.find_by_key(key).ok_or_else(|| {
                 warn!(target: "auth", token_key = %key, "auth failed: token key not found");
                 NodegetError::PermissionDenied(AUTH_FAILED_MESSAGE.to_owned())
             })?;
 
-            let computed_hash = hash_string(secret);
-            if !verify_hash_constant_time(&computed_hash, &entry.model.token_hash) {
+            let computed = hash_to_bytes(secret);
+            if !bool::from(computed.ct_eq(&entry.token_hash_bytes)) {
                 warn!(target: "auth", token_key = %key, "auth failed: invalid token secret");
                 return Err(NodegetError::PermissionDenied(AUTH_FAILED_MESSAGE.to_owned()).into());
             }
@@ -42,14 +33,17 @@ pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
             entry
         }
         TokenOrAuth::Auth(username, password) => {
-            let entry = cache.find_by_username(username).await.ok_or_else(|| {
+            let entry = cache.find_by_username(username).ok_or_else(|| {
                 warn!(target: "auth", username = %username, "auth failed: username not found");
                 NodegetError::PermissionDenied(AUTH_FAILED_MESSAGE.to_owned())
             })?;
 
-            let p_hash = hash_string(password);
-            let stored_hash = entry.model.password_hash.as_deref().unwrap_or("");
-            if !verify_hash_constant_time(&p_hash, stored_hash) {
+            let computed = hash_to_bytes(password);
+            let Some(stored) = &entry.password_hash_bytes else {
+                warn!(target: "auth", username = %username, "auth failed: no password set for this user");
+                return Err(NodegetError::PermissionDenied(AUTH_FAILED_MESSAGE.to_owned()).into());
+            };
+            if !bool::from(computed.ct_eq(stored)) {
                 warn!(target: "auth", username = %username, "auth failed: invalid password");
                 return Err(NodegetError::PermissionDenied(AUTH_FAILED_MESSAGE.to_owned()).into());
             }
@@ -74,11 +68,11 @@ pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
 pub async fn get_token_by_key_or_username(identifier: &str) -> anyhow::Result<Token> {
     let cache = TokenCache::global();
 
-    let cached_token = if let Some(entry) = cache.find_by_key(identifier).await {
+    let cached_token = if let Some(entry) = cache.find_by_key(identifier) {
         debug!(target: "auth", identifier = %identifier, "found token by key");
         entry
     } else {
-        cache.find_by_username(identifier).await.ok_or_else(|| {
+        cache.find_by_username(identifier).ok_or_else(|| {
             warn!(target: "auth", identifier = %identifier, "token not found by key or username");
             NodegetError::NotFound(format!("Token not found by key/username: {identifier}"))
         })?

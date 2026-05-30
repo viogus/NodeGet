@@ -82,7 +82,14 @@ pub async fn report_dynamic_summary(
             .send(in_data);
 
         crate::monitoring_last_cache::MonitoringLastCache::global()
-            .update_dynamic_summary(agent_uuid, data.time.cast_signed(), &data);
+            .update_dynamic_summary_prebuilt(
+                agent_uuid,
+                crate::monitoring_last_cache::build_dynamic_summary_value(
+                    agent_uuid,
+                    data.time.cast_signed(),
+                    &data,
+                ),
+            );
 
         debug!(target: "monitoring", agent_uuid = %data.uuid, "Dynamic summary data buffered successfully");
 

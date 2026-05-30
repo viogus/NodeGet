@@ -99,7 +99,7 @@ pub async fn query_static(
         let mut uuid_ids: Vec<i16> = Vec::new();
         for cond in &static_data_query.condition {
             if let QueryCondition::Uuid(uuid) = cond {
-                let uuid_id = uuid_cache.get_id(uuid).await.ok_or_else(|| {
+                let uuid_id = uuid_cache.get_id(uuid).ok_or_else(|| {
                     anyhow::anyhow!(NodegetError::NotFound(format!(
                         "Unknown agent UUID: {uuid}"
                     )))
@@ -228,7 +228,7 @@ async fn execute_query(
                     // Translate uuid_id (i16) → uuid (string) for API compatibility
                     if let Some(Value::Number(n)) = obj.remove("uuid_id")
                         && let Some(id) = n.as_i64()
-                        && let Some(uuid) = uuid_cache.get_uuid(id as i16).await
+                        && let Some(uuid) = uuid_cache.get_uuid(id as i16)
                     {
                         obj.insert("uuid".to_string(), Value::String(uuid.to_string()));
                     }

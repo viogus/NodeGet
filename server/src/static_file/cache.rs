@@ -3,8 +3,7 @@ use crate::entity::static_file as static_entity;
 use crate::make_global_cache;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use tracing::warn;
 
 pub struct CachedStatic {
@@ -18,6 +17,20 @@ struct StaticCacheInner {
 
 pub struct StaticCache {
     inner: RwLock<StaticCacheInner>,
+}
+
+fn recover_read(lock: &RwLock<StaticCacheInner>) -> std::sync::RwLockReadGuard<'_, StaticCacheInner> {
+    lock.read().unwrap_or_else(|e| {
+        tracing::warn!(target: "static_cache", "lock poisoned during read, recovering");
+        e.into_inner()
+    })
+}
+
+fn recover_write(lock: &RwLock<StaticCacheInner>) -> std::sync::RwLockWriteGuard<'_, StaticCacheInner> {
+    lock.write().unwrap_or_else(|e| {
+        tracing::warn!(target: "static_cache", "lock poisoned during write, recovering");
+        e.into_inner()
+    })
 }
 
 make_global_cache!(StaticCache, STATIC_CACHE_GLOBAL);
@@ -39,9 +52,10 @@ impl DbBackedCache for StaticCache {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn reload_from_models(&self, models: Vec<Self::Model>) {
         let (by_name, http_root_name) = Self::build_maps(models);
-        let mut guard = self.inner.write().await;
+        let mut guard = recover_write(&self.inner);
         guard.by_name = by_name;
         guard.http_root_name = http_root_name;
         drop(guard);
@@ -81,28 +95,25 @@ impl StaticCache {
         (by_name, http_root_name)
     }
 
-    pub async fn get_by_name(&self, name: &str) -> Option<Arc<static_entity::Model>> {
-        let guard = self.inner.read().await;
-        guard.by_name.get(name).map(|c| Arc::clone(&c.model))
+    pub fn get_by_name(&self, name: &str) -> Option<Arc<static_entity::Model>> {
+        recover_read(&self.inner).by_name.get(name).map(|c| Arc::clone(&c.model))
     }
 
-    pub async fn get_http_root(&self) -> Option<Arc<static_entity::Model>> {
-        let guard = self.inner.read().await;
+    pub fn get_http_root(&self) -> Option<Arc<static_entity::Model>> {
+        let guard = recover_read(&self.inner);
         let name = guard.http_root_name.as_ref()?;
         guard.by_name.get(name).map(|c| Arc::clone(&c.model))
     }
 
-    pub async fn get_all(&self) -> Vec<Arc<static_entity::Model>> {
-        let guard = self.inner.read().await;
-        guard
+    pub fn get_all(&self) -> Vec<Arc<static_entity::Model>> {
+        recover_read(&self.inner)
             .by_name
             .values()
             .map(|c| Arc::clone(&c.model))
             .collect()
     }
 
-    pub async fn exists(&self, name: &str) -> bool {
-        let guard = self.inner.read().await;
-        guard.by_name.contains_key(name)
+    pub fn exists(&self, name: &str) -> bool {
+        recover_read(&self.inner).by_name.contains_key(name)
     }
 }

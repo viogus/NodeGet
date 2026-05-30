@@ -105,7 +105,7 @@ pub async fn run(config: &nodeget_lib::config::server::ServerConfig) {
 
                         if req.method() == axum::http::Method::GET {
                             let cache = crate::static_file::cache::StaticCache::global();
-                            if let Some(model) = cache.get_http_root().await {
+                            if let Some(model) = cache.get_http_root() {
                                 if model.enable != Some(false) {
                                     let path = req.uri().path().to_owned();
                                     let method = req.method().clone();
@@ -138,7 +138,7 @@ pub async fn run(config: &nodeget_lib::config::server::ServerConfig) {
 
                         if req.method() == axum::http::Method::GET {
                             let cache = crate::static_file::cache::StaticCache::global();
-                            if let Some(model) = cache.get_http_root().await {
+                            if let Some(model) = cache.get_http_root() {
                                 if model.enable != Some(false) {
                                     let path = req.uri().path().to_owned();
                                     let method = req.method().clone();
@@ -164,7 +164,7 @@ pub async fn run(config: &nodeget_lib::config::server::ServerConfig) {
                 any(
                     |Path(name): Path<String>, req: axum::extract::Request| async move {
                         let cache = crate::static_file::cache::StaticCache::global();
-                        let Some(model) = cache.get_by_name(&name).await else {
+                        let Some(model) = cache.get_by_name(&name) else {
                             return build_http_error(StatusCode::NOT_FOUND, "Static not found");
                         };
                         // enable == Some(false) 视为不存在，返回 404
@@ -192,7 +192,7 @@ pub async fn run(config: &nodeget_lib::config::server::ServerConfig) {
                     |Path((name, path)): Path<(String, String)>,
                      req: axum::extract::Request| async move {
                         let cache = crate::static_file::cache::StaticCache::global();
-                        let Some(model) = cache.get_by_name(&name).await else {
+                        let Some(model) = cache.get_by_name(&name) else {
                             return build_http_error(StatusCode::NOT_FOUND, "Static not found");
                         };
                         // enable == Some(false) 视为不存在，返回 404
@@ -279,7 +279,7 @@ pub async fn run(config: &nodeget_lib::config::server::ServerConfig) {
                         return rpc_service.call(req).await.unwrap();
                     }
                     let cache = crate::static_file::cache::StaticCache::global();
-                    if let Some(model) = cache.get_http_root().await {
+                    if let Some(model) = cache.get_http_root() {
                         let path = req.uri().path().to_owned();
                         let method = req.method().clone();
                         return serve_static_file(&model.path, &path, model.cors, &method).await;
@@ -589,14 +589,13 @@ async fn handle_js_worker_route(
         );
     };
 
-    let body_bytes_clone = body_bytes.clone();
     let body_base64 = tokio::task::spawn_blocking(move || {
-        base64::engine::general_purpose::STANDARD.encode(&body_bytes_clone)
+        base64::engine::general_purpose::STANDARD.encode(&body_bytes)
     })
     .await
     .unwrap_or_else(|e| {
         error!(target: "js_worker", route_name = %route_name, error = %e, "base64 encoding task panicked");
-        base64::engine::general_purpose::STANDARD.encode(&body_bytes)
+        String::new()
     });
     let js_input = JsRouteInput {
         method,
@@ -811,7 +810,7 @@ async fn static_webdav_handler(req: axum::extract::Request) -> axum::response::R
 
     // 1. Look up bucket
     let cache = crate::static_file::cache::StaticCache::global();
-    let Some(model) = cache.get_by_name(name).await else {
+    let Some(model) = cache.get_by_name(name) else {
         warn!(target: "webdav", method = %method, uri = %uri_path, bucket = %name, "bucket not found");
         return build_webdav_error(StatusCode::NOT_FOUND, "Static bucket not found");
     };

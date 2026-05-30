@@ -61,7 +61,7 @@ pub async fn resolve_conditions(
     for cond in conditions {
         match cond {
             QueryCondition::Uuid(uuid) => {
-                let uuid_id = cache.get_id(uuid).await.ok_or_else(|| {
+                let uuid_id = cache.get_id(uuid).ok_or_else(|| {
                     NodegetError::NotFound(format!(
                         "Agent UUID not found in monitoring registry: {uuid}"
                     ))

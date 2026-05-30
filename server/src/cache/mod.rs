@@ -53,20 +53,8 @@ pub trait DbBackedCache: Sized + Send + Sync {
 
     /// 用新的 Model 列表替换缓存的内部状态（使用内部可变性）。
     /// 
-    /// 默认实现直接 `*self = Self::build_cache(...)`，适用于
-    /// 单一 `RwLock<HashMap>` 结构。若有多个内部字段需要分别
-    /// 替换，可覆盖此方法。
-    #[allow(clippy::unused_async)]
-    async fn reload_from_models(&self, models: Vec<Self::Model>) {
-        // Safety: this uses a "cheat" — create a brand new instance,
-        // then use std::mem::replace on self. Since Rust doesn't let
-        // us do *self = ... with &self, we use unsafe for the swap.
-        // Actually, simpler: we cast through a raw pointer.
-        unsafe {
-            let ptr = self as *const Self as *mut Self;
-            ptr.write(Self::build_cache(models));
-        }
-    }
+    /// 每个缓存必须提供自己的实现，通过内部锁安全地替换数据。
+    async fn reload_from_models(&self, models: Vec<Self::Model>);
 
     /// 从主 DB 加载全部记录。通常一行即可: `load_from_db::<MyEntity>()`
     fn load_all() -> impl Future<Output = anyhow::Result<Vec<Self::Model>>> + Send;

@@ -95,7 +95,7 @@ pub async fn dynamic_summary_multi_last_query(
         // Resolve UUIDs to uuid_ids
         let mut uuid_id_pairs: Vec<(Uuid, i16)> = Vec::with_capacity(deduped_uuids.len());
         for uuid in &deduped_uuids {
-            let uuid_id = uuid_cache.get_id(uuid).await.ok_or_else(|| {
+            let uuid_id = uuid_cache.get_id(uuid).ok_or_else(|| {
                 NodegetError::NotFound(format!(
                     "Agent UUID not found in monitoring registry: {uuid}"
                 ))
@@ -337,7 +337,7 @@ async fn execute_statement_query(
                 if let Some(obj) = value.as_object_mut() {
                     if let Some(uuid_id_val) = obj.remove("uuid_id")
                         && let Some(uuid_id) = uuid_id_val.as_i64()
-                        && let Some(uuid) = uuid_cache.get_uuid(uuid_id as i16).await
+                        && let Some(uuid) = uuid_cache.get_uuid(uuid_id as i16)
                     {
                         obj.insert(
                             "uuid".to_owned(),

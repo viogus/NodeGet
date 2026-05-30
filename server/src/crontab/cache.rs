@@ -6,11 +6,9 @@ use nodeget_lib::crontab::CronType;
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use tracing::warn;
 
-/// Pre-parsed crontab entry: model + parsed Schedule + parsed `CronType`.
 pub struct CachedCrontab {
     pub model: Arc<crontab::Model>,
     pub schedule: Schedule,
@@ -18,11 +16,25 @@ pub struct CachedCrontab {
 }
 
 struct CrontabCacheInner {
-    by_id: HashMap<i64, CachedCrontab>,
+    by_id: HashMap<i64, Arc<CachedCrontab>>,
 }
 
 pub struct CrontabCache {
     inner: RwLock<CrontabCacheInner>,
+}
+
+fn recover_read(lock: &RwLock<CrontabCacheInner>) -> std::sync::RwLockReadGuard<'_, CrontabCacheInner> {
+    lock.read().unwrap_or_else(|e| {
+        tracing::warn!(target: "crontab_cache", "lock poisoned during read, recovering");
+        e.into_inner()
+    })
+}
+
+fn recover_write(lock: &RwLock<CrontabCacheInner>) -> std::sync::RwLockWriteGuard<'_, CrontabCacheInner> {
+    lock.write().unwrap_or_else(|e| {
+        tracing::warn!(target: "crontab_cache", "lock poisoned during write, recovering");
+        e.into_inner()
+    })
 }
 
 make_global_cache!(CrontabCache, CRONTAB_CACHE_GLOBAL);
@@ -41,9 +53,10 @@ impl DbBackedCache for CrontabCache {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn reload_from_models(&self, models: Vec<Self::Model>) {
         let by_id = Self::build_maps(models);
-        let mut guard = self.inner.write().await;
+        let mut guard = recover_write(&self.inner);
         guard.by_id = by_id;
         drop(guard);
     }
@@ -54,7 +67,7 @@ impl DbBackedCache for CrontabCache {
 }
 
 impl CrontabCache {
-    fn build_maps(models: Vec<crontab::Model>) -> HashMap<i64, CachedCrontab> {
+    fn build_maps(models: Vec<crontab::Model>) -> HashMap<i64, Arc<CachedCrontab>> {
         let mut by_id = HashMap::with_capacity(models.len());
         for model in models {
             let schedule = match Schedule::from_str(&model.cron_expression) {
@@ -88,38 +101,36 @@ impl CrontabCache {
             let id = model.id;
             by_id.insert(
                 id,
-                CachedCrontab {
+                Arc::new(CachedCrontab {
                     model: Arc::new(model),
                     schedule,
                     cron_type,
-                },
+                }),
             );
         }
         by_id
     }
 
-    pub async fn get_enabled_entries(&self) -> Vec<(Arc<crontab::Model>, Schedule, CronType)> {
-        let guard = self.inner.read().await;
+    pub fn get_enabled_entries(&self) -> Vec<Arc<CachedCrontab>> {
+        let guard = recover_read(&self.inner);
         guard
             .by_id
             .values()
             .filter(|entry| entry.model.enable)
-            .map(|entry| {
-                (
-                    Arc::clone(&entry.model),
-                    entry.schedule.clone(),
-                    entry.cron_type.clone(),
-                )
-            })
+            .map(Arc::clone)
             .collect()
     }
 
-    pub async fn update_last_run_time(&self, id: i64, timestamp: i64) {
-        let mut guard = self.inner.write().await;
+    pub fn update_last_run_time(&self, id: i64, timestamp: i64) {
+        let mut guard = recover_write(&self.inner);
         if let Some(entry) = guard.by_id.get_mut(&id) {
-            let mut updated = (*entry.model).clone();
-            updated.last_run_time = Some(timestamp);
-            entry.model = Arc::new(updated);
+            let mut updated_model = (*entry.model).clone();
+            updated_model.last_run_time = Some(timestamp);
+            *entry = Arc::new(CachedCrontab {
+                model: Arc::new(updated_model),
+                schedule: entry.schedule.clone(),
+                cron_type: entry.cron_type.clone(),
+            });
         }
     }
 }

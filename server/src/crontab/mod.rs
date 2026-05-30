@@ -103,19 +103,19 @@ async fn process_crontab() {
     };
 
     let cache = CrontabCache::global();
-    let jobs = cache.get_enabled_entries().await;
+    let jobs = cache.get_enabled_entries();
 
     let now = Utc::now();
 
     let mut set = JoinSet::new();
 
-    for (model, schedule, cron_type) in jobs {
-        let last_run = model.last_run_time.map_or_else(
+    for entry in &jobs {
+        let last_run = entry.model.last_run_time.map_or_else(
             || now - chrono::Duration::seconds(1),
             |t| Utc.timestamp_millis_opt(t).unwrap(),
         );
 
-        let should_run = schedule
+        let should_run = entry.schedule
             .after(&last_run)
             .next()
             .is_some_and(|next_run| next_run <= now);
@@ -126,38 +126,36 @@ async fn process_crontab() {
 
         info!(
             target: "crontab",
-            job_id = model.id,
-            job_name = %model.name,
-            cron_expression = %model.cron_expression,
+            job_id = entry.model.id,
+            job_name = %entry.model.name,
+            cron_expression = %entry.model.cron_expression,
             "triggering cron job"
         );
 
-        // 克隆需要在闭包中使用的数据
-        let job_id = model.id;
-        let job_name = model.name.clone();
+        let job_id = entry.model.id;
+        let job_name = entry.model.name.clone();
 
         let job_parsed = Cron {
-            id: model.id,
-            name: model.name.clone(),
-            enable: model.enable,
-            cron_expression: model.cron_expression.clone(),
-            cron_type,
-            last_run_time: model.last_run_time,
+            id: entry.model.id,
+            name: entry.model.name.clone(),
+            enable: entry.model.enable,
+            cron_expression: entry.model.cron_expression.clone(),
+            cron_type: entry.cron_type.clone(),
+            last_run_time: entry.model.last_run_time,
         };
 
-        // 先更新 last_run_time，防止任务执行超时导致重复触发
         let now_millis = now.timestamp_millis();
-        cache.update_last_run_time(model.id, now_millis).await;
+        cache.update_last_run_time(entry.model.id, now_millis);
 
         let active_model = crontab::ActiveModel {
-            id: Set(model.id),
+            id: Set(entry.model.id),
             last_run_time: Set(Some(now_millis)),
             ..Default::default()
         };
         if let Err(e) = active_model.update(db).await {
             error!(
                 target: "crontab",
-                job_id = model.id,
+                job_id = entry.model.id,
                 job_name = %job_name,
                 error = %e,
                 "failed to update last_run_time in DB"

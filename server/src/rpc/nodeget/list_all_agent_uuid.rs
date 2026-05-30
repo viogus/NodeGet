@@ -27,7 +27,7 @@ pub async fn list_all_agent_uuid(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         let permission = resolve_list_agent_uuid_permission(&token).await?;
 
-        let all_uuids = MonitoringUuidCache::global().list_all().await;
+        let all_uuids = MonitoringUuidCache::global().list_all();
         let uuids = match permission {
             AgentUuidListPermission::All => all_uuids,
             AgentUuidListPermission::Scoped(allowed) => all_uuids

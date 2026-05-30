@@ -68,7 +68,6 @@ pub async fn report_static(
         let hash_cache = crate::static_hash_cache::StaticHashCache::global();
         if hash_cache
             .is_duplicate(uuid_id, &static_monitoring_data.data_hash)
-            .await
         {
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash cached as duplicate, skipping");
             return RawValue::from_string(
@@ -91,8 +90,7 @@ pub async fn report_static(
 
         if exists.is_some() {
             hash_cache
-                .update(uuid_id, static_monitoring_data.data_hash.clone())
-                .await;
+                .update(uuid_id, static_monitoring_data.data_hash.clone());
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash already exists, skipping");
             return RawValue::from_string(
                 r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned(),
@@ -116,7 +114,7 @@ pub async fn report_static(
 
         crate::monitoring_buffer::get().static_mon.send(in_data);
 
-        hash_cache.update(uuid_id, data_hash).await;
+        hash_cache.update(uuid_id, data_hash);
 
         debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data buffered successfully");
 

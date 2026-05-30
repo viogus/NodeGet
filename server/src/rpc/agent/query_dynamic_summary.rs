@@ -113,7 +113,7 @@ pub async fn query_dynamic_summary(
         let mut uuid_ids: Vec<i16> = Vec::new();
         for cond in &query_data.condition {
             if let QueryCondition::Uuid(uuid) = cond {
-                let uuid_id = uuid_cache.get_id(uuid).await.ok_or_else(|| {
+                let uuid_id = uuid_cache.get_id(uuid).ok_or_else(|| {
                     anyhow::anyhow!(NodegetError::NotFound(format!(
                         "Unknown agent UUID: {uuid}"
                     )))
@@ -286,7 +286,7 @@ async fn execute_query(
                 if let Value::Object(ref mut map) = v {
                     if let Some(Value::Number(n)) = map.remove("uuid_id")
                         && let Some(id) = n.as_i64()
-                        && let Some(uuid) = uuid_cache.get_uuid(id as i16).await
+                        && let Some(uuid) = uuid_cache.get_uuid(id as i16)
                     {
                         map.insert("uuid".to_string(), Value::String(uuid.to_string()));
                     }

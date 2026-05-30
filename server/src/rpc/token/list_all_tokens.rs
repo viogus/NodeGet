@@ -31,7 +31,7 @@ pub async fn list_all_tokens(token: String) -> RpcResult<Box<RawValue>> {
             .into());
         }
 
-        let cached_tokens = TokenCache::global().get_all().await;
+        let cached_tokens = TokenCache::global().get_all();
 
         let tokens: Vec<Token> = cached_tokens
             .iter()

@@ -1,18 +1,3 @@
-//! In-memory cache for the `monitoring_uuid` table.
-//!
-//! After the 2025-05 refactoring, `monitoring_uuid` is the **authoritative Agent table**.
-//! All agent CRUD flows through this cache, which stays in sync with the DB:
-//!
-//! - `init()`   — loads the entire table into memory at startup.
-//! - `reload()` — rebuilds from DB after any mutation.
-//! - `list_all()` — returns only **non-soft-deleted** UUIDs (O(1) in-RAM).
-//! - `get_or_insert()` — fetches existing id, or INSERTs a new row.
-//!   If the row exists but `soft_delete = true`, it is **resurrected** automatically.
-//! - `soft_delete()` — marks a row as soft-deleted.
-//!
-//! `read` operations hit RAM directly; `write` operations update the DB
-//! and then call `reload()` to keep the cache consistent.
-
 use crate::DB;
 use crate::cache::{DbBackedCache, load_from_db};
 use crate::entity::monitoring_uuid;
@@ -21,19 +6,31 @@ use nodeget_lib::error::NodegetError;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
 use std::future::Future;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
 
 struct MonitoringUuidCacheInner {
-    /// `uuid` → `(id, soft_delete)`
     by_uuid: HashMap<Uuid, (i16, bool)>,
-    /// `id` → `(uuid, soft_delete)`
     by_id: HashMap<i16, (Uuid, bool)>,
 }
 
 pub struct MonitoringUuidCache {
     inner: RwLock<MonitoringUuidCacheInner>,
+}
+
+fn recover_read(lock: &RwLock<MonitoringUuidCacheInner>) -> std::sync::RwLockReadGuard<'_, MonitoringUuidCacheInner> {
+    lock.read().unwrap_or_else(|e| {
+        tracing::warn!(target: "monitoring_uuid_cache", "lock poisoned during read, recovering");
+        e.into_inner()
+    })
+}
+
+fn recover_write(lock: &RwLock<MonitoringUuidCacheInner>) -> std::sync::RwLockWriteGuard<'_, MonitoringUuidCacheInner> {
+    lock.write().unwrap_or_else(|e| {
+        tracing::warn!(target: "monitoring_uuid_cache", "lock poisoned during write, recovering");
+        e.into_inner()
+    })
 }
 
 make_global_cache!(MonitoringUuidCache, MONITORING_UUID_CACHE_GLOBAL);
@@ -58,6 +55,7 @@ impl DbBackedCache for MonitoringUuidCache {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn reload_from_models(&self, models: Vec<Self::Model>) {
         let mut by_uuid = HashMap::with_capacity(models.len());
         let mut by_id = HashMap::with_capacity(models.len());
@@ -66,7 +64,7 @@ impl DbBackedCache for MonitoringUuidCache {
             by_uuid.insert(model.uuid, (id, model.soft_delete));
             by_id.insert(id, (model.uuid, model.soft_delete));
         }
-        let mut guard = self.inner.write().await;
+        let mut guard = recover_write(&self.inner);
         guard.by_uuid = by_uuid;
         guard.by_id = by_id;
         drop(guard);
@@ -78,36 +76,27 @@ impl DbBackedCache for MonitoringUuidCache {
 }
 
 impl MonitoringUuidCache {
-    /// Get the `id` for a `uuid` regardless of soft-delete state.
-    pub async fn get_id(&self, uuid: &Uuid) -> Option<i16> {
-        let guard = self.inner.read().await;
-        guard.by_uuid.get(uuid).map(|(id, _)| *id)
+    pub fn get_id(&self, uuid: &Uuid) -> Option<i16> {
+        recover_read(&self.inner).by_uuid.get(uuid).map(|(id, _)| *id)
     }
 
-    /// Get the `uuid` for an `id` regardless of soft-delete state.
-    pub async fn get_uuid(&self, id: i16) -> Option<Uuid> {
-        let guard = self.inner.read().await;
-        guard.by_id.get(&id).map(|(uuid, _)| *uuid)
+    pub fn get_uuid(&self, id: i16) -> Option<Uuid> {
+        recover_read(&self.inner).by_id.get(&id).map(|(uuid, _)| *uuid)
     }
 
-    /// Returns `true` if the uuid exists and is **not** soft-deleted.
-    pub async fn is_active(&self, uuid: &Uuid) -> bool {
-        let guard = self.inner.read().await;
-        guard
+    pub fn is_active(&self, uuid: &Uuid) -> bool {
+        recover_read(&self.inner)
             .by_uuid
             .get(uuid)
             .is_some_and(|(_, soft_delete)| !soft_delete)
     }
 
-    /// Returns `true` if the uuid exists in the table (in any state).
-    pub async fn exists(&self, uuid: &Uuid) -> bool {
-        let guard = self.inner.read().await;
-        guard.by_uuid.contains_key(uuid)
+    pub fn exists(&self, uuid: &Uuid) -> bool {
+        recover_read(&self.inner).by_uuid.contains_key(uuid)
     }
 
-    /// List all **active** (non-soft-deleted) UUIDs, sorted for stable output.
-    pub async fn list_all(&self) -> Vec<Uuid> {
-        let guard = self.inner.read().await;
+    pub fn list_all(&self) -> Vec<Uuid> {
+        let guard = recover_read(&self.inner);
         let mut uuids: Vec<Uuid> = guard
             .by_uuid
             .iter()
@@ -119,9 +108,8 @@ impl MonitoringUuidCache {
         uuids
     }
 
-    /// List all UUIDs with their soft-delete status, sorted for stable output.
-    pub async fn list_all_with_agent_mode(&self) -> Vec<(Uuid, bool)> {
-        let guard = self.inner.read().await;
+    pub fn list_all_with_agent_mode(&self) -> Vec<(Uuid, bool)> {
+        let guard = recover_read(&self.inner);
         let mut result: Vec<(Uuid, bool)> = guard
             .by_uuid
             .iter()
@@ -132,11 +120,9 @@ impl MonitoringUuidCache {
         result
     }
 
-    /// Get or insert a `uuid` into the `monitoring_uuid` table.
     pub async fn get_or_insert(&self, uuid: Uuid) -> Result<i16, NodegetError> {
-        // Fast path — read lock only
         {
-            let guard = self.inner.read().await;
+            let guard = recover_read(&self.inner);
             if let Some((id, soft_delete)) = guard.by_uuid.get(&uuid) {
                 if !soft_delete {
                     return Ok(*id);
@@ -148,7 +134,6 @@ impl MonitoringUuidCache {
             NodegetError::DatabaseError("Database connection not initialized".to_owned())
         })?;
 
-        // Check DB state (the cache might be stale)
         let existing = monitoring_uuid::Entity::find()
             .filter(monitoring_uuid::Column::Uuid.eq(uuid))
             .one(db)
@@ -175,7 +160,6 @@ impl MonitoringUuidCache {
             return Ok(id);
         }
 
-        // Insert new
         let new_model = monitoring_uuid::ActiveModel {
             id: ActiveValue::default(),
             uuid: Set(uuid),
@@ -196,7 +180,6 @@ impl MonitoringUuidCache {
         Ok(id)
     }
 
-    /// Soft-delete a uuid.
     pub async fn soft_delete(&self, uuid: Uuid) -> Result<bool, NodegetError> {
         let db = DB.get().ok_or_else(|| {
             NodegetError::DatabaseError("Database connection not initialized".to_owned())
@@ -217,7 +200,7 @@ impl MonitoringUuidCache {
         };
 
         if model.soft_delete {
-            return Ok(true); // already soft-deleted, idempotent
+            return Ok(true);
         }
 
         let mut active: monitoring_uuid::ActiveModel = model.into();
