@@ -10,7 +10,6 @@ default = []
 server = [
     "dep:ng-db",
     "dep:ng-infra",
-    "dep:ng-token",
     "dep:ng-task",
     "dep:axum",
     "dep:futures-util",
@@ -25,7 +24,6 @@ server = [
     "ng-db/server",
     "ng-infra/server",
     "ng-task/server",
-    "ng-token/server",
 ]
 
 [dependencies]
@@ -34,7 +32,6 @@ ng-core = { workspace = true }
 # server feature dependencies
 ng-db = { workspace = true, optional = true }
 ng-infra = { workspace = true, optional = true }
-ng-token = { workspace = true, optional = true }
 ng-task = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }

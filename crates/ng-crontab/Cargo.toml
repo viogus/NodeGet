@@ -12,7 +12,6 @@ server = [
     "dep:ng-db",
     "dep:ng-token",
     "dep:ng-js-runtime",
-    "dep:ng-js-worker",
     "dep:anyhow",
     "dep:sea-orm",
     "dep:jsonrpsee",
@@ -25,8 +24,6 @@ server = [
     "ng-core/for-server",
     "ng-token/server",
     "ng-task/server",
-    "ng-js-runtime/server",
-    "ng-js-worker/server",
 ]
 
 [dependencies]
@@ -36,7 +33,6 @@ ng-infra = { workspace = true, optional = true }
 ng-db = { workspace = true, optional = true }
 ng-token = { workspace = true, optional = true }
 ng-js-runtime = { workspace = true, optional = true }
-ng-js-worker = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

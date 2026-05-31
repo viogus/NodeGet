@@ -12,7 +12,6 @@ categories = ["asynchronous", "command-line-utilities", "network-programming", "
 # ng-* 内部 crate（server feature）
 ng-core = { workspace = true, features = ["for-server"] }
 ng-db = { workspace = true, features = ["server"] }
-ng-infra = { workspace = true, features = ["server"] }
 ng-config = { workspace = true, features = ["server"] }
 ng-token = { workspace = true, features = ["server"] }
 ng-kv = { workspace = true, features = ["server"] }
