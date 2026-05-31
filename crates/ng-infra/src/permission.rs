@@ -62,9 +62,5 @@ pub trait PermissionResolver: Send + Sync {
     ///
     /// Returns [`ScopedPermission::All`] if the token has unrestricted access,
     /// or [`ScopedPermission::Scoped`] with the allowed scopes.
-    fn resolve(
-        &self,
-        token: &Token,
-        permission: &Permission,
-    ) -> ScopedPermission<Scope>;
+    fn resolve(&self, token: &Token, permission: &Permission) -> ScopedPermission<Scope>;
 }

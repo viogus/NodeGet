@@ -16,8 +16,12 @@ mod check_agent;
 mod terminal;
 
 #[cfg(feature = "server")]
-pub use auth::{TokenPermissionChecker, check_terminal_connect_permission, get_token_checker, set_token_checker};
+pub use auth::{
+    TokenPermissionChecker, check_terminal_connect_permission, get_token_checker, set_token_checker,
+};
 #[cfg(feature = "server")]
 pub use check_agent::check_agent;
 #[cfg(feature = "server")]
-pub use terminal::{TerminalParams, TerminalSessionKey, TerminalState, SessionSlots, router, terminal_ws_handler};
+pub use terminal::{
+    SessionSlots, TerminalParams, TerminalSessionKey, TerminalState, router, terminal_ws_handler,
+};

@@ -1,8 +1,8 @@
-use ng_db::entity::token;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Limit;
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::generate_random_string;
+use ng_db::entity::token;
 use sea_orm::{ActiveValue, EntityTrait, Set};
 use tracing::debug;
 

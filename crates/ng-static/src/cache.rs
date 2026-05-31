@@ -1,6 +1,6 @@
 use ng_db::entity::static_file as static_entity;
-use ng_infra::server::{DbBackedCache, load_from_db};
 use ng_infra::make_global_cache;
+use ng_infra::server::{DbBackedCache, load_from_db};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
@@ -19,14 +19,18 @@ pub struct StaticCache {
     inner: RwLock<StaticCacheInner>,
 }
 
-fn recover_read(lock: &RwLock<StaticCacheInner>) -> std::sync::RwLockReadGuard<'_, StaticCacheInner> {
+fn recover_read(
+    lock: &RwLock<StaticCacheInner>,
+) -> std::sync::RwLockReadGuard<'_, StaticCacheInner> {
     lock.read().unwrap_or_else(|e| {
         tracing::warn!(target: "static_cache", "lock poisoned during read, recovering");
         e.into_inner()
     })
 }
 
-fn recover_write(lock: &RwLock<StaticCacheInner>) -> std::sync::RwLockWriteGuard<'_, StaticCacheInner> {
+fn recover_write(
+    lock: &RwLock<StaticCacheInner>,
+) -> std::sync::RwLockWriteGuard<'_, StaticCacheInner> {
     lock.write().unwrap_or_else(|e| {
         tracing::warn!(target: "static_cache", "lock poisoned during write, recovering");
         e.into_inner()
@@ -87,16 +91,22 @@ impl StaticCache {
                 }
             }
             let name = model.name.clone();
-            by_name.insert(name, CachedStatic {
-                model: Arc::new(model),
-            });
+            by_name.insert(
+                name,
+                CachedStatic {
+                    model: Arc::new(model),
+                },
+            );
         }
 
         (by_name, http_root_name)
     }
 
     pub fn get_by_name(&self, name: &str) -> Option<Arc<static_entity::Model>> {
-        recover_read(&self.inner).by_name.get(name).map(|c| Arc::clone(&c.model))
+        recover_read(&self.inner)
+            .by_name
+            .get(name)
+            .map(|c| Arc::clone(&c.model))
     }
 
     pub fn get_http_root(&self) -> Option<Arc<static_entity::Model>> {

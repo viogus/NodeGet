@@ -6,7 +6,7 @@
     clippy::similar_names
 )]
 
-//! `ng-js-runtime` -- QuickJS runtime pool and bytecode compilation.
+//! `ng-js-runtime` -- `QuickJS` runtime pool and bytecode compilation.
 //!
 //! ## Default feature (types only)
 //! - [`JsCodeInput`] -- JS code input struct
@@ -16,11 +16,11 @@
 //!
 //! ## `server` feature
 //! - [`compile_js_module_to_bytecode()`] -- compile JS to bytecode
-//! - [`runtime_pool`] module -- OS thread pool of QuickJS instances
-//! - [`server_runtime`] module -- server-level runtime operations (spawn_on_server_runtime)
+//! - [`runtime_pool`] module -- OS thread pool of `QuickJS` instances
+//! - [`server_runtime`] module -- server-level runtime operations (`spawn_on_server_runtime`)
 //! - [`nodeget`] module -- `nodeget()` API injection into JS context
 //! - [`inline_call`] module -- inline JS execution
-//! - [`js_worker_service`] module -- JsWorkerService trait for dependency injection
+//! - [`js_worker_service`] module -- `JsWorkerService` trait for dependency injection
 //! - [`RuntimeLimits`] -- runtime resource limits
 //! - [`js_runner`] / [`js_runner_source_mode`] -- one-shot JS execution
 

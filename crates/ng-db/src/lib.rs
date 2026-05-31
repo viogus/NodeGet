@@ -7,13 +7,13 @@
     dead_code
 )]
 
-//! `ng-db` — Database layer for NodeGet.
+//! `ng-db` — Database layer for `NodeGet`.
 //!
 //! This crate provides:
-//! - SeaORM entities (11 tables)
+//! - `SeaORM` entities (11 tables)
 //! - Database connection initialization (server feature)
 //! - DB global singleton (`get_db` / `set_db`)
-//! - `DbRegistryManager` for user-created SQLite databases
+//! - `DbRegistryManager` for user-created `SQLite` databases
 //! - SQL helpers (`row_to_json`, `json_to_sea_value`, `is_read_query`)
 //! - `validate_db_name` / `ValidDbName` (implements `NameValidator`)
 //! - `db` RPC namespace (server feature)
@@ -47,10 +47,10 @@ pub mod rpc;
 // ── Re-exports for convenience ──────────────────────────────────────
 
 #[cfg(feature = "server")]
-pub use db_connection::{init_db_connection, DbConnectionConfig};
+pub use db_connection::{DbConnectionConfig, init_db_connection};
 #[cfg(feature = "server")]
 pub use db_registry::{
     DbExecResult, DbInfo, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json,
 };
 #[cfg(feature = "server")]
-pub use rpc::db::auth::{validate_db_name, ValidDbName};
+pub use rpc::db::auth::{ValidDbName, validate_db_name};

@@ -17,14 +17,18 @@ pub struct MonitoringUuidCache {
     inner: RwLock<MonitoringUuidCacheInner>,
 }
 
-fn recover_read(lock: &RwLock<MonitoringUuidCacheInner>) -> std::sync::RwLockReadGuard<'_, MonitoringUuidCacheInner> {
+fn recover_read(
+    lock: &RwLock<MonitoringUuidCacheInner>,
+) -> std::sync::RwLockReadGuard<'_, MonitoringUuidCacheInner> {
     lock.read().unwrap_or_else(|e| {
         tracing::warn!(target: "monitoring_uuid_cache", "lock poisoned during read, recovering");
         e.into_inner()
     })
 }
 
-fn recover_write(lock: &RwLock<MonitoringUuidCacheInner>) -> std::sync::RwLockWriteGuard<'_, MonitoringUuidCacheInner> {
+fn recover_write(
+    lock: &RwLock<MonitoringUuidCacheInner>,
+) -> std::sync::RwLockWriteGuard<'_, MonitoringUuidCacheInner> {
     lock.write().unwrap_or_else(|e| {
         tracing::warn!(target: "monitoring_uuid_cache", "lock poisoned during write, recovering");
         e.into_inner()
@@ -75,11 +79,17 @@ impl DbBackedCache for MonitoringUuidCache {
 
 impl MonitoringUuidCache {
     pub fn get_id(&self, uuid: &Uuid) -> Option<i16> {
-        recover_read(&self.inner).by_uuid.get(uuid).map(|(id, _)| *id)
+        recover_read(&self.inner)
+            .by_uuid
+            .get(uuid)
+            .map(|(id, _)| *id)
     }
 
     pub fn get_uuid(&self, id: i16) -> Option<Uuid> {
-        recover_read(&self.inner).by_id.get(&id).map(|(uuid, _)| *uuid)
+        recover_read(&self.inner)
+            .by_id
+            .get(&id)
+            .map(|(uuid, _)| *uuid)
     }
 
     pub fn is_active(&self, uuid: &Uuid) -> bool {
@@ -114,17 +124,17 @@ impl MonitoringUuidCache {
             .map(|(uuid, (_, soft_delete))| (*uuid, *soft_delete))
             .collect();
         drop(guard);
-        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result.sort_by_key(|a| a.0);
         result
     }
 
     pub async fn get_or_insert(&self, uuid: Uuid) -> Result<i16, NodegetError> {
         {
             let guard = recover_read(&self.inner);
-            if let Some((id, soft_delete)) = guard.by_uuid.get(&uuid) {
-                if !soft_delete {
-                    return Ok(*id);
-                }
+            if let Some((id, soft_delete)) = guard.by_uuid.get(&uuid)
+                && !soft_delete
+            {
+                return Ok(*id);
             }
         }
 

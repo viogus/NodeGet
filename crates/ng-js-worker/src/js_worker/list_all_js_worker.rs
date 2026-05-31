@@ -10,8 +10,8 @@ use tracing::debug;
 pub async fn list_all_js_worker(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_worker", "processing list all js_worker request");
-        let db = get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db =
+            get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
         let all_names: Vec<String> = js_worker::Entity::find()
             .select_only()
             .column(js_worker::Column::Name)

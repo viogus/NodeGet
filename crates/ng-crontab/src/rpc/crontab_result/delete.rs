@@ -10,8 +10,8 @@ use tracing::debug;
 pub async fn delete(token: String, query: CrontabResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab_result", condition_count = query.condition.len(), "processing crontab_result delete request");
-        let db = get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db =
+            get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
         // 权限检查 —— 与 query 相同的模式
         let mut permission_checked = false;
@@ -21,7 +21,8 @@ pub async fn delete(token: String, query: CrontabResultDataQuery) -> RpcResult<B
         for condition in &query.condition {
             if let CrontabResultQueryCondition::CronName(cron_name) = condition {
                 if !permission_checked {
-                    super::auth::check_crontab_result_delete_permission(&token, Some(cron_name)).await?;
+                    super::auth::check_crontab_result_delete_permission(&token, Some(cron_name))
+                        .await?;
                     permission_checked = true;
                 }
                 has_cron_name_filter = true;

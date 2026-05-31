@@ -27,7 +27,8 @@ pub trait JsWorkerScheduler: Send + Sync + 'static {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send>>;
 }
 
-static JS_WORKER_SCHEDULER: std::sync::OnceLock<std::sync::Arc<dyn JsWorkerScheduler>> = std::sync::OnceLock::new();
+static JS_WORKER_SCHEDULER: std::sync::OnceLock<std::sync::Arc<dyn JsWorkerScheduler>> =
+    std::sync::OnceLock::new();
 
 /// Set the global JS worker scheduler for cron task execution.
 pub fn set_js_worker_scheduler(scheduler: std::sync::Arc<dyn JsWorkerScheduler>) {
@@ -87,8 +88,10 @@ pub async fn crontab_task(
                         timestamp: Set(None),
                         success: Set(None),
                         error_message: Set(None),
-                        task_event_type: <CrontabRpcImpl as RpcHelper>::try_set_json(task_event_type.clone())
-                            .map_err(|e| NodegetError::SerializationError(format!("{e}")))?,
+                        task_event_type: <CrontabRpcImpl as RpcHelper>::try_set_json(
+                            task_event_type.clone(),
+                        )
+                        .map_err(|e| NodegetError::SerializationError(format!("{e}")))?,
                         task_event_result: Set(None),
                     };
 

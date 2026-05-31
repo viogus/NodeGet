@@ -1,9 +1,7 @@
 use crate::CronType;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::{NodegetError, anyhow_to_nodeget_error};
-use ng_core::permission::data_structure::{
-    Crontab as CrontabPermission, Permission, Scope, Token,
-};
+use ng_core::permission::data_structure::{Crontab as CrontabPermission, Permission, Scope, Token};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::get_local_timestamp_ms_i64;
 use ng_db::entity::crontab;
@@ -89,8 +87,8 @@ pub async fn get(token: String) -> RpcResult<Box<RawValue>> {
 
 async fn get_crontabs_by_uuids(uuids: Vec<Uuid>) -> anyhow::Result<Vec<crate::Cron>> {
     trace!(target: "crontab", uuid_count = uuids.len(), "fetching crontabs by agent UUIDs");
-    let db = get_db()
-        .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+    let db =
+        get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
     let models = crontab::Entity::find()
         .all(db)
@@ -127,8 +125,8 @@ async fn get_crontabs_by_uuids(uuids: Vec<Uuid>) -> anyhow::Result<Vec<crate::Cr
 
 async fn get_all_crontabs() -> anyhow::Result<Vec<crate::Cron>> {
     trace!(target: "crontab", "fetching all crontabs");
-    let db = get_db()
-        .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+    let db =
+        get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
     let models = crontab::Entity::find()
         .all(db)

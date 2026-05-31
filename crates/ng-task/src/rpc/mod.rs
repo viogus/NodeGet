@@ -1,13 +1,13 @@
+use jsonrpsee::PendingSubscriptionSink;
+use jsonrpsee::SubscriptionMessage;
+use jsonrpsee::core::{JsonRawValue, RpcResult, SubscriptionResult};
+use jsonrpsee::proc_macros::rpc;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{Permission, Scope, Task, Token};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::JsonError;
 use ng_db::rpc::{RpcHelper, token_identity};
 use ng_db::rpc_exec;
-use jsonrpsee::PendingSubscriptionSink;
-use jsonrpsee::SubscriptionMessage;
-use jsonrpsee::core::{JsonRawValue, RpcResult, SubscriptionResult};
-use jsonrpsee::proc_macros::rpc;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -73,7 +73,9 @@ pub trait MonitoringUuidProvider: Send + Sync + 'static {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<i16, NodegetError>> + Send>>;
 
     /// Reload the monitoring UUID cache.
-    fn reload(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
+    fn reload(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 }
 
 static MONITORING_UUID_PROVIDER: OnceLock<Arc<dyn MonitoringUuidProvider>> = OnceLock::new();
@@ -248,13 +250,11 @@ impl RpcServer for TaskRpcImpl {
             return Ok(());
         };
 
-        let provider = auth_provider().ok_or_else(|| {
-            jsonrpsee::types::ErrorObject::borrowed(
-                101,
-                "Auth provider not initialized",
-                None,
-            )
-        }).ok();
+        let provider = auth_provider()
+            .ok_or_else(|| {
+                jsonrpsee::types::ErrorObject::borrowed(101, "Auth provider not initialized", None)
+            })
+            .ok();
 
         let Some(provider) = provider else {
             subscription_sink
@@ -378,7 +378,12 @@ impl TaskManager {
         GLOBAL_TASK_MANAGER.get_or_init(|| Arc::new(Self::new()))
     }
 
-    pub async fn add_session(&self, uuid: Uuid, reg_id: Uuid, tx: mpsc::Sender<crate::types::TaskEvent>) {
+    pub async fn add_session(
+        &self,
+        uuid: Uuid,
+        reg_id: Uuid,
+        tx: mpsc::Sender<crate::types::TaskEvent>,
+    ) {
         self.peers.write().await.insert(uuid, (reg_id, tx));
         debug!(target: "task", uuid = %uuid, reg_id = %reg_id, "session registered");
     }
@@ -395,7 +400,11 @@ impl TaskManager {
         drop(peers);
     }
 
-    pub async fn send_event(&self, uuid: Uuid, event: crate::types::TaskEvent) -> Result<(), (i32, String)> {
+    pub async fn send_event(
+        &self,
+        uuid: Uuid,
+        event: crate::types::TaskEvent,
+    ) -> Result<(), (i32, String)> {
         trace!(target: "task", uuid = %uuid, "sending task event");
         let peers = self.peers.read().await;
 
@@ -428,7 +437,11 @@ impl TaskManager {
 
     /// 尝试通知 blocking waiter（upload_task_result 时调用）
     /// 返回 true 表示有 waiter 被通知
-    pub async fn notify_blocking_waiter(&self, task_id: u64, response: crate::types::TaskEventResponse) -> bool {
+    pub async fn notify_blocking_waiter(
+        &self,
+        task_id: u64,
+        response: crate::types::TaskEventResponse,
+    ) -> bool {
         let value = self.blocking_waiters.write().await.remove(&task_id);
         value.is_some_and(|tx| {
             let _ = tx.send(response);
@@ -440,5 +453,8 @@ impl TaskManager {
 
 /// Build and return the `task` RPC module, ready to merge into the server's RPC router.
 pub fn rpc_module() -> jsonrpsee::RpcModule<TaskRpcImpl> {
-    TaskRpcImpl { manager: TaskManager::global().clone() }.into_rpc()
+    TaskRpcImpl {
+        manager: TaskManager::global().clone(),
+    }
+    .into_rpc()
 }

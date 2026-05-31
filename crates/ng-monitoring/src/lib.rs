@@ -1,4 +1,4 @@
-//! ng-monitoring: Monitoring data structures, caches, and RPC methods for NodeGet.
+//! ng-monitoring: Monitoring data structures, caches, and RPC methods for `NodeGet`.
 //!
 //! ## Default features (types only)
 //! - `StaticMonitoringData`, `DynamicMonitoringData`, `DynamicMonitoringSummaryData`
@@ -33,19 +33,20 @@ pub mod query;
 #[cfg(feature = "server")]
 pub mod monitoring_buffer;
 #[cfg(feature = "server")]
-pub mod monitoring_uuid_cache;
-#[cfg(feature = "server")]
 pub mod monitoring_last_cache;
 #[cfg(feature = "server")]
-pub mod static_hash_cache;
+pub mod monitoring_uuid_cache;
 #[cfg(feature = "server")]
 pub mod rpc;
+#[cfg(feature = "server")]
+pub mod static_hash_cache;
 
 /// Build and return an `RpcModule` containing all monitoring-related RPC methods
 /// (agent + agent-uuid + nodeget-server).
 ///
 /// The caller should merge this into the main RPC module during startup.
 #[cfg(feature = "server")]
+#[must_use]
 pub fn rpc_module() -> jsonrpsee::RpcModule<()> {
     use rpc::agent::RpcServer as AgentRpcServer;
     use rpc::agent_uuid::AgentUuidRpcServer;
@@ -54,13 +55,15 @@ pub fn rpc_module() -> jsonrpsee::RpcModule<()> {
     let mut module = jsonrpsee::RpcModule::new(());
 
     module
-        .register_method("agent_ping", |_, _, _| {
+        .register_method("agent_ping", |_, (), _| {
             Ok::<&str, jsonrpsee::types::ErrorObjectOwned>("pong")
         })
         .ok();
 
     let agent_impl = rpc::agent::AgentRpcImpl;
-    module.merge(agent_impl.into_rpc()).expect("merge agent rpc");
+    module
+        .merge(agent_impl.into_rpc())
+        .expect("merge agent rpc");
 
     let agent_uuid_impl = rpc::agent_uuid::AgentUuidRpcImpl;
     module

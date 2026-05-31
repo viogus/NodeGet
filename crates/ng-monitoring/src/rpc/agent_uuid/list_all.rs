@@ -1,9 +1,9 @@
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use ng_token::get::check_token_limit;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{MonitoringUuid, Permission, Scope};
 use ng_core::permission::token_auth::TokenOrAuth;
+use ng_token::get::check_token_limit;
 use serde_json::value::RawValue;
 use tracing::debug;
 
@@ -27,8 +27,7 @@ pub async fn list_all_agent_uuids(token: String) -> RpcResult<Box<RawValue>> {
         }
         debug!(target: "rpc", "list_all_agent_uuids: permission check passed");
 
-        let uuids = MonitoringUuidCache::global()
-            .list_all();
+        let uuids = MonitoringUuidCache::global().list_all();
 
         let json_str = serde_json::to_string(&uuids)
             .map_err(|e| NodegetError::SerializationError(e.to_string()))?;

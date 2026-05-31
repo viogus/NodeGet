@@ -1,10 +1,10 @@
 use axum::routing::any;
 use axum::{extract::Path, http::StatusCode};
 use base64::Engine as _;
-use ng_core::permission::data_structure::{Permission, Scope};
-use ng_core::permission::token_auth::TokenOrAuth;
 use ng_config::config::server::ServerConfig;
 use ng_config::get_reload_notify;
+use ng_core::permission::data_structure::{Permission, Scope};
+use ng_core::permission::token_auth::TokenOrAuth;
 use ng_db::entity::js_worker;
 use ng_js_runtime::RunType;
 use ng_js_runtime::RuntimeLimits;
@@ -152,12 +152,13 @@ pub async fn run(config: &ServerConfig) {
 
                         if req.method() == axum::http::Method::GET {
                             let cache = StaticCache::global();
-                            if let Some(model) = cache.get_http_root() {
-                                if model.enable != Some(false) {
-                                    let path = req.uri().path().to_owned();
-                                    let method = req.method().clone();
-                                    return serve_static_file(&model.path, &path, model.cors, &method).await;
-                                }
+                            if let Some(model) = cache.get_http_root()
+                                && model.enable != Some(false)
+                            {
+                                let path = req.uri().path().to_owned();
+                                let method = req.method().clone();
+                                return serve_static_file(&model.path, &path, model.cors, &method)
+                                    .await;
                             }
                             return axum::response::Response::builder()
                                 .status(StatusCode::OK)
@@ -185,12 +186,13 @@ pub async fn run(config: &ServerConfig) {
 
                         if req.method() == axum::http::Method::GET {
                             let cache = StaticCache::global();
-                            if let Some(model) = cache.get_http_root() {
-                                if model.enable != Some(false) {
-                                    let path = req.uri().path().to_owned();
-                                    let method = req.method().clone();
-                                    return serve_static_file(&model.path, &path, model.cors, &method).await;
-                                }
+                            if let Some(model) = cache.get_http_root()
+                                && model.enable != Some(false)
+                            {
+                                let path = req.uri().path().to_owned();
+                                let method = req.method().clone();
+                                return serve_static_file(&model.path, &path, model.cors, &method)
+                                    .await;
                             }
                             return axum::response::Response::builder()
                                 .status(StatusCode::OK)
@@ -725,11 +727,10 @@ async fn serve_static_file(
         path.trim_start_matches('/')
     };
 
-    let resolved =
-        match resolve_safe_file_path(&static_path, sub_path, file_path) {
-            Ok(p) => p,
-            Err(e) => return build_static_error(StatusCode::BAD_REQUEST, format!("{e}"), cors),
-        };
+    let resolved = match resolve_safe_file_path(&static_path, sub_path, file_path) {
+        Ok(p) => p,
+        Err(e) => return build_static_error(StatusCode::BAD_REQUEST, format!("{e}"), cors),
+    };
 
     let data = match tokio::fs::read(&resolved).await {
         Ok(d) => d,
@@ -838,7 +839,7 @@ async fn cleanup_unix_socket_file(path: Option<&str>) {
 
 // ── Trait implementations for dependency injection ──────────────────
 
-/// ng-db auth provider: delegates to ng_token::check_token_limit / check_super_token
+/// ng-db auth provider: delegates to `ng_token::check_token_limit` / `check_super_token`
 struct ServerAuthProvider;
 
 impl ng_db::rpc::AuthProvider for ServerAuthProvider {
@@ -849,7 +850,9 @@ impl ng_db::rpc::AuthProvider for ServerAuthProvider {
         permissions: Vec<Permission>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send>> {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
@@ -861,7 +864,7 @@ impl ng_db::rpc::AuthProvider for ServerAuthProvider {
     }
 }
 
-/// ng-kv token permission checker: delegates to ng_token::check_token_limit / check_super_token / get_token
+/// ng-kv token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct KvTokenChecker;
 
 impl ng_kv::TokenPermissionChecker for KvTokenChecker {
@@ -870,15 +873,19 @@ impl ng_kv::TokenPermissionChecker for KvTokenChecker {
         token_or_auth: &TokenOrAuth,
         scopes: Vec<Scope>,
         permissions: Vec<Permission>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::check_super_token(&token_or_auth).await })
     }
@@ -886,13 +893,20 @@ impl ng_kv::TokenPermissionChecker for KvTokenChecker {
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<ng_core::permission::data_structure::Token>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = anyhow::Result<ng_core::permission::data_structure::Token>,
+                > + Send
+                + '_,
+        >,
+    > {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::get_token(&token_or_auth).await })
     }
 }
 
-/// ng-static token permission checker: delegates to ng_token::check_token_limit / check_super_token
+/// ng-static token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token`
 struct StaticTokenChecker;
 
 impl ng_static::auth::TokenPermissionChecker for StaticTokenChecker {
@@ -901,21 +915,25 @@ impl ng_static::auth::TokenPermissionChecker for StaticTokenChecker {
         token_or_auth: &TokenOrAuth,
         scopes: Vec<Scope>,
         permissions: Vec<Permission>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::check_super_token(&token_or_auth).await })
     }
 }
 
-/// ng-task auth provider: delegates to ng_token::check_token_limit / check_super_token / get_token
+/// ng-task auth provider: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct TaskAuthProvider;
 
 impl ng_task::TaskAuthProvider for TaskAuthProvider {
@@ -926,7 +944,9 @@ impl ng_task::TaskAuthProvider for TaskAuthProvider {
         permissions: Vec<Permission>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send>> {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
@@ -940,20 +960,28 @@ impl ng_task::TaskAuthProvider for TaskAuthProvider {
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<ng_core::permission::data_structure::Token>> + Send>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = anyhow::Result<ng_core::permission::data_structure::Token>,
+                > + Send,
+        >,
+    > {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::get_token(&token_or_auth).await })
     }
 }
 
-/// ng-task monitoring UUID provider: delegates to ng_monitoring::MonitoringUuidCache
+/// ng-task monitoring UUID provider: delegates to `ng_monitoring::MonitoringUuidCache`
 struct TaskMonitoringUuidProvider;
 
 impl ng_task::MonitoringUuidProvider for TaskMonitoringUuidProvider {
     fn get_or_insert(
         &self,
         uuid: uuid::Uuid,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<i16, ng_core::error::NodegetError>> + Send>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<i16, ng_core::error::NodegetError>> + Send>,
+    > {
         Box::pin(async move {
             ng_monitoring::monitoring_uuid_cache::MonitoringUuidCache::global()
                 .get_or_insert(uuid)
@@ -968,7 +996,7 @@ impl ng_task::MonitoringUuidProvider for TaskMonitoringUuidProvider {
     }
 }
 
-/// ng-js-worker token permission checker: delegates to ng_token::check_token_limit / check_super_token / get_token
+/// ng-js-worker token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct JsWorkerTokenChecker;
 
 impl ng_js_worker::TokenPermissionChecker for JsWorkerTokenChecker {
@@ -977,15 +1005,19 @@ impl ng_js_worker::TokenPermissionChecker for JsWorkerTokenChecker {
         token_or_auth: &TokenOrAuth,
         scopes: Vec<Scope>,
         permissions: Vec<Permission>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::check_super_token(&token_or_auth).await })
     }
@@ -993,13 +1025,20 @@ impl ng_js_worker::TokenPermissionChecker for JsWorkerTokenChecker {
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<ng_core::permission::data_structure::Token>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = anyhow::Result<ng_core::permission::data_structure::Token>,
+                > + Send
+                + '_,
+        >,
+    > {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::get_token(&token_or_auth).await })
     }
 }
 
-/// ng-terminal token permission checker: delegates to ng_token::check_token_limit / check_super_token
+/// ng-terminal token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token`
 struct TerminalTokenChecker;
 
 impl ng_terminal::TokenPermissionChecker for TerminalTokenChecker {
@@ -1008,15 +1047,19 @@ impl ng_terminal::TokenPermissionChecker for TerminalTokenChecker {
         token_or_auth: &TokenOrAuth,
         scopes: Vec<Scope>,
         permissions: Vec<Permission>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
-        Box::pin(async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await })
+        Box::pin(
+            async move { ng_token::check_token_limit(&token_or_auth, scopes, permissions).await },
+        )
     }
 
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+    {
         let token_or_auth = token_or_auth.clone();
         Box::pin(async move { ng_token::check_super_token(&token_or_auth).await })
     }
@@ -1031,10 +1074,15 @@ impl ng_js_runtime::js_worker_service::JsWorkerService for JsWorkerServiceImpl {
         params: serde_json::Value,
         timeout_sec: Option<f64>,
         inline_caller: Option<String>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send>,
+    > {
         Box::pin(async move {
             ng_js_worker::service::run_inline_call_and_record_result(
-                js_script_name, params, timeout_sec, inline_caller,
+                js_script_name,
+                params,
+                timeout_sec,
+                inline_caller,
             )
             .await
         })
@@ -1042,10 +1090,17 @@ impl ng_js_runtime::js_worker_service::JsWorkerService for JsWorkerServiceImpl {
 
     fn get_rpc_module(
         &self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Box<dyn ng_js_runtime::js_worker_service::RawJsonDispatcher + Send>> + Send>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Box<dyn ng_js_runtime::js_worker_service::RawJsonDispatcher + Send>,
+                > + Send,
+        >,
+    > {
         Box::pin(async move {
             let module = crate::rpc_nodeget::get_modules();
-            Box::new(RpcModuleDispatcher(module)) as Box<dyn ng_js_runtime::js_worker_service::RawJsonDispatcher + Send>
+            Box::new(RpcModuleDispatcher(module))
+                as Box<dyn ng_js_runtime::js_worker_service::RawJsonDispatcher + Send>
         })
     }
 }
@@ -1057,7 +1112,9 @@ impl ng_js_runtime::js_worker_service::RawJsonDispatcher for RpcModuleDispatcher
         &self,
         json: &str,
         buf_size: usize,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(String, ())>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<(String, ())>> + Send + '_>,
+    > {
         let json = json.to_owned();
         let module = self.0.clone();
         Box::pin(async move {
@@ -1070,7 +1127,7 @@ impl ng_js_runtime::js_worker_service::RawJsonDispatcher for RpcModuleDispatcher
     }
 }
 
-/// ng-crontab JsWorkerScheduler: delegates to ng_js_worker::service::enqueue_defined_js_worker_run
+/// ng-crontab `JsWorkerScheduler`: delegates to `ng_js_worker::service::enqueue_defined_js_worker_run`
 struct CronJsWorkerScheduler;
 
 impl ng_crontab::task::JsWorkerScheduler for CronJsWorkerScheduler {

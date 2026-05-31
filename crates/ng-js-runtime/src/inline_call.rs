@@ -23,11 +23,10 @@ pub async fn js_inline_call(
     })?;
 
     let result_json = spawn_on_server_runtime(async move {
-        let result_value =
-            get_js_worker_service()
-                .run_inline_call_and_record_result(js_worker_name, params, timeout_sec, inline_caller)
-                .await
-                .map_err(|e| e.to_string())?;
+        let result_value = get_js_worker_service()
+            .run_inline_call_and_record_result(js_worker_name, params, timeout_sec, inline_caller)
+            .await
+            .map_err(|e| e.to_string())?;
         serde_json::to_string(&result_value)
             .map_err(|e| format!("Failed to serialize inline_call result: {e}"))
     })

@@ -1,14 +1,14 @@
-use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use crate::monitoring_last_cache::MonitoringLastCache;
-use crate::monitoring_buffer;
 use crate::data_structure::DynamicMonitoringSummaryData;
-use ng_db::entity::dynamic_monitoring_summary;
-use ng_token::get::check_token_limit;
+use crate::monitoring_buffer;
+use crate::monitoring_last_cache::MonitoringLastCache;
+use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{DynamicMonitoringSummary, Permission, Scope};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::get_local_timestamp_ms_i64;
+use ng_db::entity::dynamic_monitoring_summary;
+use ng_token::get::check_token_limit;
 use sea_orm::{ActiveValue, Set};
 use serde_json::value::RawValue;
 use tracing::debug;
@@ -80,19 +80,16 @@ pub async fn report_dynamic_summary(
 
         debug!(target: "monitoring", agent_uuid = %data.uuid, "Received dynamic summary data, sending to buffer");
 
-        monitoring_buffer::get()
-            .dynamic_summary
-            .send(in_data);
+        monitoring_buffer::get().dynamic_summary.send(in_data);
 
-        MonitoringLastCache::global()
-            .update_dynamic_summary_prebuilt(
+        MonitoringLastCache::global().update_dynamic_summary_prebuilt(
+            agent_uuid,
+            crate::monitoring_last_cache::build_dynamic_summary_value(
                 agent_uuid,
-                crate::monitoring_last_cache::build_dynamic_summary_value(
-                    agent_uuid,
-                    data.time.cast_signed(),
-                    &data,
-                ),
-            );
+                data.time.cast_signed(),
+                &data,
+            ),
+        );
 
         debug!(target: "monitoring", agent_uuid = %data.uuid, "Dynamic summary data buffered successfully");
 

@@ -176,7 +176,10 @@ pub(crate) fn init_js_runtime_globals(ctx: &Ctx<'_>) -> Result<(), Error> {
     llrt_timers::init(ctx)?;
     let global = ctx.globals();
     // Register raw Rust functions under internal names (return JSON strings)
-    global.set("__nodeget_rpc_raw", Func::from(Async(crate::nodeget::js_nodeget)))?;
+    global.set(
+        "__nodeget_rpc_raw",
+        Func::from(Async(crate::nodeget::js_nodeget)),
+    )?;
     global.set(
         "__nodeget_inline_call_raw",
         Func::from(Async(crate::inline_call::js_inline_call)),

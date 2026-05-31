@@ -8,8 +8,8 @@ use std::collections::VecDeque;
 use std::path::{Component, Path, PathBuf};
 use tracing::{debug, error, warn};
 
-use crate::cache::StaticCache;
 use crate::FileInfo;
+use crate::cache::StaticCache;
 
 /// 获取配置文件中的 `static_path`，默认 `./static/`
 pub fn get_static_path() -> String {

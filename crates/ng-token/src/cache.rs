@@ -1,7 +1,7 @@
+use ng_core::permission::data_structure::Limit;
 use ng_db::entity::token;
 use ng_infra::make_global_cache;
 use ng_infra::server::{DbBackedCache, load_from_db};
-use ng_core::permission::data_structure::Limit;
 
 use crate::get::parse_token_limit_with_compat;
 
@@ -33,7 +33,9 @@ fn recover_read(lock: &RwLock<TokenCacheInner>) -> std::sync::RwLockReadGuard<'_
     })
 }
 
-fn recover_write(lock: &RwLock<TokenCacheInner>) -> std::sync::RwLockWriteGuard<'_, TokenCacheInner> {
+fn recover_write(
+    lock: &RwLock<TokenCacheInner>,
+) -> std::sync::RwLockWriteGuard<'_, TokenCacheInner> {
     lock.write().unwrap_or_else(|e| {
         tracing::warn!(target: "token_cache", "lock poisoned during write, recovering");
         e.into_inner()
@@ -100,10 +102,7 @@ impl TokenCache {
                 });
 
             let token_hash_bytes = hex_to_bytes(&model.token_hash).unwrap_or([0u8; 32]);
-            let password_hash_bytes = model
-                .password_hash
-                .as_deref()
-                .and_then(|h| hex_to_bytes(h));
+            let password_hash_bytes = model.password_hash.as_deref().and_then(hex_to_bytes);
 
             let cached = Arc::new(CachedToken {
                 model: Arc::new(model),
@@ -129,15 +128,25 @@ impl TokenCache {
     }
 
     pub fn find_by_username(&self, username: &str) -> Option<Arc<CachedToken>> {
-        recover_read(&self.inner).by_username.get(username).map(Arc::clone)
+        recover_read(&self.inner)
+            .by_username
+            .get(username)
+            .map(Arc::clone)
     }
 
     pub fn get_super_token(&self) -> Option<Arc<CachedToken>> {
-        recover_read(&self.inner).super_token.as_ref().map(Arc::clone)
+        recover_read(&self.inner)
+            .super_token
+            .as_ref()
+            .map(Arc::clone)
     }
 
     pub fn get_all(&self) -> Vec<Arc<CachedToken>> {
-        recover_read(&self.inner).by_key.values().map(Arc::clone).collect()
+        recover_read(&self.inner)
+            .by_key
+            .values()
+            .map(Arc::clone)
+            .collect()
     }
 }
 

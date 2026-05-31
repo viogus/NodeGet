@@ -11,9 +11,8 @@ pub async fn check_db_permission(
     let token_or_auth = TokenOrAuth::from_full_token(token)
         .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
-    let provider = auth_provider().ok_or_else(|| {
-        NodegetError::Other("Auth provider not initialized".to_owned())
-    })?;
+    let provider = auth_provider()
+        .ok_or_else(|| NodegetError::Other("Auth provider not initialized".to_owned()))?;
 
     let is_allowed = provider
         .check_token_limit(
@@ -90,6 +89,6 @@ impl ng_core::NameValidator for ValidDbName {
                 "db name cannot be '.' or '..'".to_owned(),
             ));
         }
-        Ok(ValidDbName(name.to_owned()))
+        Ok(Self(name.to_owned()))
     }
 }

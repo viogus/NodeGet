@@ -1,5 +1,5 @@
-use crate::get_db;
 use crate::entity::db_registry as dbreg_entity;
+use crate::get_db;
 use anyhow::Context;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, Database, DatabaseConnection,
@@ -35,7 +35,7 @@ impl DbRegistryManager {
     pub async fn init(db_path: String) -> Arc<Self> {
         static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| {
-            let mgr_inner = Arc::new(DbRegistryManager {
+            let mgr_inner = Arc::new(Self {
                 db_path,
                 pools: RwLock::new(HashMap::new()),
             });
@@ -90,7 +90,7 @@ impl DbRegistryManager {
 
     async fn start_cleanup_loop(&self) {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_mins(1)).await;
             self.cleanup_expired().await;
         }
     }
@@ -108,13 +108,12 @@ impl DbRegistryManager {
                     .filter(dbreg_entity::Column::Name.eq(name))
                     .one(main_db)
                     .await
+                    && let Some(lifetime_ms) = m.max_lifetime_ms
                 {
-                    if let Some(lifetime_ms) = m.max_lifetime_ms {
-                        let last_used = tracked.last_used_ms.load(Ordering::Relaxed);
-                        let elapsed_ms = now_ms_u64().saturating_sub(last_used) as i64;
-                        if elapsed_ms >= lifetime_ms {
-                            expired.push(name.clone());
-                        }
+                    let last_used = tracked.last_used_ms.load(Ordering::Relaxed);
+                    let elapsed_ms = now_ms_u64().saturating_sub(last_used) as i64;
+                    if elapsed_ms >= lifetime_ms {
+                        expired.push(name.clone());
                     }
                 }
             }
@@ -318,8 +317,9 @@ fn try_column_as_json(r: &sea_orm::QueryResult, col: &str) -> serde_json::Value 
     serde_json::Value::Null
 }
 
-/// Convert a JSON value to a SeaORM `Value` for use as a SQL parameter.
+/// Convert a JSON value to a `SeaORM` `Value` for use as a SQL parameter.
 /// This is shared between the db namespace RPC handlers.
+#[must_use]
 pub fn json_to_sea_value(json: &serde_json::Value) -> sea_orm::Value {
     match json {
         serde_json::Value::Null => sea_orm::Value::Json(None),
@@ -342,6 +342,7 @@ pub fn json_to_sea_value(json: &serde_json::Value) -> sea_orm::Value {
     }
 }
 
+#[must_use]
 pub fn is_read_query(sql: &str) -> bool {
     let s = sql.trim_start_matches(|c: char| c.is_whitespace() || c == '(' || c == ';');
     starts_with_ascii_ci(s, "SELECT")

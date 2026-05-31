@@ -8,9 +8,9 @@ pub async fn list_rpc(token: String) -> jsonrpsee::core::RpcResult<Box<RawValue>
     let process_logic = async {
         debug!(target: "static_bucket", "processing static-bucket_list request");
 
-        let is_super_token = check_super_token(&token).await.map_err(|e| {
-            NodegetError::PermissionDenied(format!("{e}"))
-        })?;
+        let is_super_token = check_super_token(&token)
+            .await
+            .map_err(|e| NodegetError::PermissionDenied(format!("{e}")))?;
 
         if !is_super_token {
             warn!(target: "static_bucket", "non-supertoken attempted to list all static names");

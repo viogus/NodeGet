@@ -72,7 +72,7 @@ async fn query_single_type(
                 .lookup_ip(domain)
                 .await
                 .map_err(|e| NodegetError::Other(format!("DNS A lookup failed: {e}")))?;
-            for ip in lookup.iter().filter(|ip| ip.is_ipv4()) {
+            for ip in lookup.iter().filter(std::net::IpAddr::is_ipv4) {
                 results.push((DnsRecordType::A, ip.to_string()));
             }
         }
@@ -81,7 +81,7 @@ async fn query_single_type(
                 .lookup_ip(domain)
                 .await
                 .map_err(|e| NodegetError::Other(format!("DNS AAAA lookup failed: {e}")))?;
-            for ip in lookup.iter().filter(|ip| ip.is_ipv6()) {
+            for ip in lookup.iter().filter(std::net::IpAddr::is_ipv6) {
                 results.push((DnsRecordType::Aaaa, ip.to_string()));
             }
         }

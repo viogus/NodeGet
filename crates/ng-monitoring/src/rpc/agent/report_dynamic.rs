@@ -1,14 +1,14 @@
-use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use crate::monitoring_last_cache::MonitoringLastCache;
-use crate::monitoring_buffer;
 use crate::data_structure::DynamicMonitoringData;
-use ng_db::entity::dynamic_monitoring;
-use ng_token::get::check_token_limit;
+use crate::monitoring_buffer;
+use crate::monitoring_last_cache::MonitoringLastCache;
+use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{DynamicMonitoring, Permission, Scope};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::get_local_timestamp_ms_i64;
+use ng_db::entity::dynamic_monitoring;
+use ng_token::get::check_token_limit;
 use sea_orm::{ActiveValue, Set};
 use serde_json::value::RawValue;
 use tracing::debug;
@@ -82,8 +82,14 @@ pub async fn report_dynamic(
         monitoring_buffer::get().dynamic_mon.send(in_data);
 
         let mut obj = serde_json::Map::with_capacity(9);
-        obj.insert("uuid".to_owned(), serde_json::Value::String(agent_uuid.to_string()));
-        obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
+        obj.insert(
+            "uuid".to_owned(),
+            serde_json::Value::String(agent_uuid.to_string()),
+        );
+        obj.insert(
+            "timestamp".to_owned(),
+            serde_json::Value::Number(timestamp.into()),
+        );
         obj.insert("cpu".to_owned(), cpu_val);
         obj.insert("ram".to_owned(), ram_val);
         obj.insert("load".to_owned(), load_val);

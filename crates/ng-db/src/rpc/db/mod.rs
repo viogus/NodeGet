@@ -1,5 +1,5 @@
+use crate::rpc::{RpcHelper, token_identity};
 use crate::rpc_exec;
-use crate::rpc::{token_identity, RpcHelper};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::proc_macros::rpc;
@@ -159,6 +159,7 @@ impl RpcServer for DbRpcImpl {
 }
 
 /// Build and return the `db` RPC module, ready to merge into the server's RPC router.
+#[must_use]
 pub fn rpc_module() -> jsonrpsee::RpcModule<DbRpcImpl> {
     DbRpcImpl.into_rpc()
 }

@@ -1,15 +1,15 @@
-use ng_db::entity::dynamic_monitoring;
-use ng_infra::server::RpcHelper;
+use crate::query::QueryCondition;
 use crate::rpc::agent::AgentRpcImpl;
 use crate::rpc::agent::delete_common::{
     ResolvedCondition, extract_limit_and_last, resolve_conditions, scopes_from_conditions,
 };
-use ng_token::check_token_limit;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
-use crate::query::QueryCondition;
 use ng_core::permission::data_structure::{DynamicMonitoring, Permission};
 use ng_core::permission::token_auth::TokenOrAuth;
+use ng_db::entity::dynamic_monitoring;
+use ng_infra::server::RpcHelper;
+use ng_token::check_token_limit;
 use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
 use tracing::{debug, error};
@@ -158,10 +158,10 @@ pub async fn delete_dynamic(
 
         debug!(target: "monitoring", rows_affected = rows_affected, conditions = conditions.len(), "Dynamic monitoring delete completed");
 
-        if rows_affected > 0 {
-            if let Err(e) = crate::monitoring_uuid_cache::MonitoringUuidCache::reload().await {
-                error!(target: "monitoring_uuid_cache", error = %e, "Failed to reload MonitoringUuidCache after delete_dynamic");
-            }
+        if rows_affected > 0
+            && let Err(e) = crate::monitoring_uuid_cache::MonitoringUuidCache::reload().await
+        {
+            error!(target: "monitoring_uuid_cache", error = %e, "Failed to reload MonitoringUuidCache after delete_dynamic");
         }
 
         let json_str = format!(

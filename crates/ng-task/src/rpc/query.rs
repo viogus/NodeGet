@@ -1,11 +1,11 @@
 use crate::types::query::{TaskDataQuery, TaskQueryCondition};
+use futures_util::StreamExt;
+use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{Permission, Scope, Task};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_db::entity::task;
 use ng_db::rpc::RpcHelper;
-use futures_util::StreamExt;
-use jsonrpsee::core::RpcResult;
 use sea_orm::sea_query::{Alias, BinOper, Expr, LikeExpr};
 use sea_orm::{
     ColumnTrait, DbBackend, EntityTrait, ExprTrait, Order, QueryFilter, QueryOrder, QuerySelect,
@@ -72,11 +72,12 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
                 .collect()
         };
 
-        let provider = crate::rpc::auth_provider().ok_or_else(|| {
-            NodegetError::Other("Auth provider not initialized".to_owned())
-        })?;
+        let provider = crate::rpc::auth_provider()
+            .ok_or_else(|| NodegetError::Other("Auth provider not initialized".to_owned()))?;
 
-        let is_allowed = provider.check_token_limit(&token_or_auth, scopes, permissions).await?;
+        let is_allowed = provider
+            .check_token_limit(&token_or_auth, scopes, permissions)
+            .await?;
 
         if !is_allowed {
             return Err(NodegetError::PermissionDenied(
@@ -252,13 +253,12 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
     match process_logic.await {
         Ok(result) => Ok(result),
         Err(e) => {
-            let raw =
-                ng_core::utils::error_message::anyhow_error_to_raw(&e).unwrap_or_else(|_| {
-                    RawValue::from_string(
-                        r#"{"error_id":999,"error_message":"Internal error"}"#.to_owned(),
-                    )
-                    .unwrap_or_else(|_| RawValue::from_string("null".to_owned()).unwrap())
-                });
+            let raw = ng_core::utils::error_message::anyhow_error_to_raw(&e).unwrap_or_else(|_| {
+                RawValue::from_string(
+                    r#"{"error_id":999,"error_message":"Internal error"}"#.to_owned(),
+                )
+                .unwrap_or_else(|_| RawValue::from_string("null".to_owned()).unwrap())
+            });
             let nodeget_err = ng_core::error::anyhow_to_nodeget_error(&e);
             let json_str = raw.get();
             Err(jsonrpsee::types::ErrorObject::owned(

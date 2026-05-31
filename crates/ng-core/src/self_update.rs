@@ -2,43 +2,121 @@ use crate::utils::version::NodeGetVersion;
 
 #[cfg(feature = "for-agent")]
 const ARCH_NAME: [(&str, &str); 24] = [
-    ("x86_64-unknown-linux-musl", "nodeget-agent-linux-x86_64-musl"),
+    (
+        "x86_64-unknown-linux-musl",
+        "nodeget-agent-linux-x86_64-musl",
+    ),
     ("x86_64-unknown-linux-gnu", "nodeget-agent-linux-x86_64-gnu"),
     ("i686-unknown-linux-gnu", "nodeget-agent-linux-i686-gnu"),
     ("i686-unknown-linux-musl", "nodeget-agent-linux-i686-musl"),
-    ("aarch64-unknown-linux-gnu", "nodeget-agent-linux-aarch64-gnu"),
-    ("aarch64-unknown-linux-musl", "nodeget-agent-linux-aarch64-musl"),
-    ("arm-unknown-linux-gnueabi", "nodeget-agent-linux-arm-gnueabi"),
-    ("arm-unknown-linux-gnueabihf", "nodeget-agent-linux-arm-gnueabihf"),
-    ("arm-unknown-linux-musleabi", "nodeget-agent-linux-arm-musleabi"),
-    ("arm-unknown-linux-musleabihf", "nodeget-agent-linux-arm-musleabihf"),
-    ("armv7-unknown-linux-gnueabi", "nodeget-agent-linux-armv7-gnueabi"),
-    ("armv7-unknown-linux-gnueabihf", "nodeget-agent-linux-armv7-gnueabihf"),
-    ("armv7-unknown-linux-musleabi", "nodeget-agent-linux-armv7-musleabi"),
-    ("armv7-unknown-linux-musleabihf", "nodeget-agent-linux-armv7-musleabihf"),
-    ("thumbv7neon-unknown-linux-gnueabihf", "nodeget-agent-linux-thumbv7neon-gnueabihf"),
-    ("riscv64gc-unknown-linux-gnu", "nodeget-agent-linux-riscv64gc-gnu"),
-    ("powerpc64-unknown-linux-gnu", "nodeget-agent-linux-powerpc64-gnu"),
-    ("powerpc64le-unknown-linux-gnu", "nodeget-agent-linux-powerpc64le-gnu"),
+    (
+        "aarch64-unknown-linux-gnu",
+        "nodeget-agent-linux-aarch64-gnu",
+    ),
+    (
+        "aarch64-unknown-linux-musl",
+        "nodeget-agent-linux-aarch64-musl",
+    ),
+    (
+        "arm-unknown-linux-gnueabi",
+        "nodeget-agent-linux-arm-gnueabi",
+    ),
+    (
+        "arm-unknown-linux-gnueabihf",
+        "nodeget-agent-linux-arm-gnueabihf",
+    ),
+    (
+        "arm-unknown-linux-musleabi",
+        "nodeget-agent-linux-arm-musleabi",
+    ),
+    (
+        "arm-unknown-linux-musleabihf",
+        "nodeget-agent-linux-arm-musleabihf",
+    ),
+    (
+        "armv7-unknown-linux-gnueabi",
+        "nodeget-agent-linux-armv7-gnueabi",
+    ),
+    (
+        "armv7-unknown-linux-gnueabihf",
+        "nodeget-agent-linux-armv7-gnueabihf",
+    ),
+    (
+        "armv7-unknown-linux-musleabi",
+        "nodeget-agent-linux-armv7-musleabi",
+    ),
+    (
+        "armv7-unknown-linux-musleabihf",
+        "nodeget-agent-linux-armv7-musleabihf",
+    ),
+    (
+        "thumbv7neon-unknown-linux-gnueabihf",
+        "nodeget-agent-linux-thumbv7neon-gnueabihf",
+    ),
+    (
+        "riscv64gc-unknown-linux-gnu",
+        "nodeget-agent-linux-riscv64gc-gnu",
+    ),
+    (
+        "powerpc64-unknown-linux-gnu",
+        "nodeget-agent-linux-powerpc64-gnu",
+    ),
+    (
+        "powerpc64le-unknown-linux-gnu",
+        "nodeget-agent-linux-powerpc64le-gnu",
+    ),
     ("s390x-unknown-linux-gnu", "nodeget-agent-linux-s390x-gnu"),
-    ("sparc64-unknown-linux-gnu", "nodeget-agent-linux-sparc64-gnu"),
+    (
+        "sparc64-unknown-linux-gnu",
+        "nodeget-agent-linux-sparc64-gnu",
+    ),
     ("x86_64-pc-windows-msvc", "nodeget-agent-windows-x86_64.exe"),
     ("i686-pc-windows-msvc", "nodeget-agent-windows-i686.exe"),
-    ("aarch64-pc-windows-msvc", "nodeget-agent-windows-aarch64.exe"),
+    (
+        "aarch64-pc-windows-msvc",
+        "nodeget-agent-windows-aarch64.exe",
+    ),
     ("aarch64-apple-darwin", "nodeget-agent-macos-aarch64"),
 ];
 
 #[cfg(feature = "for-server")]
 const SERVER_ARCH_NAME: [(&str, &str); 10] = [
-    ("x86_64-unknown-linux-musl", "nodeget-server-linux-x86_64-musl"),
-    ("x86_64-unknown-linux-gnu", "nodeget-server-linux-x86_64-gnu"),
-    ("aarch64-unknown-linux-gnu", "nodeget-server-linux-aarch64-gnu"),
-    ("aarch64-unknown-linux-musl", "nodeget-server-linux-aarch64-musl"),
-    ("armv7-unknown-linux-gnueabi", "nodeget-server-linux-armv7-gnueabi"),
-    ("armv7-unknown-linux-gnueabihf", "nodeget-server-linux-armv7-gnueabihf"),
-    ("armv7-unknown-linux-musleabi", "nodeget-server-linux-armv7-musleabi"),
-    ("armv7-unknown-linux-musleabihf", "nodeget-server-linux-armv7-musleabihf"),
-    ("x86_64-pc-windows-msvc", "nodeget-server-windows-x86_64.exe"),
+    (
+        "x86_64-unknown-linux-musl",
+        "nodeget-server-linux-x86_64-musl",
+    ),
+    (
+        "x86_64-unknown-linux-gnu",
+        "nodeget-server-linux-x86_64-gnu",
+    ),
+    (
+        "aarch64-unknown-linux-gnu",
+        "nodeget-server-linux-aarch64-gnu",
+    ),
+    (
+        "aarch64-unknown-linux-musl",
+        "nodeget-server-linux-aarch64-musl",
+    ),
+    (
+        "armv7-unknown-linux-gnueabi",
+        "nodeget-server-linux-armv7-gnueabi",
+    ),
+    (
+        "armv7-unknown-linux-gnueabihf",
+        "nodeget-server-linux-armv7-gnueabihf",
+    ),
+    (
+        "armv7-unknown-linux-musleabi",
+        "nodeget-server-linux-armv7-musleabi",
+    ),
+    (
+        "armv7-unknown-linux-musleabihf",
+        "nodeget-server-linux-armv7-musleabihf",
+    ),
+    (
+        "x86_64-pc-windows-msvc",
+        "nodeget-server-windows-x86_64.exe",
+    ),
     ("aarch64-apple-darwin", "nodeget-server-macos-aarch64"),
 ];
 

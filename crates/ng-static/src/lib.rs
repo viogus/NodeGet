@@ -37,9 +37,9 @@ pub mod cache;
 #[cfg(feature = "server")]
 pub mod ops;
 #[cfg(feature = "server")]
-pub mod rpc;
-#[cfg(feature = "server")]
 pub mod router;
+#[cfg(feature = "server")]
+pub mod rpc;
 
 // ── Server-only re-exports ───────────────────────────────────────────
 
@@ -47,7 +47,7 @@ pub mod router;
 pub use cache::StaticCache;
 #[cfg(feature = "server")]
 pub use ops::{
-    create_static, delete_static, delete_file, get_static_path, list_all_names, list_file,
-    read_static, read_file, rename_file, resolve_safe_file_path, update_static, upload_file,
+    create_static, delete_file, delete_static, get_static_path, list_all_names, list_file,
+    read_file, read_static, rename_file, resolve_safe_file_path, update_static, upload_file,
     validate_name, validate_sub_path,
 };

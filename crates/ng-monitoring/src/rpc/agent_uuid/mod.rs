@@ -9,10 +9,10 @@ mod delete;
 mod list_all;
 mod list_all_with_agent_mode;
 
-use ng_infra::server::token_identity;
-use ng_infra::rpc_exec;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use ng_infra::rpc_exec;
+use ng_infra::server::token_identity;
 use serde_json::value::RawValue;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -51,9 +51,7 @@ impl AgentUuidRpcServer for AgentUuidRpcImpl {
         let (tk, un) = token_identity(&token);
         let span = tracing::info_span!(target: "server", "agent-uuid::list_all_with_agent_mode", token_key = tk, username = un);
         async {
-            rpc_exec!(
-                list_all_with_agent_mode::list_all_agent_uuids_with_agent_mode(token).await
-            )
+            rpc_exec!(list_all_with_agent_mode::list_all_agent_uuids_with_agent_mode(token).await)
         }
         .instrument(span)
         .await

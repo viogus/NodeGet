@@ -129,11 +129,10 @@ async fn serve_static_file(
         path.trim_start_matches('/')
     };
 
-    let resolved =
-        match resolve_safe_file_path(&static_path, sub_path, file_path) {
-            Ok(p) => p,
-            Err(e) => return build_static_error(StatusCode::BAD_REQUEST, format!("{e}"), cors),
-        };
+    let resolved = match resolve_safe_file_path(&static_path, sub_path, file_path) {
+        Ok(p) => p,
+        Err(e) => return build_static_error(StatusCode::BAD_REQUEST, format!("{e}"), cors),
+    };
 
     let data = match tokio::fs::read(&resolved).await {
         Ok(d) => d,
@@ -241,9 +240,7 @@ async fn static_webdav_handler(req: axum::extract::Request) -> axum::response::R
 
     // 3. Validate token
     let full_token = format!("{username}:{password}");
-    let token_or_auth = match TokenOrAuth::from_full_token(
-        &full_token,
-    ) {
+    let token_or_auth = match TokenOrAuth::from_full_token(&full_token) {
         Ok(t) => t,
         Err(_) => {
             let full_auth = format!("{username}|{password}");
@@ -260,18 +257,10 @@ async fn static_webdav_handler(req: axum::extract::Request) -> axum::response::R
 
     // 4. Check all StaticBucketFile permissions
     let permissions = vec![
-        Permission::StaticBucketFile(
-            StaticBucketFilePermission::Read,
-        ),
-        Permission::StaticBucketFile(
-            StaticBucketFilePermission::Write,
-        ),
-        Permission::StaticBucketFile(
-            StaticBucketFilePermission::Delete,
-        ),
-        Permission::StaticBucketFile(
-            StaticBucketFilePermission::List,
-        ),
+        Permission::StaticBucketFile(StaticBucketFilePermission::Read),
+        Permission::StaticBucketFile(StaticBucketFilePermission::Write),
+        Permission::StaticBucketFile(StaticBucketFilePermission::Delete),
+        Permission::StaticBucketFile(StaticBucketFilePermission::List),
     ];
     let is_allowed = match get_token_checker()
         .check_token_limit(

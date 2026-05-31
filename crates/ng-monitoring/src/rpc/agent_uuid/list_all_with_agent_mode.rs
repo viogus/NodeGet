@@ -1,9 +1,9 @@
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use ng_token::get::check_token_limit;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{MonitoringUuid, Permission, Scope};
 use ng_core::permission::token_auth::TokenOrAuth;
+use ng_token::get::check_token_limit;
 use serde_json::value::RawValue;
 use tracing::debug;
 
@@ -34,8 +34,7 @@ pub async fn list_all_agent_uuids_with_agent_mode(token: String) -> RpcResult<Bo
         }
         debug!(target: "rpc", "list_all_agent_uuids_with_agent_mode: permission check passed");
 
-        let uuids = MonitoringUuidCache::global()
-            .list_all_with_agent_mode();
+        let uuids = MonitoringUuidCache::global().list_all_with_agent_mode();
 
         let items: Vec<AgentUuidWithMode> = uuids
             .into_iter()

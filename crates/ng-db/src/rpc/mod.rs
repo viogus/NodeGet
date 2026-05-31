@@ -3,7 +3,7 @@ use ng_core::error::NodegetError;
 use sea_orm::{ActiveValue, DatabaseConnection, Set};
 use serde::Serialize;
 use serde_json::value::RawValue;
-use serde_json::{to_value, Value};
+use serde_json::{Value, to_value};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
@@ -53,6 +53,7 @@ pub fn auth_provider() -> Option<&'static Arc<dyn AuthProvider>> {
 /// - Fallback: returns `("???", "")`
 ///
 /// Zero-allocation: returns borrowed slices into the original string.
+#[must_use]
 pub fn token_identity(token: &str) -> (&str, &str) {
     token.find(':').map_or_else(
         || {
@@ -104,9 +105,6 @@ macro_rules! rpc_exec {
     }};
 }
 
-
-
-
 pub trait RpcHelper {
     fn try_set_json<T: Serialize>(val: T) -> anyhow::Result<ActiveValue<Value>> {
         to_value(val).map(Set).map_err(|e| {
@@ -115,12 +113,12 @@ pub trait RpcHelper {
     }
 
     fn get_db() -> anyhow::Result<&'static DatabaseConnection> {
-        get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()).into())
+        get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()).into())
     }
 }
 
 /// Helper to convert an anyhow error into a JSON-RPC error response.
+#[must_use]
 pub fn to_rpc_error(e: &anyhow::Error) -> jsonrpsee::types::ErrorObject<'static> {
     let nodeget_err = ng_core::error::anyhow_to_nodeget_error(e);
     jsonrpsee::types::ErrorObject::owned(

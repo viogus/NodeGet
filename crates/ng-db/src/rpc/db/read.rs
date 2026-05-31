@@ -1,6 +1,6 @@
 use crate::entity::db_registry;
 use crate::rpc::db::auth::check_db_permission;
-use crate::rpc::{token_identity, to_rpc_error};
+use crate::rpc::{to_rpc_error, token_identity};
 use crate::{db_registry::DbRegistryManager, get_db};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;

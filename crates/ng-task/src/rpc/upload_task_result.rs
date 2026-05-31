@@ -1,11 +1,11 @@
 use crate::rpc::TaskManager;
 use crate::types::{TaskEventResponse, TaskEventType};
+use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{Permission, Scope, Task};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_db::entity::task;
 use ng_db::rpc::RpcHelper;
-use jsonrpsee::core::RpcResult;
 use sea_orm::ColumnTrait;
 use sea_orm::QueryFilter;
 use sea_orm::{EntityTrait, Set};
@@ -23,9 +23,8 @@ pub async fn upload_task_result(
         let token_or_auth = TokenOrAuth::from_full_token(&token)
             .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
-        let provider = crate::rpc::auth_provider().ok_or_else(|| {
-            NodegetError::Other("Auth provider not initialized".to_owned())
-        })?;
+        let provider = crate::rpc::auth_provider()
+            .ok_or_else(|| NodegetError::Other("Auth provider not initialized".to_owned()))?;
 
         // 先进行权限预检，防止无权限调用者通过数据库查询差异探测任务存在性（时序攻击）
         // 预检逻辑：检查 token 是否对目标 Agent 持有任意 Task::Write 权限（不限具体 pattern）

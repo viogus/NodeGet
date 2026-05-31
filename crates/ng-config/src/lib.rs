@@ -21,8 +21,8 @@ pub mod server_rpc;
 // RELOAD_NOTIFY: 配置热重载通知（OnceLock + Notify）
 // SERVER_CONFIG_PATH: 配置文件路径
 
-use std::sync::{OnceLock, RwLock};
 use config::server::ServerConfig;
+use std::sync::{OnceLock, RwLock};
 
 static SERVER_CONFIG: OnceLock<RwLock<ServerConfig>> = OnceLock::new();
 static SERVER_CONFIG_PATH: OnceLock<String> = OnceLock::new();

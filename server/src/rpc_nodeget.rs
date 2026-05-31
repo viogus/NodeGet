@@ -18,8 +18,8 @@ use ng_config::get_server_config;
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::version::NodeGetVersion;
 use ng_db::rpc::RpcHelper;
-use ng_db::rpc_exec;
 use ng_db::rpc::token_identity;
+use ng_db::rpc_exec;
 use ng_token::check_super_token;
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -160,8 +160,9 @@ impl RpcServer for NodegetServerRpcImpl {
         let span = tracing::info_span!(target: "server", "nodeget-server::log", token_key = tk, username = un);
         async {
             let process_logic = async {
-                let token_or_auth = TokenOrAuth::from_full_token(&token)
-                    .map_err(|e| ng_core::error::NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
+                let token_or_auth = TokenOrAuth::from_full_token(&token).map_err(|e| {
+                    ng_core::error::NodegetError::ParseError(format!("Failed to parse token: {e}"))
+                })?;
 
                 let is_super = check_super_token(&token_or_auth)
                     .await
@@ -181,8 +182,9 @@ impl RpcServer for NodegetServerRpcImpl {
                 let json_str = serde_json::to_string(&logs)
                     .map_err(|e| ng_core::error::NodegetError::SerializationError(e.to_string()))?;
 
-                RawValue::from_string(json_str)
-                    .map_err(|e| ng_core::error::NodegetError::SerializationError(e.to_string()).into())
+                RawValue::from_string(json_str).map_err(|e| {
+                    ng_core::error::NodegetError::SerializationError(e.to_string()).into()
+                })
             };
             match process_logic.await {
                 Ok(result) => Ok(result),
@@ -441,7 +443,8 @@ impl RpcServer for NodegetServerRpcImpl {
 /// Uses `OnceLock` to cache the module — the first call builds it, subsequent calls
 /// return a clone of the cached instance.
 pub fn get_modules() -> jsonrpsee::RpcModule<()> {
-    static GLOBAL_RPC_MODULE: std::sync::OnceLock<jsonrpsee::RpcModule<()>> = std::sync::OnceLock::new();
+    static GLOBAL_RPC_MODULE: std::sync::OnceLock<jsonrpsee::RpcModule<()>> =
+        std::sync::OnceLock::new();
     GLOBAL_RPC_MODULE.get_or_init(build_modules).clone()
 }
 

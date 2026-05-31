@@ -1,8 +1,8 @@
 use crate::CronType;
 use cron::Schedule;
 use ng_db::entity::crontab;
-use ng_infra::server::{DbBackedCache, load_from_db};
 use ng_infra::make_global_cache;
+use ng_infra::server::{DbBackedCache, load_from_db};
 use std::collections::HashMap;
 use std::future::Future;
 use std::str::FromStr;
@@ -23,14 +23,18 @@ pub struct CrontabCache {
     inner: RwLock<CrontabCacheInner>,
 }
 
-fn recover_read(lock: &RwLock<CrontabCacheInner>) -> std::sync::RwLockReadGuard<'_, CrontabCacheInner> {
+fn recover_read(
+    lock: &RwLock<CrontabCacheInner>,
+) -> std::sync::RwLockReadGuard<'_, CrontabCacheInner> {
     lock.read().unwrap_or_else(|e| {
         tracing::warn!(target: "crontab_cache", "lock poisoned during read, recovering");
         e.into_inner()
     })
 }
 
-fn recover_write(lock: &RwLock<CrontabCacheInner>) -> std::sync::RwLockWriteGuard<'_, CrontabCacheInner> {
+fn recover_write(
+    lock: &RwLock<CrontabCacheInner>,
+) -> std::sync::RwLockWriteGuard<'_, CrontabCacheInner> {
     lock.write().unwrap_or_else(|e| {
         tracing::warn!(target: "crontab_cache", "lock poisoned during write, recovering");
         e.into_inner()

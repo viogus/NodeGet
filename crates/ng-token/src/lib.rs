@@ -33,11 +33,13 @@ pub mod super_token;
 // ── Server-only re-exports ───────────────────────────────────────────
 
 #[cfg(feature = "server")]
-pub use get::{check_token_limit, get_token, get_token_by_key_or_username, parse_token_limit_with_compat};
+pub use cache::TokenCache;
+#[cfg(feature = "server")]
+pub use get::{
+    check_token_limit, get_token, get_token_by_key_or_username, parse_token_limit_with_compat,
+};
 #[cfg(feature = "server")]
 pub use super_token::check_super_token;
-#[cfg(feature = "server")]
-pub use cache::TokenCache;
 
 #[cfg(feature = "server")]
 mod auth_checker_impl;

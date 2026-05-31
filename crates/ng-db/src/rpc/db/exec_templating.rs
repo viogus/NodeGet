@@ -3,7 +3,9 @@
 //! Shares core logic with `exec_sql`, supports parameterized queries
 //! for preventing SQL injection of user-provided values.
 
-use crate::db_registry::{DbExecResult, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json};
+use crate::db_registry::{
+    DbExecResult, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json,
+};
 use crate::rpc::db::auth::check_db_permission;
 use crate::rpc::token_identity;
 use ng_core::error::NodegetError;

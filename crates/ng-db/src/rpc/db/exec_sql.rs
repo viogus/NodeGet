@@ -1,6 +1,8 @@
-use crate::db_registry::{DbExecResult, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json};
+use crate::db_registry::{
+    DbExecResult, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json,
+};
 use crate::rpc::db::auth::check_db_permission;
-use crate::rpc::{token_identity, to_rpc_error};
+use crate::rpc::{to_rpc_error, token_identity};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Db as DbPermission;

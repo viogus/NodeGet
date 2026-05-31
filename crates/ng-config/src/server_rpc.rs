@@ -9,7 +9,11 @@ use tracing::{debug, trace};
 /// Super token 验证函数的类型签名
 ///
 /// 接收 `TokenOrAuth`，返回是否为 super token
-type CheckSuperTokenFn = fn(&TokenOrAuth) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
+type CheckSuperTokenFn = fn(
+    &TokenOrAuth,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>,
+>;
 
 static CHECK_SUPER_TOKEN_FN: OnceLock<CheckSuperTokenFn> = OnceLock::new();
 

@@ -10,8 +10,8 @@ use tracing::debug;
 pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab_result", condition_count = query.condition.len(), "processing crontab_result query request");
-        let db = get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db =
+            get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
         // 构建查询
         let mut select = crontab_result::Entity::find();
@@ -32,7 +32,8 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
                 CrontabResultQueryCondition::CronName(cron_name) => {
                     // 检查读权限
                     if !permission_checked {
-                        super::auth::check_crontab_result_read_permission(&token, cron_name).await?;
+                        super::auth::check_crontab_result_read_permission(&token, cron_name)
+                            .await?;
                         permission_checked = true;
                     }
                     has_cron_name_filter = true;
@@ -87,7 +88,10 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
 
         // 未显式指定 Limit/Last 时施加默认上限，防止无界查询
         let has_explicit_limit = query.condition.iter().any(|c| {
-            matches!(c, CrontabResultQueryCondition::Limit(_) | CrontabResultQueryCondition::Last)
+            matches!(
+                c,
+                CrontabResultQueryCondition::Limit(_) | CrontabResultQueryCondition::Last
+            )
         });
         if !has_explicit_limit {
             select = select.limit(1000);

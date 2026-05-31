@@ -43,9 +43,8 @@ pub async fn database_storage(token: String) -> jsonrpsee::core::RpcResult<Box<R
         let token_or_auth = TokenOrAuth::from_full_token(&token)
             .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
-        let provider = crate::rpc::auth_provider().ok_or_else(|| {
-            NodegetError::Other("Auth provider not initialized".to_owned())
-        })?;
+        let provider = crate::rpc::auth_provider()
+            .ok_or_else(|| NodegetError::Other("Auth provider not initialized".to_owned()))?;
 
         let is_super = provider
             .check_super_token(&token_or_auth)
@@ -60,8 +59,9 @@ pub async fn database_storage(token: String) -> jsonrpsee::core::RpcResult<Box<R
         }
         debug!(target: "server", "Super token verified for database_storage");
 
-        let db = crate::get_db()
-            .ok_or_else(|| ng_core::error::NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db = crate::get_db().ok_or_else(|| {
+            ng_core::error::NodegetError::DatabaseError("DB not initialized".to_owned())
+        })?;
         let tables = match db.get_database_backend() {
             DatabaseBackend::Postgres => query_postgres(db).await?,
             DatabaseBackend::Sqlite => query_sqlite(db).await?,

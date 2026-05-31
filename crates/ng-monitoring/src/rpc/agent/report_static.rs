@@ -1,17 +1,17 @@
-use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use crate::monitoring_last_cache::MonitoringLastCache;
-use crate::monitoring_buffer;
-use crate::static_hash_cache::StaticHashCache;
 use crate::data_structure::StaticMonitoringData;
-use ng_db::entity::static_monitoring;
-use ng_infra::server::RpcHelper;
+use crate::monitoring_buffer;
+use crate::monitoring_last_cache::MonitoringLastCache;
+use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::rpc::agent::AgentRpcImpl;
-use ng_token::get::check_token_limit;
+use crate::static_hash_cache::StaticHashCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{Permission, Scope, StaticMonitoring};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::get_local_timestamp_ms_i64;
+use ng_db::entity::static_monitoring;
+use ng_infra::server::RpcHelper;
+use ng_token::get::check_token_limit;
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::value::RawValue;
 use tracing::{debug, error};
@@ -59,21 +59,24 @@ pub async fn report_static(
             .map_err(|e| NodegetError::SerializationError(format!("gpu_data: {e}")))?;
 
         let mut cache_obj = serde_json::Map::with_capacity(5);
-        cache_obj.insert("uuid".to_owned(), serde_json::Value::String(agent_uuid.to_string()));
-        cache_obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
+        cache_obj.insert(
+            "uuid".to_owned(),
+            serde_json::Value::String(agent_uuid.to_string()),
+        );
+        cache_obj.insert(
+            "timestamp".to_owned(),
+            serde_json::Value::Number(timestamp.into()),
+        );
         cache_obj.insert("cpu".to_owned(), cpu_val.clone());
         cache_obj.insert("system".to_owned(), system_val.clone());
         cache_obj.insert("gpu".to_owned(), gpu_val.clone());
         let cache_value = serde_json::Value::Object(cache_obj);
 
-        MonitoringLastCache::global()
-            .update_static_prebuilt(agent_uuid, cache_value);
+        MonitoringLastCache::global().update_static_prebuilt(agent_uuid, cache_value);
 
         // Fast path: check in-memory hash cache first to avoid DB query
         let hash_cache = StaticHashCache::global();
-        if hash_cache
-            .is_duplicate(uuid_id, &static_monitoring_data.data_hash)
-        {
+        if hash_cache.is_duplicate(uuid_id, &static_monitoring_data.data_hash) {
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash cached as duplicate, skipping");
             return RawValue::from_string(
                 r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned(),
@@ -94,8 +97,7 @@ pub async fn report_static(
             })?;
 
         if exists.is_some() {
-            hash_cache
-                .update(uuid_id, static_monitoring_data.data_hash.clone());
+            hash_cache.update(uuid_id, static_monitoring_data.data_hash.clone());
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash already exists, skipping");
             return RawValue::from_string(
                 r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned(),

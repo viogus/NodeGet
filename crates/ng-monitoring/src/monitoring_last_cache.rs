@@ -1,9 +1,7 @@
 use crate::data_structure::{
     DynamicMonitoringData, DynamicMonitoringSummaryData, StaticMonitoringData,
 };
-use crate::query::{
-    DynamicDataQueryField, DynamicSummaryQueryField, StaticDataQueryField,
-};
+use crate::query::{DynamicDataQueryField, DynamicSummaryQueryField, StaticDataQueryField};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -139,24 +137,39 @@ impl MonitoringLastCache {
     }
 }
 
-fn recover_read<K, V>(lock: &RwLock<HashMap<K, V>>) -> std::sync::RwLockReadGuard<'_, HashMap<K, V>> {
+fn recover_read<K, V>(
+    lock: &RwLock<HashMap<K, V>>,
+) -> std::sync::RwLockReadGuard<'_, HashMap<K, V>> {
     lock.read().unwrap_or_else(|e| {
         tracing::warn!(target: "monitoring", "lock poisoned during read, recovering");
         e.into_inner()
     })
 }
 
-fn recover_write<K, V>(lock: &RwLock<HashMap<K, V>>) -> std::sync::RwLockWriteGuard<'_, HashMap<K, V>> {
+fn recover_write<K, V>(
+    lock: &RwLock<HashMap<K, V>>,
+) -> std::sync::RwLockWriteGuard<'_, HashMap<K, V>> {
     lock.write().unwrap_or_else(|e| {
         tracing::warn!(target: "monitoring", "lock poisoned during write, recovering");
         e.into_inner()
     })
 }
 
-pub fn build_static_value(uuid: Uuid, timestamp: i64, data: &StaticMonitoringData) -> serde_json::Value {
+#[must_use]
+pub fn build_static_value(
+    uuid: Uuid,
+    timestamp: i64,
+    data: &StaticMonitoringData,
+) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(5);
-    obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
-    obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
+    obj.insert(
+        "uuid".to_owned(),
+        serde_json::Value::String(uuid.to_string()),
+    );
+    obj.insert(
+        "timestamp".to_owned(),
+        serde_json::Value::Number(timestamp.into()),
+    );
     if let Ok(v) = serde_json::to_value(&data.cpu) {
         obj.insert("cpu".to_owned(), v);
     }
@@ -169,10 +182,21 @@ pub fn build_static_value(uuid: Uuid, timestamp: i64, data: &StaticMonitoringDat
     serde_json::Value::Object(obj)
 }
 
-pub fn build_dynamic_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringData) -> serde_json::Value {
+#[must_use]
+pub fn build_dynamic_value(
+    uuid: Uuid,
+    timestamp: i64,
+    data: &DynamicMonitoringData,
+) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(9);
-    obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
-    obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
+    obj.insert(
+        "uuid".to_owned(),
+        serde_json::Value::String(uuid.to_string()),
+    );
+    obj.insert(
+        "timestamp".to_owned(),
+        serde_json::Value::Number(timestamp.into()),
+    );
     if let Ok(v) = serde_json::to_value(&data.cpu) {
         obj.insert("cpu".to_owned(), v);
     }
@@ -197,10 +221,20 @@ pub fn build_dynamic_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringD
     serde_json::Value::Object(obj)
 }
 
-pub fn build_dynamic_summary_value(uuid: Uuid, timestamp: i64, data: &DynamicMonitoringSummaryData) -> serde_json::Value {
+pub fn build_dynamic_summary_value(
+    uuid: Uuid,
+    timestamp: i64,
+    data: &DynamicMonitoringSummaryData,
+) -> serde_json::Value {
     let mut obj = serde_json::Map::with_capacity(24);
-    obj.insert("uuid".to_owned(), serde_json::Value::String(uuid.to_string()));
-    obj.insert("timestamp".to_owned(), serde_json::Value::Number(timestamp.into()));
+    obj.insert(
+        "uuid".to_owned(),
+        serde_json::Value::String(uuid.to_string()),
+    );
+    obj.insert(
+        "timestamp".to_owned(),
+        serde_json::Value::Number(timestamp.into()),
+    );
 
     macro_rules! opt_field {
         ($key:literal, $val:expr) => {

@@ -27,11 +27,11 @@ pub mod query;
 #[cfg(feature = "server")]
 pub mod cache;
 #[cfg(feature = "server")]
+pub mod rpc;
+#[cfg(feature = "server")]
 pub mod server_cron;
 #[cfg(feature = "server")]
 pub mod task;
-#[cfg(feature = "server")]
-pub mod rpc;
 
 // ── Server-only re-exports ──────────────────────────────────────────
 
@@ -39,7 +39,7 @@ pub mod rpc;
 pub use cache::CrontabCache;
 
 #[cfg(feature = "server")]
-pub use server_cron::{init_crontab_worker, delete_crontab_by_name, set_crontab_enable_by_name};
+pub use server_cron::{delete_crontab_by_name, init_crontab_worker, set_crontab_enable_by_name};
 
 #[cfg(feature = "server")]
 /// Build and return a merged RPC module with both `crontab` and `crontab_result` namespaces.

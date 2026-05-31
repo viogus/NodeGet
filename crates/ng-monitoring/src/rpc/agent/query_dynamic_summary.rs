@@ -1,17 +1,15 @@
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
-use crate::query::{
-    DynamicSummaryQuery, DynamicSummaryQueryField, QueryCondition,
-};
-use ng_db::entity::dynamic_monitoring_summary;
-use ng_infra::server::RpcHelper;
+use crate::query::{DynamicSummaryQuery, DynamicSummaryQueryField, QueryCondition};
 use crate::rpc::agent::AgentRpcImpl;
-use ng_token::get::check_token_limit;
 use futures_util::StreamExt;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{DynamicMonitoringSummary, Permission, Scope};
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_core::utils::error_message::anyhow_error_to_raw;
+use ng_db::entity::dynamic_monitoring_summary;
+use ng_infra::server::RpcHelper;
+use ng_token::get::check_token_limit;
 use sea_orm::{
     ColumnTrait, EntityTrait, ExprTrait, Order, QueryFilter, QueryOrder, QuerySelect, SelectModel,
     Selector,
@@ -209,6 +207,7 @@ pub async fn query_dynamic_summary(
 ///
 /// Exposed as `pub` because `query_dynamic_summary_multi_last` reuses the
 /// same mapping.
+#[must_use]
 pub const fn field_to_column(
     field: &DynamicSummaryQueryField,
 ) -> dynamic_monitoring_summary::Column {

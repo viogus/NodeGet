@@ -53,8 +53,8 @@ pub async fn find_target_token(identifier: &str) -> Result<token::Model, Nodeget
 
 /// 校验调用者是否为 Super Token
 pub async fn verify_supertoken(token: &str) -> Result<(), NodegetError> {
-    let token_or_auth = TokenOrAuth::from_full_token(token)
-        .map_err(|e| NodegetError::ParseError(e.to_string()))?;
+    let token_or_auth =
+        TokenOrAuth::from_full_token(token).map_err(|e| NodegetError::ParseError(e.to_string()))?;
 
     let is_super = check_super_token(&token_or_auth)
         .await

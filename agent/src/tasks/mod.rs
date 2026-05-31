@@ -5,8 +5,8 @@ use crate::{AGENT_ARGS, RELOAD_NOTIFY};
 use log::{error, info, warn};
 use ng_config::config::agent::AgentConfig;
 use ng_core::error::NodegetError;
-use ng_task::{TaskEventResponse, TaskEventResult, TaskEventType};
 use ng_core::utils::get_local_timestamp_ms;
+use ng_task::{TaskEventResponse, TaskEventResult, TaskEventType};
 use std::time::Duration;
 use tokio::task::JoinSet;
 use tokio::{fs, time};
@@ -40,11 +40,11 @@ pub mod self_update;
 // 检查服务器是否允许执行特定任务
 fn is_task_allowed(server: &ng_config::config::agent::Server, task_type: &TaskEventType) -> bool {
     // 若指定了 allow_task_type（非空），则以此列表为准，忽略所有单独的 allow_* 开关
-    if let Some(ref allowed) = server.allow_task_type {
-        if !allowed.is_empty() {
-            let task_name = task_type.task_name();
-            return allowed.iter().any(|t| t == task_name);
-        }
+    if let Some(ref allowed) = server.allow_task_type
+        && !allowed.is_empty()
+    {
+        let task_name = task_type.task_name();
+        return allowed.iter().any(|t| t == task_name);
     }
 
     // 未指定 allow_task_type 或为空时，回退到原有的布尔开关
@@ -221,10 +221,10 @@ pub async fn handle_task() {
 
             loop {
                 while let Some(join_result) = per_task.try_join_next() {
-                    if let Err(e) = join_result {
-                        if !e.is_cancelled() {
-                            warn!("[{}] Per-message task failed: {e}", server.name);
-                        }
+                    if let Err(e) = join_result
+                        && !e.is_cancelled()
+                    {
+                        warn!("[{}] Per-message task failed: {e}", server.name);
                     }
                 }
 

@@ -16,11 +16,11 @@
 pub mod types;
 
 // Re-export types at crate root for convenience
+pub use types::query;
 pub use types::{
     DnsRecordResult, DnsRecordType, DnsTask, ExecuteTask, HttpRequestTask, HttpRequestTaskResult,
     TaskEvent, TaskEventResponse, TaskEventResult, TaskEventType, WebShellTask,
 };
-pub use types::query;
 
 // ── Server-only modules ─────────────────────────────────────────────
 
@@ -29,8 +29,6 @@ pub mod rpc;
 
 #[cfg(feature = "server")]
 pub use rpc::{
-    TaskManager, TaskAuthProvider, MonitoringUuidProvider,
-    set_auth_provider, auth_provider,
-    set_monitoring_uuid_provider, monitoring_uuid_provider,
-    rpc_module,
+    MonitoringUuidProvider, TaskAuthProvider, TaskManager, auth_provider, monitoring_uuid_provider,
+    rpc_module, set_auth_provider, set_monitoring_uuid_provider,
 };

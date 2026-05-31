@@ -134,8 +134,9 @@ pub async fn check_kv_read_permission(
 
     // 先检查是否有全局读权限（key 为 "*" 表示所有 key）
     let global_read_perm = Permission::Kv(Kv::Read("*".to_owned()));
-    let has_global_read =
-        checker.check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_read_perm]).await?;
+    let has_global_read = checker
+        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_read_perm])
+        .await?;
 
     if has_global_read {
         return Ok(());
@@ -144,7 +145,11 @@ pub async fn check_kv_read_permission(
     // 检查是否有特定 key 的读权限
     let specific_read_perm = Permission::Kv(Kv::Read(key.to_owned()));
     let has_specific_read = checker
-        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![specific_read_perm])
+        .check_token_limit(
+            &token_or_auth,
+            vec![scope.clone()],
+            vec![specific_read_perm],
+        )
         .await?;
 
     if has_specific_read {
@@ -182,8 +187,9 @@ pub async fn check_kv_read_permission_with_pattern(
     let scope = Scope::KvNamespace(namespace.to_owned());
 
     let global_read_perm = Permission::Kv(Kv::Read("*".to_owned()));
-    let has_global_read =
-        checker.check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_read_perm]).await?;
+    let has_global_read = checker
+        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_read_perm])
+        .await?;
 
     if has_global_read {
         return Ok(());
@@ -191,7 +197,11 @@ pub async fn check_kv_read_permission_with_pattern(
 
     let specific_read_perm = Permission::Kv(Kv::Read(key_pattern.to_owned()));
     let has_specific_read = checker
-        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![specific_read_perm])
+        .check_token_limit(
+            &token_or_auth,
+            vec![scope.clone()],
+            vec![specific_read_perm],
+        )
         .await?;
 
     if has_specific_read {
@@ -232,8 +242,9 @@ pub async fn check_kv_write_permission(
 
     // 先检查是否有全局写权限（key 为 "*" 表示所有 key）
     let global_write_perm = Permission::Kv(Kv::Write("*".to_owned()));
-    let has_global_write =
-        checker.check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_write_perm]).await?;
+    let has_global_write = checker
+        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_write_perm])
+        .await?;
 
     if has_global_write {
         return Ok(());
@@ -242,7 +253,11 @@ pub async fn check_kv_write_permission(
     // 检查是否有特定 key 的写权限
     let specific_write_perm = Permission::Kv(Kv::Write(key.to_owned()));
     let has_specific_write = checker
-        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![specific_write_perm])
+        .check_token_limit(
+            &token_or_auth,
+            vec![scope.clone()],
+            vec![specific_write_perm],
+        )
         .await?;
 
     if has_specific_write {
@@ -284,7 +299,11 @@ pub async fn check_kv_delete_permission(
     // 先检查是否有全局删除权限（key 为 "*" 表示所有 key）
     let global_delete_perm = Permission::Kv(Kv::Delete("*".to_owned()));
     let has_global_delete = checker
-        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![global_delete_perm])
+        .check_token_limit(
+            &token_or_auth,
+            vec![scope.clone()],
+            vec![global_delete_perm],
+        )
         .await?;
 
     if has_global_delete {
@@ -294,7 +313,11 @@ pub async fn check_kv_delete_permission(
     // 检查是否有特定 key 的删除权限
     let specific_delete_perm = Permission::Kv(Kv::Delete(key.to_owned()));
     let has_specific_delete = checker
-        .check_token_limit(&token_or_auth, vec![scope.clone()], vec![specific_delete_perm])
+        .check_token_limit(
+            &token_or_auth,
+            vec![scope.clone()],
+            vec![specific_delete_perm],
+        )
         .await?;
 
     if has_specific_delete {
@@ -323,8 +346,9 @@ pub async fn check_kv_delete_namespace_permission(
 
     let scope = Scope::KvNamespace(namespace.to_owned());
     let global_delete_perm = Permission::Kv(Kv::Delete("*".to_owned()));
-    let has_global_delete =
-        checker.check_token_limit(&token_or_auth, vec![scope], vec![global_delete_perm]).await?;
+    let has_global_delete = checker
+        .check_token_limit(&token_or_auth, vec![scope], vec![global_delete_perm])
+        .await?;
 
     if has_global_delete {
         return Ok(());
@@ -356,8 +380,9 @@ pub async fn check_kv_list_keys_permission(token: &str, namespace: &str) -> anyh
 
     // 检查 ListAllKeys 权限
     let list_perm = Permission::Kv(Kv::ListAllKeys);
-    let has_list_permission =
-        checker.check_token_limit(&token_or_auth, vec![scope], vec![list_perm]).await?;
+    let has_list_permission = checker
+        .check_token_limit(&token_or_auth, vec![scope], vec![list_perm])
+        .await?;
 
     if has_list_permission {
         return Ok(());

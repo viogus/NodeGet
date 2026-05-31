@@ -57,8 +57,8 @@ pub async fn create(
             );
         }
 
-        let db = get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db =
+            get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
         let existing = js_worker::Entity::find()
             .filter(js_worker::Column::Name.eq(name.as_str()))
             .one(db)

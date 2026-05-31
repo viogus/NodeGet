@@ -1,6 +1,6 @@
-//! JsWorkerService trait -- injection point for js-worker callbacks.
+//! `JsWorkerService` trait -- injection point for js-worker callbacks.
 //!
-//! The runtime pool and inline_call/nodeget modules need to call back into
+//! The runtime pool and `inline_call/nodeget` modules need to call back into
 //! the js-worker service (which lives in `ng-js-worker`). To break the
 //! circular dependency, we define a trait here and inject the implementation
 //! via `OnceLock` at startup, the same pattern used by `AuthChecker` in
@@ -46,14 +46,14 @@ pub trait RawJsonDispatcher: Send + Sync {
 
 static JS_WORKER_SERVICE: OnceLock<Box<dyn JsWorkerService>> = OnceLock::new();
 
-/// Set the global JsWorkerService implementation.
+/// Set the global `JsWorkerService` implementation.
 ///
 /// Must be called once during server startup.
 pub fn set_js_worker_service(service: Box<dyn JsWorkerService>) {
     let _ = JS_WORKER_SERVICE.set(service);
 }
 
-/// Get the global JsWorkerService.
+/// Get the global `JsWorkerService`.
 ///
 /// Panics if not initialized -- call [`set_js_worker_service`] first.
 pub fn get_js_worker_service() -> &'static dyn JsWorkerService {

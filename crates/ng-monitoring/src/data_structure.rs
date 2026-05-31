@@ -20,13 +20,13 @@ pub struct StaticMonitoringData {
     pub gpu: Vec<StaticGpuData>,
 }
 
-/// 将 u64 安全饱和转换为 i64，超过 i64::MAX 时返回 i64::MAX，避免静默回绕
+/// 将 u64 安全饱和转换为 i64，超过 `i64::MAX` 时返回 `i64::MAX，避免静默回绕`
 #[must_use]
 fn u64_to_i64_saturating(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// 将 u64 安全饱和转换为 i32，超过 i32::MAX 时返回 i32::MAX，避免静默回绕
+/// 将 u64 安全饱和转换为 i32，超过 `i32::MAX` 时返回 `i32::MAX，避免静默回绕`
 #[must_use]
 fn u64_to_i32_saturating(value: u64) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
@@ -81,7 +81,7 @@ impl StaticMonitoringData {
 // 将 `std::io::Write` 调用桥接到 `Sha256::update`，实现零分配流式哈希
 struct WriteToDigest<'a>(&'a mut Sha256);
 
-impl<'a> std::io::Write for WriteToDigest<'a> {
+impl std::io::Write for WriteToDigest<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         sha2::Digest::update(self.0, buf);
         Ok(buf.len())
@@ -103,8 +103,8 @@ fn write_canonical_json<W: std::io::Write>(
 ) -> std::io::Result<()> {
     match v {
         serde_json::Value::Object(map) => {
-            let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
-            keys.sort();
+            let mut keys: Vec<&str> = map.keys().map(std::string::String::as_str).collect();
+            keys.sort_unstable();
             w.write_all(b"{")?;
             for (i, k) in keys.iter().enumerate() {
                 if i > 0 {
@@ -210,12 +210,14 @@ const EXCLUDED_MOUNT_PREFIXES: &[&str] = &[
     "/nix/store",
 ];
 
+#[must_use]
 pub fn is_virtual_interface(name: &str) -> bool {
     VIRTUAL_INTERFACE_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
 }
 
+#[must_use]
 pub fn is_excluded_mount(mount_point: &str) -> bool {
     EXCLUDED_MOUNT_PREFIXES
         .iter()
@@ -276,10 +278,11 @@ fn scale_load_to_i16(load: f64) -> Option<i16> {
 }
 
 impl DynamicMonitoringSummaryData {
-    /// 使用可选的磁盘和网卡筛选列表构建 DynamicMonitoringSummaryData
+    /// 使用可选的磁盘和网卡筛选列表构建 `DynamicMonitoringSummaryData`
     ///
-    /// - `select_disk`: 若存在且非空，仅统计 mount_point 匹配该列表的磁盘；否则回退到默认排除逻辑
-    /// - `select_network_interface`: 若存在且非空，仅统计 interface_name 匹配该列表的网卡；否则回退到默认排除逻辑
+    /// - `select_disk`: 若存在且非空，仅统计 `mount_point` 匹配该列表的磁盘；否则回退到默认排除逻辑
+    /// - `select_network_interface`: 若存在且非空，仅统计 `interface_name` 匹配该列表的网卡；否则回退到默认排除逻辑
+    #[must_use]
     pub fn from_with_filter(
         data: &DynamicMonitoringData,
         select_disk: Option<&[String]>,

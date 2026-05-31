@@ -1,4 +1,6 @@
-use crate::auth::{JsResultAction, ensure_js_result_permission, resolve_accessible_js_result_workers};
+use crate::auth::{
+    JsResultAction, ensure_js_result_permission, resolve_accessible_js_result_workers,
+};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::js_result::query::JsResultDataQuery;
@@ -12,8 +14,8 @@ use tracing::debug;
 pub async fn delete(token: String, query: JsResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_result", condition_count = query.condition.len(), "processing js_result delete request");
-        let db = get_db()
-            .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
+        let db =
+            get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
         let mut select_query = js_result::Entity::find()
             .select_only()
