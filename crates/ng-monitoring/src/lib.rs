@@ -53,7 +53,7 @@ pub fn rpc_module() -> jsonrpsee::RpcModule<()> {
     let mut module = jsonrpsee::RpcModule::new(());
 
     module
-        .register_method("agent.ping", |_, _, _| {
+        .register_method("agent_ping", |_, _, _| {
             Ok::<&str, jsonrpsee::types::ErrorObjectOwned>("pong")
         })
         .ok();
@@ -70,7 +70,7 @@ pub fn rpc_module() -> jsonrpsee::RpcModule<()> {
     // standalone method because it belongs to the "nodeget-server" namespace
     // but its implementation lives here.
     module
-        .register_async_method("nodeget-server.list_all_agent_uuid", |params, _, _| async move {
+        .register_async_method("nodeget-server_list_all_agent_uuid", |params, _, _| async move {
             use rpc::nodeget::list_all_agent_uuid::list_all_agent_uuid;
             let token: String = params.one()?;
             list_all_agent_uuid(token).await
