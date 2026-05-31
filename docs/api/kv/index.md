@@ -41,6 +41,9 @@ pub enum Scope {
     Global,
     AgentUuid(uuid::Uuid),
     KvNamespace(String), // KvNamespace 作用域，通过名称指定
+    JsWorker(String),    // JsWorker 作用域
+    StaticBucket(String), // StaticBucket 作用域
+    Db(String),          // Db 作用域
 }
 ```
 

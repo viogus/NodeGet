@@ -139,7 +139,7 @@
 
 ### 方法
 
-调用方法名为 `static-bucket_update`，参数与 `static-bucket_create` 相同。
+调用方法名为 `static-bucket_update`，参数与 `static-bucket_create` 相同，额外支持 `enable` 字段。
 
 ### 权限要求
 

@@ -5,7 +5,7 @@
 //!
 //! ## `server` feature
 //! - `service` module — core JS worker service (enqueue runs, run inline calls, record results)
-//! - `js_worker` RPC namespace — create, read, update, delete, list, run, get_rt_pool, service, route_name
+//! - `js_worker` RPC namespace — create, read, update, delete, run, get_rt_pool, list_all_js_worker
 //! - `js_result` RPC namespace — query, delete
 //! - `auth` module — permission checking (via `TokenPermissionChecker` trait injection)
 //! - `rpc_module()` — build and return merged RPC module for both namespaces
@@ -20,7 +20,7 @@ pub mod js_worker;
 pub mod service;
 
 #[cfg(feature = "server")]
-pub use auth::{TokenPermissionChecker, get_token_checker, set_token_checker};
+pub use auth::{TokenPermissionChecker, set_token_checker};
 
 #[cfg(feature = "server")]
 pub use service::{

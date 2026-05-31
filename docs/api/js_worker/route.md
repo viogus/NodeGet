@@ -69,7 +69,7 @@ export default {
         ok: true,
         method: request.method,
         path: new URL(request.url).pathname,
-        trace_id: ctx.uuid()
+        trace_id: randomUUID()
       }),
       {
         status: 200,
