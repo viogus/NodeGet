@@ -87,7 +87,7 @@ pub enum Db {
 |-----|----------------------------|
 | 102 | Permission Denied          |
 | 108 | Invalid input (name 含非法字符) |
-| 103 | Database error (已存在)       |
+| 108 | Invalid input (已存在)        |
 
 ---
 

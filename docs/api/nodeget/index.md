@@ -11,7 +11,7 @@ NodeGet 是本项目的基础服务接口模块，提供服务端状态查询、
 | [hello](./crud.md#hello)                             | 测试服务是否正常运行          | 无                           |
 | [version](./crud.md#version)                         | 获取服务端版本信息           | 无                           |
 | [uuid](./crud.md#uuid)                               | 获取当前 Server UUID    | 无                           |
-| [list_all_agent_uuid](./crud.md#list-all-agent-uuid) | 获取所有 Agent UUID 列表  | `NodeGet::ListAllAgentUuid` |
+| [list_all_agent_uuid](./crud.md#list-all-agent-uuid) | ~~获取所有 Agent UUID 列表~~（已废弃） | `NodeGet::ListAllAgentUuid` |
 | [read_config](./crud.md#read-config)                 | 读取服务端配置文件原文         | SuperToken                  |
 | [edit_config](./crud.md#edit-config)                 | 写入并触发服务端配置热重载       | SuperToken                  |
 | [database_storage](./crud.md#database-storage)       | 查询数据库各表存储占用         | SuperToken                  |

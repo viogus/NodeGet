@@ -330,7 +330,7 @@ pub struct TokenCreationRequest {
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "message": "Token n0kB8lSAykFd9Egu deleted successfully by Super Token",
+    "message": "Token n0kB8lSAykFd9Egu deleted successfully by SuperToken",
     "rows_affected": 1,
     "matched_by": "token_key"
   }
