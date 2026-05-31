@@ -30,13 +30,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Server feature dependencies
-rquickjs = { git = "https://github.com/delskayn/rquickjs.git", default-features = false, features = ["futures"], optional = true }
-llrt_fetch = { git = "https://github.com/awslabs/llrt.git", default-features = false, features = ["http1", "compression-rust", "webpki-roots", "tls-ring"], optional = true }
-llrt_buffer = { git = "https://github.com/awslabs/llrt.git", default-features = false, optional = true }
-llrt_stream_web = { git = "https://github.com/awslabs/llrt.git", default-features = false, optional = true }
-llrt_url = { git = "https://github.com/awslabs/llrt.git", default-features = false, optional = true }
-llrt_util = { git = "https://github.com/awslabs/llrt.git", default-features = false, optional = true }
-llrt_timers = { git = "https://github.com/awslabs/llrt.git", default-features = false, optional = true }
+rquickjs = { workspace = true, optional = true }
+llrt_fetch = { workspace = true, optional = true }
+llrt_buffer = { workspace = true, optional = true }
+llrt_stream_web = { workspace = true, optional = true }
+llrt_url = { workspace = true, optional = true }
+llrt_util = { workspace = true, optional = true }
+llrt_timers = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
@@ -44,3 +44,7 @@ anyhow = { workspace = true, optional = true }
 ng-db = { workspace = true, optional = true }
 ng-infra = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
+
+# ARM32 needs bindgen for libatomic workaround
+[target.'cfg(target_arch = "arm")'.dependencies]
+rquickjs = { git = "https://github.com/delskayn/rquickjs.git", default-features = false, features = ["futures", "bindgen"], optional = true }

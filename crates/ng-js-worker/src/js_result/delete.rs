@@ -4,7 +4,7 @@ use ng_core::error::NodegetError;
 use ng_core::js_result::query::JsResultDataQuery;
 use ng_core::js_result::query::JsResultQueryCondition;
 use ng_db::entity::js_result;
-use ng_infra::server::get_db_connection;
+use ng_db::get_db;
 use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
 use tracing::debug;
@@ -12,7 +12,7 @@ use tracing::debug;
 pub async fn delete(token: String, query: JsResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_result", condition_count = query.condition.len(), "processing js_result delete request");
-        let db = get_db_connection()
+        let db = get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
         let mut select_query = js_result::Entity::find()

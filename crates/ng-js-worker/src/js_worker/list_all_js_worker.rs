@@ -2,7 +2,7 @@ use crate::js_worker::auth::filter_workers_by_list_permission;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_db::entity::js_worker;
-use ng_infra::server::get_db_connection;
+use ng_db::get_db;
 use sea_orm::{EntityTrait, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
 use tracing::debug;
@@ -10,7 +10,7 @@ use tracing::debug;
 pub async fn list_all_js_worker(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_worker", "processing list all js_worker request");
-        let db = get_db_connection()
+        let db = get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
         let all_names: Vec<String> = js_worker::Entity::find()
             .select_only()

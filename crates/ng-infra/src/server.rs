@@ -8,15 +8,14 @@
 //!
 //! | Item | Source | Notes |
 //! |------|--------|-------|
-//! | `set_db_connection` / `get_db_connection` | New | Global DB injection |
 //! | `AuthChecker` + `set_auth_checker` / `get_auth_checker` | New | Global auth injection |
-//! | `load_from_db` | Migrated from `server/src/cache/mod.rs` | Path adjusted |
+//! | `load_from_db` | Migrated from `server/src/cache/mod.rs` | Uses `ng_db::get_db()` |
 //! | `DbBackedCache` trait | Migrated from `server/src/cache/mod.rs` | Path adjusted |
 //! | `make_global_cache!` macro | Migrated from `server/src/cache/mod.rs` | `$crate::server::DbBackedCache` |
 //! | `token_identity` | Migrated from `server/src/rpc/mod.rs` | Pure string logic |
 //! | `TruncatedRaw` | Migrated from `server/src/rpc/mod.rs` | Uses `serde_json::RawValue` |
 //! | `rpc_exec!` macro | Migrated from `server/src/rpc/mod.rs` | `$crate::server::TruncatedRaw` |
-//! | `RpcHelper` trait | Migrated from `server/src/rpc/mod.rs` | Uses `get_db_connection()` |
+//! | `RpcHelper` trait | Migrated from `server/src/rpc/mod.rs` | Uses `ng_db::get_db()` |
 
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Token;
@@ -27,26 +26,6 @@ use serde_json::{Value, to_value};
 use std::fmt;
 use std::future::Future;
 use std::sync::OnceLock;
-
-// ── DB connection global ──────────────────────────────────────────────
-
-static DB_CONN: OnceLock<DatabaseConnection> = OnceLock::new();
-
-/// Set the global database connection.
-///
-/// Must be called once during server startup before any cache or RPC code runs.
-pub fn set_db_connection(conn: DatabaseConnection) {
-    DB_CONN
-        .set(conn)
-        .expect("Database connection already initialized");
-}
-
-/// Get the global database connection.
-///
-/// Returns `None` if not yet initialized.
-pub fn get_db_connection() -> Option<&'static DatabaseConnection> {
-    DB_CONN.get()
-}
 
 // ── AuthChecker trait + global injection ──────────────────────────────
 
@@ -86,7 +65,7 @@ where
     E: EntityTrait + Send + Sync,
     E::Model: ModelTrait + Clone + Send + Sync + 'static,
 {
-    let db = get_db_connection().ok_or_else(|| {
+    let db = ng_db::get_db().ok_or_else(|| {
         NodegetError::ConfigNotFound("Database connection not initialized".to_owned())
     })?;
     E::find()
@@ -287,7 +266,7 @@ pub trait RpcHelper {
     ///
     /// Returns an error if the DB has not been initialized.
     fn get_db() -> anyhow::Result<&'static DatabaseConnection> {
-        get_db_connection()
+        ng_db::get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()).into())
     }
 }

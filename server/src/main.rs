@@ -144,11 +144,4 @@ async fn init_db_connection() {
     ng_db::init_db_connection(db_config)
         .await
         .expect("Failed to initialize database connection");
-
-    // 同步 DB 连接到 ng-infra 的全局单例（供 DbBackedCache 使用）
-    ng_infra::server::set_db_connection(
-        ng_db::get_db()
-            .expect("DB should be initialized after init_db_connection")
-            .clone(),
-    );
 }

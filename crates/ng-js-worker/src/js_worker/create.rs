@@ -7,7 +7,7 @@ use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::JsWorker as JsWorkerPermission;
 use ng_core::utils::get_local_timestamp_ms_i64;
 use ng_db::entity::js_worker;
-use ng_infra::server::get_db_connection;
+use ng_db::get_db;
 use ng_js_runtime::compile_js_module_to_bytecode;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::Value;
@@ -57,7 +57,7 @@ pub async fn create(
             );
         }
 
-        let db = get_db_connection()
+        let db = get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
         let existing = js_worker::Entity::find()
             .filter(js_worker::Column::Name.eq(name.as_str()))

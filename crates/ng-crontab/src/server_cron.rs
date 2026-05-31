@@ -224,7 +224,7 @@ async fn run_js_worker_job(
     };
 
     let run_result = match js_worker_scheduler() {
-        Some(scheduler) => scheduler.enqueue_run(&js_script_name, RunType::Cron, params, None).await,
+        Some(scheduler) => scheduler.enqueue_run(js_script_name.clone(), RunType::Cron, params, None).await,
         None => Err(anyhow::anyhow!("JsWorkerScheduler not initialized")),
     };
 

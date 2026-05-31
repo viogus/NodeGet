@@ -437,7 +437,15 @@ impl RpcServer for NodegetServerRpcImpl {
 }
 
 /// Build the merged RPC module from all ng-* crates and the server's own nodeget-server namespace.
+///
+/// Uses `OnceLock` to cache the module — the first call builds it, subsequent calls
+/// return a clone of the cached instance.
 pub fn get_modules() -> jsonrpsee::RpcModule<()> {
+    static GLOBAL_RPC_MODULE: std::sync::OnceLock<jsonrpsee::RpcModule<()>> = std::sync::OnceLock::new();
+    GLOBAL_RPC_MODULE.get_or_init(build_modules).clone()
+}
+
+fn build_modules() -> jsonrpsee::RpcModule<()> {
     let mut module = jsonrpsee::RpcModule::new(());
 
     // nodeget-server namespace（服务器专属）

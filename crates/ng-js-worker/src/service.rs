@@ -2,7 +2,7 @@ use ng_core::error::NodegetError;
 use ng_core::utils::get_local_timestamp_ms_i64;
 use ng_js_runtime::{JsCodeInput, RunType, RuntimeLimits, format_js_error, js_runner, js_runner_source_mode, runtime_pool};
 use ng_db::entity::{js_result, js_worker};
-use ng_infra::server::get_db_connection;
+use ng_db::get_db;
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::Value;
 use std::time::Duration;
@@ -20,7 +20,7 @@ pub async fn enqueue_defined_js_worker_run(
     }
     debug!(target: "js_worker", script_name = %script_name, run_type = ?run_type, "enqueuing defined js_worker run (bytecode)");
 
-    let db = get_db_connection()
+    let db = get_db()
         .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?
         .clone();
     let model = js_worker::Entity::find()
@@ -140,7 +140,7 @@ pub async fn run_inline_call_and_record_result(
         None => None,
     };
 
-    let db = get_db_connection()
+    let db = get_db()
         .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?
         .clone();
     let model = js_worker::Entity::find()
@@ -258,7 +258,7 @@ pub async fn enqueue_source_js_worker_run(
     }
     debug!(target: "js_worker", script_name = %script_name, run_type = ?run_type, "enqueuing source mode js_worker run");
 
-    let db = get_db_connection()
+    let db = get_db()
         .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?
         .clone();
     let model = js_worker::Entity::find()

@@ -103,6 +103,10 @@ pub async fn run(config: &ServerConfig) {
     ng_js_runtime::js_worker_service::set_js_worker_service(Box::new(JsWorkerServiceImpl));
     debug!(target: "server", "ng-js-runtime JsWorkerService registered");
 
+    // ng-crontab: 注册 JsWorkerScheduler (cron 触发 JS Worker 任务)
+    ng_crontab::task::set_js_worker_scheduler(std::sync::Arc::new(CronJsWorkerScheduler));
+    debug!(target: "server", "ng-crontab JsWorkerScheduler registered");
+
     let rpc_module = get_modules();
 
     let (stop_handle, _server_handle) = jsonrpsee::server::stop_channel();
@@ -1062,6 +1066,29 @@ impl ng_js_runtime::js_worker_service::RawJsonDispatcher for RpcModuleDispatcher
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok((resp.to_string(), ()))
+        })
+    }
+}
+
+/// ng-crontab JsWorkerScheduler: delegates to ng_js_worker::service::enqueue_defined_js_worker_run
+struct CronJsWorkerScheduler;
+
+impl ng_crontab::task::JsWorkerScheduler for CronJsWorkerScheduler {
+    fn enqueue_run(
+        &self,
+        worker_name: String,
+        run_type: ng_js_runtime::RunType,
+        params: serde_json::Value,
+        env_override: Option<serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send>> {
+        Box::pin(async move {
+            ng_js_worker::service::enqueue_defined_js_worker_run(
+                worker_name,
+                run_type,
+                params,
+                env_override,
+            )
+            .await
         })
     }
 }

@@ -20,11 +20,11 @@ use uuid::Uuid;
 pub trait JsWorkerScheduler: Send + Sync + 'static {
     fn enqueue_run(
         &self,
-        worker_name: &str,
+        worker_name: String,
         run_type: RunType,
         params: serde_json::Value,
-        source: Option<String>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send + '_>>;
+        env_override: Option<serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<i64>> + Send>>;
 }
 
 static JS_WORKER_SCHEDULER: std::sync::OnceLock<std::sync::Arc<dyn JsWorkerScheduler>> = std::sync::OnceLock::new();

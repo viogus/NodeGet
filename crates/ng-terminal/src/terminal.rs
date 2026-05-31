@@ -60,10 +60,10 @@ pub struct TerminalParams {
 /// Build and return an axum Router for the WebSocket terminal endpoint.
 ///
 /// Route:
-/// - `/nodeget/terminal` — WebSocket terminal relay between user and agent
+/// - `/terminal` — WebSocket terminal relay between user and agent
 pub fn router() -> axum::Router {
     axum::Router::new()
-        .route("/nodeget/terminal", axum::routing::get(terminal_ws_handler))
+        .route("/terminal", axum::routing::get(terminal_ws_handler))
         .with_state(TerminalState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
         })

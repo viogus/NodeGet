@@ -189,6 +189,10 @@ pub fn restart_process_with_exec_v() -> ! {
 
     tracing::info!("Starting execv...");
 
+    // SAFETY: execv replaces the current process image. All pointers
+    // (`path` and `ptrs`) originate from `CString` values that live
+    // for the duration of this function. execv only returns on failure,
+    // so the dangling-pointer concern after exec does not apply.
     unsafe {
         libc::execv(path.as_ptr(), ptrs.as_ptr());
     }

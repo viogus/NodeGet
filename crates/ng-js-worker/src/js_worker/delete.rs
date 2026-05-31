@@ -3,7 +3,7 @@ use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::JsWorker as JsWorkerPermission;
 use ng_db::entity::js_worker;
-use ng_infra::server::get_db_connection;
+use ng_db::get_db;
 use ng_js_runtime::runtime_pool;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::value::RawValue;
@@ -20,7 +20,7 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
         debug!(target: "js_worker", name = %name, "js_worker delete permission check passed");
 
-        let db = get_db_connection()
+        let db = get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
         let delete_result = js_worker::Entity::delete_many()
             .filter(js_worker::Column::Name.eq(name.as_str()))
