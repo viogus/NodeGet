@@ -56,39 +56,3 @@ pub fn validate_db_name(name: &str) -> anyhow::Result<()> {
     }
     Ok(())
 }
-
-/// Validated database name wrapper — implements `NameValidator`.
-///
-/// Use `ValidDbName::validate(name)?` for the same logic as `validate_db_name`,
-/// but returning a typed, validated wrapper.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidDbName(pub String);
-
-impl ng_core::NameValidator for ValidDbName {
-    fn validate(name: &str) -> Result<Self, ng_core::error::NodegetError> {
-        if name.is_empty() {
-            return Err(ng_core::error::NodegetError::InvalidInput(
-                "db name cannot be empty".to_owned(),
-            ));
-        }
-        if name.len() > 128 {
-            return Err(ng_core::error::NodegetError::InvalidInput(
-                "db name too long (max 128 chars)".to_owned(),
-            ));
-        }
-        let valid = name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
-        if !valid {
-            return Err(ng_core::error::NodegetError::InvalidInput(
-                "db name contains invalid characters (only [A-Za-z0-9_.-] allowed)".to_owned(),
-            ));
-        }
-        if name == "." || name == ".." {
-            return Err(ng_core::error::NodegetError::InvalidInput(
-                "db name cannot be '.' or '..'".to_owned(),
-            ));
-        }
-        Ok(Self(name.to_owned()))
-    }
-}

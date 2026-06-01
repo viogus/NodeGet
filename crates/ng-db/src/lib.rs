@@ -15,7 +15,7 @@
 //! - DB global singleton (`get_db` / `set_db`)
 //! - `DbRegistryManager` for user-created `SQLite` databases
 //! - SQL helpers (`row_to_json`, `json_to_sea_value`, `is_read_query`)
-//! - `validate_db_name` / `ValidDbName` (implements `NameValidator`)
+//! - `validate_db_name`
 //! - `db` RPC namespace (server feature)
 //! - `nodeget-server::database_storage`, `exec_sql`, `get_database_type` (server feature)
 
@@ -53,4 +53,4 @@ pub use db_registry::{
     DbExecResult, DbInfo, DbRegistryManager, is_read_query, json_to_sea_value, row_to_json,
 };
 #[cfg(feature = "server")]
-pub use rpc::db::auth::{ValidDbName, validate_db_name};
+pub use rpc::db::auth::validate_db_name;

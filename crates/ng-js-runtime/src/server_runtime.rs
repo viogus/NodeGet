@@ -223,8 +223,8 @@ pub(crate) fn init_js_runtime_globals(ctx: &Ctx<'_>) -> Result<(), Error> {
             return resp.result;
         };
         globalThis.db = {
-            async create(token, name, opts) {
-                const resp = await nodeget("db_create", { token, name, ...opts });
+            async create(token, name) {
+                const resp = await nodeget("db_create", { token, name });
                 if (resp.error) throw new Error(resp.error.message);
                 return resp.result;
             },
@@ -250,14 +250,6 @@ pub(crate) fn init_js_runtime_globals(ctx: &Ctx<'_>) -> Result<(), Error> {
             },
             async execSql(token, name, sql, params) {
                 const resp = await nodeget("db_exec_sql", {
-                    token, name, sql,
-                    params: params !== undefined && params !== null ? params : null
-                });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async execTemplating(token, name, sql, params) {
-                const resp = await nodeget("db_exec_templating", {
                     token, name, sql,
                     params: params !== undefined && params !== null ? params : null
                 });
@@ -372,6 +364,215 @@ pub fn compile_js_module_to_bytecode(js_code: impl AsRef<str>) -> Result<Vec<u8>
     })
 }
 
+/// Invoke script IIFE: reads `__nodeget_*` globals, calls the handler, returns the result.
+///
+/// This is the shared JS snippet that runs after globals are set via [`prepare_invoke_globals`]
+/// and `__nodeget_entry` is set from the module namespace.
+pub const INVOKE_SCRIPT_JS: &str = r#"
+(async () => {
+    const entry = globalThis.__nodeget_entry;
+    const runHandler = globalThis.__nodeget_run_handler;
+    const input = globalThis.__nodeget_run_params;
+    const env = globalThis.__nodeget_env || {};
+    const inlineCall = async (jsWorkerName, callParams, timeoutSec = null) => {
+        const workerName = String(jsWorkerName ?? "").trim();
+        if (!workerName) {
+            throw new Error("inlineCall js_worker_name cannot be empty");
+        }
+
+        const timeoutValue =
+            timeoutSec === undefined || timeoutSec === null
+                ? null
+                : Number(timeoutSec);
+        if (
+            timeoutValue !== null &&
+            (!Number.isFinite(timeoutValue) || timeoutValue <= 0)
+        ) {
+            throw new Error(
+                "inlineCall timeout_sec must be a positive finite number"
+            );
+        }
+
+        let paramsJson = null;
+        try {
+            paramsJson = JSON.stringify(callParams);
+        } catch (e) {
+            throw new Error(
+                `inlineCall params is not JSON-serializable: ${e}`
+            );
+        }
+        if (typeof paramsJson !== "string") {
+            paramsJson = "null";
+        }
+
+        return await globalThis.__nodeget_inline_call(
+            workerName,
+            paramsJson,
+            timeoutValue,
+            globalThis.__nodeget_current_script_name ?? null
+        );
+    };
+    globalThis.inlineCall = inlineCall;
+    const runtimeCtx = {
+        runType: runHandler,
+        workerName: globalThis.__nodeget_current_script_name ?? null,
+        inlineCall,
+        inlineCaller: globalThis.__nodeget_inline_caller ?? null
+    };
+
+    if (!entry || typeof entry !== "object") {
+        throw new Error("export default must be an object");
+    }
+
+    const handler = entry[runHandler];
+    if (typeof handler !== "function") {
+        throw new Error(`Missing handler function export default.${runHandler}`);
+    }
+
+    if (runHandler === "onRoute") {
+        if (!input || typeof input !== "object") {
+            throw new Error("onRoute input must be an object");
+        }
+
+        const routeHeaders = Array.isArray(input.headers)
+            ? input.headers.map((h) => [
+                String(h?.name ?? ""),
+                String(h?.value ?? "")
+            ])
+            : [];
+        const routeInit = {
+            method: String(input.method ?? "GET"),
+            headers: routeHeaders
+        };
+        if (typeof input.body_base64 === 'string' && input.body_base64.length > 0) {
+            routeInit.body = Uint8Array.from(atob(input.body_base64), c => c.charCodeAt(0));
+        }
+
+        const routeRequest = new Request(String(input.url ?? ""), routeInit);
+        const routeResponse = await handler.call(entry, routeRequest, env, runtimeCtx);
+
+        if (!(routeResponse instanceof Response)) {
+            throw new Error("onRoute must return a Response object");
+        }
+
+        const routeBody = new Uint8Array(await routeResponse.arrayBuffer());
+        return {
+            status: routeResponse.status,
+            headers: Array.from(routeResponse.headers.entries())
+                .map(([name, value]) => ({ name, value })),
+            body_base64: Buffer.from(routeBody).toString('base64')
+        };
+    }
+
+    const result = await handler.call(entry, input, env, runtimeCtx);
+    if (typeof result === "undefined") {
+        throw new Error("JS handler must return a JSON-serializable value");
+    }
+    return result;
+})()
+"#;
+
+/// Set the five `__nodeget_*` global variables on the JS context before invoking the script.
+///
+/// - `__nodeget_run_handler` — handler name string (e.g. `"onInterval"`)
+/// - `__nodeget_run_params` — input parameters as a JS object (via `json_parse`)
+/// - `__nodeget_env` — environment variables as a JS object (via `json_parse`)
+/// - `__nodeget_current_script_name` — script name string or `null`
+/// - `__nodeget_inline_caller` — inline caller name string or `null`
+///
+/// # Errors
+/// Returns an error if any global variable cannot be set (serialization or JS engine failure).
+pub fn prepare_invoke_globals(
+    ctx: &Ctx<'_>,
+    run_type: &str,
+    params: &Value,
+    env: &Value,
+    script_name: Option<&str>,
+    inline_caller: Option<&str>,
+) -> Result<(), Error> {
+    let global = ctx.globals();
+
+    global.set("__nodeget_run_handler", run_type.to_owned())?;
+
+    let params_json = serde_json::to_string(params)
+        .map_err(|e| js_error("js_runner", format!("Failed to serialize input params: {e}")))?;
+    let params_js = ctx
+        .json_parse(params_json)
+        .map_err(|e| js_error("js_runner", format!("Failed to build input params in JS: {e}")))?;
+    global.set("__nodeget_run_params", params_js)?;
+
+    let env_json = serde_json::to_string(env)
+        .map_err(|e| js_error("js_runner", format!("Failed to serialize env: {e}")))?;
+    let env_js = ctx
+        .json_parse(env_json)
+        .map_err(|e| js_error("js_runner", format!("Failed to build env in JS: {e}")))?;
+    global.set("__nodeget_env", env_js)?;
+
+    match script_name {
+        Some(name) => global.set("__nodeget_current_script_name", name.to_owned())?,
+        None => {
+            let null_js = ctx.json_parse("null").map_err(|e| {
+                js_error("js_runner", format!("Failed to set script name in JS: {e}"))
+            })?;
+            global.set("__nodeget_current_script_name", null_js)?;
+        }
+    }
+
+    match inline_caller {
+        Some(caller) => global.set("__nodeget_inline_caller", caller.to_owned())?,
+        None => {
+            let null_js = ctx.json_parse("null").map_err(|e| {
+                js_error(
+                    "js_runner",
+                    format!("Failed to set inline caller in JS: {e}"),
+                )
+            })?;
+            global.set("__nodeget_inline_caller", null_js)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert a JS return value into a [`Value`] (serde_json).
+///
+/// Handles `undefined` (error), JS string (direct parse), and other types
+/// (via `json_stringify` then `serde_json::from_str`).
+///
+/// # Errors
+/// Returns an error if the value is `undefined`, not JSON-serializable, or the
+/// serialized string is not valid JSON.
+pub fn resolve_invoke_result<'js>(
+    ctx: &Ctx<'js>,
+    js_value: JsValue<'js>,
+) -> Result<Value, Error> {
+    if js_value.is_undefined() {
+        return Err(js_error(
+            "json_parse",
+            "Script must return a JSON-serializable value",
+        ));
+    }
+
+    let raw_json = if let Some(js_string) = js_value.as_string() {
+        js_string.to_string()?
+    } else {
+        let js_json_string = ctx.json_stringify(js_value)?.ok_or_else(|| {
+            js_error(
+                "json_parse",
+                "Script return is not JSON-serializable (got function/symbol)",
+            )
+        })?;
+        js_json_string.to_string()?
+    };
+
+    serde_json::from_str(&raw_json).map_err(|e| {
+        js_error(
+            "json_parse",
+            format!("Script return is not valid JSON: {e}"),
+        )
+    })
+}
+
 /// # Errors
 /// Returns an error if building the host runtime or JS execution fails.
 ///
@@ -411,52 +612,14 @@ pub fn js_runner(
         let execute = async {
             let js_result: Result<Value, Error> = ctx.async_with(async |ctx| {
                 init_js_runtime_globals(&ctx)?;
-                let global = ctx.globals();
-
-                let run_type_handler = run_type.handler_name().to_owned();
-                global.set("__nodeget_run_handler", run_type_handler)?;
-
-                let input_json = serde_json::to_string(&input_params)
-                    .map_err(|e| js_error("js_runner", format!("Failed to serialize input params: {e}")))?;
-                let input_js = ctx
-                    .json_parse(input_json)
-                    .map_err(|e| js_error("js_runner", format!("Failed to build input params in JS: {e}")))?;
-                global.set("__nodeget_run_params", input_js)?;
-
-                let env_json = serde_json::to_string(&env_value)
-                    .map_err(|e| js_error("js_runner", format!("Failed to serialize env: {e}")))?;
-                let env_js = ctx.json_parse(env_json).map_err(|e| {
-                    js_error(
-                        "js_runner",
-                        format!("Failed to build env object in JS: {e}"),
-                    )
-                })?;
-                global.set("__nodeget_env", env_js)?;
-
-                let current_script_name_json = serde_json::to_string(&current_script_name).map_err(|e| {
-                    js_error(
-                        "js_runner",
-                        format!("Failed to serialize current script name: {e}"),
-                    )
-                })?;
-                let current_script_name_js = ctx.json_parse(current_script_name_json).map_err(|e| {
-                    js_error(
-                        "js_runner",
-                        format!("Failed to build current script name in JS: {e}"),
-                    )
-                })?;
-                global.set("__nodeget_current_script_name", current_script_name_js)?;
-
-                let inline_caller_json = serde_json::to_string(&inline_caller).map_err(|e| {
-                    js_error(
-                        "js_runner",
-                        format!("Failed to serialize inline caller: {e}"),
-                    )
-                })?;
-                let inline_caller_js = ctx.json_parse(inline_caller_json).map_err(|e| {
-                    js_error("js_runner", format!("Failed to build inline caller in JS: {e}"))
-                })?;
-                global.set("__nodeget_inline_caller", inline_caller_js)?;
+                prepare_invoke_globals(
+                    &ctx,
+                    run_type.handler_name(),
+                    &input_params,
+                    &env_value,
+                    current_script_name.as_deref(),
+                    inline_caller.as_deref(),
+                )?;
 
                 let declared_module = match &js_code {
                     JsCodeInput::Source(source) => enrich_exception(
@@ -482,149 +645,17 @@ pub fn js_runner(
                 let namespace = enrich_exception(&ctx, "js_namespace", module.namespace())?;
                 let entry_value: JsValue<'_> =
                     enrich_exception(&ctx, "js_namespace", namespace.get("default"))?;
-                global.set("__nodeget_entry", entry_value)?;
-
-                let invoke_script = r#"
-                (async () => {
-                    const entry = globalThis.__nodeget_entry;
-                    const runHandler = globalThis.__nodeget_run_handler;
-                    const input = globalThis.__nodeget_run_params;
-                    const env = globalThis.__nodeget_env || {};
-                    const inlineCall = async (jsWorkerName, callParams, timeoutSec = null) => {
-                        const workerName = String(jsWorkerName ?? "").trim();
-                        if (!workerName) {
-                            throw new Error("inlineCall js_worker_name cannot be empty");
-                        }
-
-                        const timeoutValue =
-                            timeoutSec === undefined || timeoutSec === null
-                                ? null
-                                : Number(timeoutSec);
-                        if (
-                            timeoutValue !== null &&
-                            (!Number.isFinite(timeoutValue) || timeoutValue <= 0)
-                        ) {
-                            throw new Error(
-                                "inlineCall timeout_sec must be a positive finite number"
-                            );
-                        }
-
-                        let paramsJson = null;
-                        try {
-                            paramsJson = JSON.stringify(callParams);
-                        } catch (e) {
-                            throw new Error(
-                                `inlineCall params is not JSON-serializable: ${e}`
-                            );
-                        }
-                        if (typeof paramsJson !== "string") {
-                            paramsJson = "null";
-                        }
-
-                        return await globalThis.__nodeget_inline_call(
-                            workerName,
-                            paramsJson,
-                            timeoutValue,
-                            globalThis.__nodeget_current_script_name ?? null
-                        );
-                    };
-                    globalThis.inlineCall = inlineCall;
-                    const runtimeCtx = {
-                        runType: runHandler,
-                        workerName: globalThis.__nodeget_current_script_name ?? null,
-                        inlineCall,
-                        inlineCaller: globalThis.__nodeget_inline_caller ?? null
-                    };
-
-                    if (!entry || typeof entry !== "object") {
-                        throw new Error("export default must be an object");
-                    }
-
-                    const handler = entry[runHandler];
-
-                    if (typeof handler !== "function") {
-                        throw new Error(
-                            `Missing handler function export default.${runHandler}`
-                        );
-                    }
-
-                    if (runHandler === "onRoute") {
-                        if (!input || typeof input !== "object") {
-                            throw new Error("onRoute input must be an object");
-                        }
-
-                        const routeHeaders = Array.isArray(input.headers)
-                            ? input.headers.map((h) => [
-                                String(h?.name ?? ""),
-                                String(h?.value ?? "")
-                            ])
-                            : [];
-                        const routeInit = {
-                            method: String(input.method ?? "GET"),
-                            headers: routeHeaders
-                        };
-                        if (typeof input.body_base64 === 'string' && input.body_base64.length > 0) {
-                            routeInit.body = Uint8Array.from(atob(input.body_base64), c => c.charCodeAt(0));
-                        }
-
-                        const routeRequest = new Request(String(input.url ?? ""), routeInit);
-                        const routeResponse = await handler.call(entry, routeRequest, env, runtimeCtx);
-
-                        if (!(routeResponse instanceof Response)) {
-                            throw new Error("onRoute must return a Response object");
-                        }
-
-                        const routeBody = new Uint8Array(await routeResponse.arrayBuffer());
-                        return {
-                            status: routeResponse.status,
-                            headers: Array.from(routeResponse.headers.entries())
-                                .map(([name, value]) => ({ name, value })),
-                            body_base64: Buffer.from(routeBody).toString('base64')
-                        };
-                    }
-
-                    const result = await handler.call(entry, input, env, runtimeCtx);
-                    if (typeof result === "undefined") {
-                        throw new Error("JS handler must return a JSON-serializable value");
-                    }
-
-                    return result;
-                })()
-            "#;
+                ctx.globals().set("__nodeget_entry", entry_value)?;
 
                 let invoke_promise: Promise<'_> =
-                    enrich_exception(&ctx, "js_invoke", ctx.eval(invoke_script))?;
+                    enrich_exception(&ctx, "js_invoke", ctx.eval(INVOKE_SCRIPT_JS))?;
                 let js_value: JsValue<'_> = enrich_exception(
                     &ctx,
                     "js_invoke",
                     invoke_promise.into_future::<JsValue<'_>>().await,
                 )?;
 
-                if js_value.is_undefined() {
-                    return Err(js_error(
-                        "json_parse",
-                        "Script must return a JSON-serializable value",
-                    ));
-                }
-
-                let raw_json = if let Some(js_string) = js_value.as_string() {
-                    js_string.to_string()?
-                } else {
-                    let js_json_string = ctx.json_stringify(js_value)?.ok_or_else(|| {
-                        js_error(
-                            "json_parse",
-                            "Script return is not JSON-serializable (got function/symbol)",
-                        )
-                    })?;
-                    js_json_string.to_string()?
-                };
-
-                serde_json::from_str(&raw_json).map_err(|e| {
-                    js_error(
-                        "json_parse",
-                        format!("Script return is not valid JSON: {e}"),
-                    )
-                })
+                resolve_invoke_result(&ctx, js_value)
             })
                 .await;
 
@@ -699,34 +730,14 @@ pub fn js_runner_source_mode(
         let execute = async {
             let js_result: Result<Value, Error> = ctx.async_with(async |ctx| {
                 init_js_runtime_globals(&ctx)?;
-                let global = ctx.globals();
-
-                let run_type_handler = run_type.handler_name().to_owned();
-                global.set("__nodeget_run_handler", run_type_handler)?;
-
-                let input_json = serde_json::to_string(&input_params)
-                    .map_err(|e| js_error("js_runner", format!("Failed to serialize input params: {e}")))?;
-                let input_js = ctx
-                    .json_parse(input_json)
-                    .map_err(|e| js_error("js_runner", format!("Failed to build input params in JS: {e}")))?;
-                global.set("__nodeget_run_params", input_js)?;
-
-                let env_json = serde_json::to_string(&env_value)
-                    .map_err(|e| js_error("js_runner", format!("Failed to serialize env: {e}")))?;
-                let env_js = ctx.json_parse(env_json).map_err(|e| {
-                    js_error(
-                        "js_runner",
-                        format!("Failed to build env object in JS: {e}"),
-                    )
-                })?;
-                global.set("__nodeget_env", env_js)?;
-
-                global.set("__nodeget_current_script_name", script_name.to_owned())?;
-
-                let inline_caller_js = ctx
-                    .json_parse("null")
-                    .map_err(|e| js_error("js_runner", format!("Failed to set inline caller in JS: {e}")))?;
-                global.set("__nodeget_inline_caller", inline_caller_js)?;
+                prepare_invoke_globals(
+                    &ctx,
+                    run_type.handler_name(),
+                    &input_params,
+                    &env_value,
+                    Some(script_name),
+                    None,
+                )?;
 
                 // Use actual script name for better error stack traces
                 let module_name = format!("{script_name}.js");
@@ -747,149 +758,17 @@ pub fn js_runner_source_mode(
                 let namespace = enrich_exception(&ctx, "js_namespace", module.namespace())?;
                 let entry_value: JsValue<'_> =
                     enrich_exception(&ctx, "js_namespace", namespace.get("default"))?;
-                global.set("__nodeget_entry", entry_value)?;
-
-                let invoke_script = r#"
-                (async () => {
-                    const entry = globalThis.__nodeget_entry;
-                    const runHandler = globalThis.__nodeget_run_handler;
-                    const input = globalThis.__nodeget_run_params;
-                    const env = globalThis.__nodeget_env || {};
-                    const inlineCall = async (jsWorkerName, callParams, timeoutSec = null) => {
-                        const workerName = String(jsWorkerName ?? "").trim();
-                        if (!workerName) {
-                            throw new Error("inlineCall js_worker_name cannot be empty");
-                        }
-
-                        const timeoutValue =
-                            timeoutSec === undefined || timeoutSec === null
-                                ? null
-                                : Number(timeoutSec);
-                        if (
-                            timeoutValue !== null &&
-                            (!Number.isFinite(timeoutValue) || timeoutValue <= 0)
-                        ) {
-                            throw new Error(
-                                "inlineCall timeout_sec must be a positive finite number"
-                            );
-                        }
-
-                        let paramsJson = null;
-                        try {
-                            paramsJson = JSON.stringify(callParams);
-                        } catch (e) {
-                            throw new Error(
-                                `inlineCall params is not JSON-serializable: ${e}`
-                            );
-                        }
-                        if (typeof paramsJson !== "string") {
-                            paramsJson = "null";
-                        }
-
-                        return await globalThis.__nodeget_inline_call(
-                            workerName,
-                            paramsJson,
-                            timeoutValue,
-                            globalThis.__nodeget_current_script_name ?? null
-                        );
-                    };
-                    globalThis.inlineCall = inlineCall;
-                    const runtimeCtx = {
-                        runType: runHandler,
-                        workerName: globalThis.__nodeget_current_script_name ?? null,
-                        inlineCall,
-                        inlineCaller: globalThis.__nodeget_inline_caller ?? null
-                    };
-
-                    if (!entry || typeof entry !== "object") {
-                        throw new Error("export default must be an object");
-                    }
-
-                    const handler = entry[runHandler];
-
-                    if (typeof handler !== "function") {
-                        throw new Error(
-                            `Missing handler function export default.${runHandler}`
-                        );
-                    }
-
-                    if (runHandler === "onRoute") {
-                        if (!input || typeof input !== "object") {
-                            throw new Error("onRoute input must be an object");
-                        }
-
-                        const routeHeaders = Array.isArray(input.headers)
-                            ? input.headers.map((h) => [
-                                String(h?.name ?? ""),
-                                String(h?.value ?? "")
-                            ])
-                            : [];
-                        const routeInit = {
-                            method: String(input.method ?? "GET"),
-                            headers: routeHeaders
-                        };
-                        if (typeof input.body_base64 === 'string' && input.body_base64.length > 0) {
-                            routeInit.body = Uint8Array.from(atob(input.body_base64), c => c.charCodeAt(0));
-                        }
-
-                        const routeRequest = new Request(String(input.url ?? ""), routeInit);
-                        const routeResponse = await handler.call(entry, routeRequest, env, runtimeCtx);
-
-                        if (!(routeResponse instanceof Response)) {
-                            throw new Error("onRoute must return a Response object");
-                        }
-
-                        const routeBody = new Uint8Array(await routeResponse.arrayBuffer());
-                        return {
-                            status: routeResponse.status,
-                            headers: Array.from(routeResponse.headers.entries())
-                                .map(([name, value]) => ({ name, value })),
-                            body_base64: Buffer.from(routeBody).toString('base64')
-                        };
-                    }
-
-                    const result = await handler.call(entry, input, env, runtimeCtx);
-                    if (typeof result === "undefined") {
-                        throw new Error("JS handler must return a JSON-serializable value");
-                    }
-
-                    return result;
-                })()
-            "#;
+                ctx.globals().set("__nodeget_entry", entry_value)?;
 
                 let invoke_promise: Promise<'_> =
-                    enrich_exception(&ctx, "js_invoke", ctx.eval(invoke_script))?;
+                    enrich_exception(&ctx, "js_invoke", ctx.eval(INVOKE_SCRIPT_JS))?;
                 let js_value: JsValue<'_> = enrich_exception(
                     &ctx,
                     "js_invoke",
                     invoke_promise.into_future::<JsValue<'_>>().await,
                 )?;
 
-                if js_value.is_undefined() {
-                    return Err(js_error(
-                        "json_parse",
-                        "Script must return a JSON-serializable value",
-                    ));
-                }
-
-                let raw_json = if let Some(js_string) = js_value.as_string() {
-                    js_string.to_string()?
-                } else {
-                    let js_json_string = ctx.json_stringify(js_value)?.ok_or_else(|| {
-                        js_error(
-                            "json_parse",
-                            "Script return is not JSON-serializable (got function/symbol)",
-                        )
-                    })?;
-                    js_json_string.to_string()?
-                };
-
-                serde_json::from_str(&raw_json).map_err(|e| {
-                    js_error(
-                        "json_parse",
-                        format!("Script return is not valid JSON: {e}"),
-                    )
-                })
+                resolve_invoke_result(&ctx, js_value)
             })
                 .await;
 

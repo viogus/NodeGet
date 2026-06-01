@@ -10,7 +10,6 @@ pub mod auth;
 mod create;
 mod delete;
 mod exec_sql;
-mod exec_templating;
 mod list;
 mod read;
 mod update;
@@ -61,15 +60,6 @@ pub trait Rpc {
 
     #[method(name = "exec_sql")]
     async fn exec_sql(
-        &self,
-        token: String,
-        name: String,
-        sql: String,
-        params: Option<serde_json::Value>,
-    ) -> RpcResult<Box<RawValue>>;
-
-    #[method(name = "exec_templating")]
-    async fn exec_templating(
         &self,
         token: String,
         name: String,
@@ -139,20 +129,6 @@ impl RpcServer for DbRpcImpl {
         let (tk, un) = token_identity(&token);
         let span = tracing::info_span!(target: "db", "db::exec_sql", token_key = tk, username = un, name = %name, sql_len = sql.len());
         async { rpc_exec!(exec_sql::exec_sql(token, name, sql, params).await) }
-            .instrument(span)
-            .await
-    }
-
-    async fn exec_templating(
-        &self,
-        token: String,
-        name: String,
-        sql: String,
-        params: Option<serde_json::Value>,
-    ) -> RpcResult<Box<RawValue>> {
-        let (tk, un) = token_identity(&token);
-        let span = tracing::info_span!(target: "db", "db::exec_templating", token_key = tk, username = un, name = %name, sql_len = sql.len());
-        async { rpc_exec!(exec_templating::exec_templating(token, name, sql, params).await) }
             .instrument(span)
             .await
     }

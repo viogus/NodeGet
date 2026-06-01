@@ -49,7 +49,7 @@ pub async fn exec_sql(
             Some(Value::Null) | None => vec![],
             _ => {
                 return Err(
-                    NodegetError::InvalidInput("params must be an array".to_owned()).into(),
+                    NodegetError::InvalidInput("params must be an array or null".to_owned()).into(),
                 );
             }
         };

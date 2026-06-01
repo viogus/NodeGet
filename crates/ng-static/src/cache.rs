@@ -43,7 +43,7 @@ impl DbBackedCache for StaticCache {
     type Model = static_entity::Model;
 
     fn cache_name() -> &'static str {
-        "static"
+        "static_file"
     }
 
     fn build_cache(models: Vec<Self::Model>) -> Self {

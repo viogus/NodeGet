@@ -13,8 +13,7 @@
 | [update](#update)                   | 重命名数据库              | `Db::Update`  |
 | [delete](#delete)                   | 删除数据库并清理文件          | `Db::Delete`  |
 | [list](#list)                       | 列出所有数据库             | `Db::List`    |
-| [exec_sql](#exec-sql)               | 执行原始 SQL（允许参数和复合语句） | `Db::ExecSql` |
-| [exec_templating](#exec-templating) | 参数化 SQL 执行，参数必须为数组  | `Db::ExecSql` |
+| [exec_sql](#exec-sql)               | 执行 SQL（支持参数化查询） | `Db::ExecSql` |
 
 ## 数据库存储
 
@@ -383,36 +382,3 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行，其余语句（IN
 | 102 | Permission Denied                  |
 | 103 | Database error (数据库未注册 / SQL 执行失败) |
 | 108 | Invalid input (参数格式错误)             |
-
----
-
-## Exec Templating
-
-参数化 SQL 执行。与 `exec_sql` 功能相同，支持 `params` 为数组或 `null`（null 视为空数组）。
-
-这是推荐的接口，用于确保所有用户输入都通过参数化查询传入，防止 SQL 注入。
-
-**请求:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "db_exec_templating",
-  "params": {
-    "token": "TOKEN",
-    "name": "my_database",
-    "sql": "SELECT * FROM users WHERE name = $1",
-    "params": ["Alice"]
-  },
-  "id": 1
-}
-```
-
-**响应格式** 与 `exec_sql` 完全一致。
-
-**错误码:**
-
-| 代码  | 说明                      |
-|-----|-------------------------|
-| 108 | params 格式错误（必须为数组或null） |
-| 其他  | 与 exec_sql 相同           |

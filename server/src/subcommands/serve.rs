@@ -333,6 +333,7 @@ pub async fn run(config: &ServerConfig) {
             result = &mut serve_future => {
                 result.unwrap();
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;
                 #[cfg(not(target_os = "windows"))]
                 if let Some(task) = unix_server_task.take() {
@@ -346,6 +347,7 @@ pub async fn run(config: &ServerConfig) {
                 .notified() => {
                 info!(target: "server", "Config reload requested, stopping TLS server...");
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let stop_handle = stop_handle.clone();
                 tokio::spawn(async move {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;
@@ -376,6 +378,7 @@ pub async fn run(config: &ServerConfig) {
             result = &mut serve_future => {
                 result.unwrap();
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 #[cfg(not(target_os = "windows"))]
                 if let Some(task) = unix_server_task.take() {
                     task.abort();
@@ -388,6 +391,7 @@ pub async fn run(config: &ServerConfig) {
                 .notified() => {
                 info!(target: "server", "Config reload requested, stopping server for restart...");
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let stop_handle = stop_handle.clone();
                 tokio::spawn(async move {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;

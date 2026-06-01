@@ -8,8 +8,11 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 static MGR: std::sync::OnceLock<Arc<DbRegistryManager>> = std::sync::OnceLock::new();
@@ -22,6 +25,9 @@ struct TrackedConnection {
 pub struct DbRegistryManager {
     db_path: String,
     pools: RwLock<HashMap<String, Arc<TrackedConnection>>>,
+    cancelled: AtomicBool,
+    cancel_notify: Notify,
+    cleanup_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 fn now_ms_u64() -> u64 {
@@ -38,14 +44,18 @@ impl DbRegistryManager {
             let mgr_inner = Arc::new(Self {
                 db_path,
                 pools: RwLock::new(HashMap::new()),
+                cancelled: AtomicBool::new(false),
+                cancel_notify: Notify::new(),
+                cleanup_handle: Mutex::new(None),
             });
             let mgr_clone = Arc::clone(&mgr_inner);
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 if let Err(e) = mgr_clone.seed_from_dbreg().await {
                     warn!(target: "db", error = %e, "Failed to seed db_registry from persisted state");
                 }
                 mgr_clone.start_cleanup_loop().await;
             });
+            *mgr_inner.cleanup_handle.lock().unwrap() = Some(handle);
             let _ = MGR.set(mgr_inner);
         });
         Arc::clone(MGR.get().expect("DbRegistryManager not initialized"))
@@ -90,39 +100,60 @@ impl DbRegistryManager {
 
     async fn start_cleanup_loop(&self) {
         loop {
-            tokio::time::sleep(std::time::Duration::from_mins(1)).await;
-            self.cleanup_expired().await;
+            if self.cancelled.load(Ordering::SeqCst) {
+                info!(target: "db", "DbRegistry cleanup loop stopped");
+                break;
+            }
+            tokio::select! {
+                () = self.cancel_notify.notified() => {
+                    info!(target: "db", "DbRegistry cleanup loop stopped");
+                    break;
+                }
+                () = tokio::time::sleep(std::time::Duration::from_mins(1)) => {
+                    if let Err(e) = self.cleanup_expired().await {
+                        warn!(target: "db", error = %e, "DbRegistry cleanup failed, will retry next cycle");
+                    }
+                }
+            }
         }
     }
 
-    async fn cleanup_expired(&self) {
-        let main_db = match get_main_db() {
-            Ok(db) => db,
-            Err(_) => return,
-        };
+    async fn cleanup_expired(&self) -> anyhow::Result<()> {
+        let main_db = get_main_db()?;
         let to_remove = {
             let pools = self.pools.read().await;
             let mut expired = Vec::new();
             for (name, tracked) in pools.iter() {
-                if let Ok(Some(m)) = dbreg_entity::Entity::find()
+                match dbreg_entity::Entity::find()
                     .filter(dbreg_entity::Column::Name.eq(name))
                     .one(main_db)
                     .await
-                    && let Some(lifetime_ms) = m.max_lifetime_ms
                 {
-                    let last_used = tracked.last_used_ms.load(Ordering::Relaxed);
-                    let elapsed_ms = now_ms_u64().saturating_sub(last_used) as i64;
-                    if elapsed_ms >= lifetime_ms {
-                        expired.push(name.clone());
+                    Ok(Some(m)) => {
+                        if let Some(lifetime_ms) = m.max_lifetime_ms {
+                            let last_used = tracked.last_used_ms.load(Ordering::Relaxed);
+                            let elapsed_ms = now_ms_u64().saturating_sub(last_used) as i64;
+                            if elapsed_ms >= lifetime_ms {
+                                expired.push(name.clone());
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(target: "db", name = %name, error = %e, "Failed to query db_registry entry, skipping");
                     }
                 }
             }
             expired
         };
         for name in to_remove {
-            let _ = self.remove_conn(&name).await;
-            info!(target: "db", name = %name, "Expired connection cleaned up");
+            if let Err(e) = self.remove_conn(&name).await {
+                warn!(target: "db", name = %name, error = %e, "Failed to remove expired connection");
+            } else {
+                info!(target: "db", name = %name, "Expired connection cleaned up");
+            }
         }
+        Ok(())
     }
 
     pub fn get_db_path(&self, name: &str) -> String {
@@ -241,6 +272,24 @@ impl DbRegistryManager {
                 is_active: pools.contains_key(&e.name),
             })
             .collect())
+    }
+
+    /// Signal the cleanup loop to stop and await its exit (with a 5-second timeout).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `Mutex` is poisoned (only possible if another holder panicked while locked).
+    pub async fn shutdown(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.cancel_notify.notify_one();
+        let handle = self.cleanup_handle.lock().unwrap().take();
+        if let Some(handle) = handle {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+                Ok(Ok(())) => info!(target: "db", "DbRegistry cleanup loop exited cleanly"),
+                Ok(Err(e)) => warn!(target: "db", error = %e, "DbRegistry cleanup loop task panicked"),
+                Err(_) => warn!(target: "db", "DbRegistry cleanup loop did not exit within 5s timeout"),
+            }
+        }
     }
 }
 

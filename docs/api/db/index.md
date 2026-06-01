@@ -17,8 +17,7 @@ Db 命名空间允许在服务端创建和管理多个独立的 SQLite 数据库
 | [update](./crud.md#update)          | 重命名数据库              | `Db::Update`  |
 | [delete](./crud.md#delete)          | 删除数据库并清理文件          | `Db::Delete`  |
 | [list](./crud.md#list)              | 列出所有数据库             | `Db::List`    |
-| [exec_sql](./crud.md#exec-sql)      | 执行原始 SQL（允许参数和复合语句） | `Db::ExecSql` |
-| [exec_templating](./crud.md#exec-templating) | 参数化 SQL 执行，参数必须为数组  | `Db::ExecSql` |
+| [exec_sql](./crud.md#exec-sql)      | 执行 SQL（支持参数化查询） | `Db::ExecSql` |
 
 ## 数据库存储
 
