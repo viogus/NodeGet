@@ -1,5 +1,5 @@
 use crate::entity::db_registry;
-use crate::rpc::db::auth::check_db_permission;
+use crate::rpc::db::auth::{check_db_permission, validate_db_name};
 use crate::rpc::{to_rpc_error, token_identity};
 use crate::{db_registry::DbRegistryManager, get_db};
 use jsonrpsee::core::RpcResult;
@@ -14,6 +14,7 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
     let process_logic = async {
         check_db_permission(&token, &name, DbPermission::Delete).await?;
+        validate_db_name(&name)?;
 
         let db = get_db().ok_or_else(|| {
             NodegetError::DatabaseError("Main database not initialized".to_owned())

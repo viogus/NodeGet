@@ -36,7 +36,7 @@ pub async fn init_db_connection(config: DbConnectionConfig) -> anyhow::Result<()
     info!(target: "db", "initializing database connection");
 
     let mut opt = ConnectOptions::new(&config.database_url);
-    opt.sqlx_logging_level(LevelFilter::Trace)
+    opt.sqlx_logging_level(LevelFilter::Warn)
         .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
         .acquire_timeout(Duration::from_millis(config.acquire_timeout_ms))
         .idle_timeout(Duration::from_millis(config.idle_timeout_ms))
@@ -68,10 +68,16 @@ pub async fn init_db_connection(config: DbConnectionConfig) -> anyhow::Result<()
     info!(target: "db", "Migrations applied successfully");
 
     if db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
-        let _ = db
-            .execute_unprepared("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-            .await;
-        info!(target: "db", "SQLite WAL mode enabled");
+        db.execute_unprepared("PRAGMA journal_mode=WAL;")
+            .await
+            .map_err(|e| {
+                error!(target: "db", error = %e, "Failed to enable WAL mode");
+                e
+            })?;
+        db.execute_unprepared("PRAGMA synchronous=NORMAL;").await?;
+        db.execute_unprepared("PRAGMA busy_timeout = 5000;").await?;
+        db.execute_unprepared("PRAGMA foreign_keys = ON;").await?;
+        info!(target: "db", "SQLite PRAGMAs applied: WAL, synchronous=NORMAL, busy_timeout=5000, foreign_keys=ON");
     }
 
     set_db(db);

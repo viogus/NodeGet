@@ -32,7 +32,9 @@ pub fn get_db() -> Option<&'static sea_orm::DatabaseConnection> {
 
 /// Set the global database connection. Called once during server startup.
 pub fn set_db(conn: sea_orm::DatabaseConnection) {
-    let _ = DB.set(conn);
+    if DB.set(conn).is_err() {
+        tracing::warn!(target: "db", "set_db called twice; new connection discarded (OnceLock already set)");
+    }
 }
 
 // ── Server-only modules ─────────────────────────────────────────────

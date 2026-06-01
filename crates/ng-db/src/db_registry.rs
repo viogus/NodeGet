@@ -71,27 +71,38 @@ impl DbRegistryManager {
         let db_base = self.db_path.trim_end_matches('/');
         let mut pools = self.pools.write().await;
         for entry in entries {
-            let db_url = format!("sqlite://{db_base}/{}.db?mode=rwc", entry.name);
+            let name = &entry.name;
+            let valid = !name.is_empty()
+                && name.len() <= 128
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+                && name != "."
+                && name != "..";
+            if !valid {
+                warn!(target: "db", name = %name, "Skipping db_registry entry with invalid name during seed");
+                continue;
+            }
+            let db_url = format!("sqlite://{db_base}/{name}.db?mode=rwc");
             match Database::connect(&db_url).await {
                 Ok(conn) => {
                     if conn.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
-                        let _ = conn
-                            .execute_unprepared(
-                                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
-                            )
-                            .await;
+                        let _ = conn.execute_unprepared("PRAGMA journal_mode=WAL;").await;
+                        let _ = conn.execute_unprepared("PRAGMA synchronous=NORMAL;").await;
+                        let _ = conn.execute_unprepared("PRAGMA busy_timeout = 5000;").await;
+                        let _ = conn.execute_unprepared("PRAGMA foreign_keys = ON;").await;
                     }
                     pools.insert(
-                        entry.name.clone(),
+                        name.clone(),
                         Arc::new(TrackedConnection {
                             conn,
                             last_used_ms: AtomicU64::new(now_ms_u64()),
                         }),
                     );
-                    info!(target: "db", name = %entry.name, "Restored database connection from registry");
+                    info!(target: "db", name = %name, "Restored database connection from registry");
                 }
                 Err(e) => {
-                    error!(target: "db", name = %entry.name, error = %e, "Failed to restore database connection");
+                    error!(target: "db", name = %name, error = %e, "Failed to restore database connection");
                 }
             }
         }
@@ -181,7 +192,9 @@ impl DbRegistryManager {
         let conn = Database::connect(&db_url).await?;
         if conn.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
             let _ = conn
-                .execute_unprepared("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+                .execute_unprepared(
+                    "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;",
+                )
                 .await;
         }
         let now_ms = now_ms_u64() as i64;
@@ -235,18 +248,25 @@ impl DbRegistryManager {
             .one(main_db)
             .await?
         {
-            let _ = dbreg_entity::Entity::delete_by_id(model.id)
+            if let Err(e) = dbreg_entity::Entity::delete_by_id(model.id)
                 .exec(main_db)
-                .await;
+                .await
+            {
+                warn!(target: "db", name = %name, error = %e, "Failed to delete db_registry row");
+            }
         }
         let db_file = self.get_db_path(name);
         if std::path::Path::new(&db_file).exists() {
-            let _ = std::fs::remove_file(&db_file);
+            if let Err(e) = std::fs::remove_file(&db_file) {
+                warn!(target: "db", path = %db_file, error = %e, "Failed to delete db file");
+            }
         }
         for ext in &["-wal", "-shm"] {
             let f = format!("{db_file}{ext}");
             if std::path::Path::new(&f).exists() {
-                let _ = std::fs::remove_file(&f);
+                if let Err(e) = std::fs::remove_file(&f) {
+                    warn!(target: "db", path = %f, error = %e, "Failed to delete WAL/SHM file");
+                }
             }
         }
         info!(target: "db", name = %name, "Database connection removed and files cleaned");
