@@ -5,7 +5,7 @@
 //! - `js_runner` / `js_runner_source_mode` —— 一次性 JS 执行（用完即弃 Runtime）
 //! - `compile_js_module_to_bytecode` —— JS 模块编译为 `QuickJS` 字节码
 //! - `init_js_runtime_globals` —— 注入 `nodeget()`、`fetch`、`execSql` 等全局 API
-//! - `spawn_kill_watchdog` —— OS 线程看门狗，打断 CPU 密集的 JS 无限循环
+//! - `register_watchdog` —— 常驻看门狗线程管理器，打断 CPU 密集的 JS 无限循环
 //!
 //! 与 `runtime_pool` 模块的区别：此模块的执行器创建临时 Runtime，执行完毕后销毁；
 //! `runtime_pool` 维护持久化的 Worker 池，字节码缓存避免重复加载。
@@ -19,6 +19,7 @@ use serde_json::Value;
 use std::ffi::CString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{OnceLock, mpsc};
 use tracing::{debug, error, trace};
 use uuid::Uuid;
 
@@ -120,7 +121,7 @@ pub(crate) async fn apply_runtime_limits(rt: &AsyncRuntime, limits: RuntimeLimit
 ///
 /// `QuickJS` 会在 JS 解释循环的检查点（function 调用、循环边、指令数等）
 /// 回调 handler。返回 true 则 `QuickJS` 抛一个"不可捕获异常"，`try/catch`
-/// 抓不住，脚本会被真正终止。我们把 flag 拿在外面：看门狗 OS 线程超时后
+/// 抓不住，脚本会被真正终止。我们把 flag 拿在外面：看门狗常驻线程超时后
 /// `store(true)`，`QuickJS` 下一个检查点就被打断。
 ///
 /// 这样即便脚本里写的是 `while(true){}` 这种无 await 纯 CPU 循环，也能被杀。
@@ -129,31 +130,125 @@ pub(crate) async fn install_kill_handler(rt: &AsyncRuntime, kill_flag: Arc<Atomi
         .await;
 }
 
-/// 启动硬超时看门狗：独立 OS 线程，到时间仍未被 cancel 就 `store(true)`。
-///
-/// 关键点：rquickjs 的 `async_with` 在执行同步 JS（纯 CPU 循环）时会阻塞
-/// 整个 tokio task，`tokio::time::timeout` 打不断，必须由一个**不在 tokio
-/// 里**的看门狗来 set `kill_flag，让` `QuickJS` interrupt handler 在下个检查
-/// 点读到 true 抛异常，才能真正硬杀 CPU 密集脚本。
-///
-/// 返回 `(cancel_tx, join_handle)`；执行成功结束时 drop `cancel_tx`（或
-/// `send(())`）让看门狗线程立即退出，再 `join_handle.join()` 回收。
-pub(crate) fn spawn_kill_watchdog(
+// ── 全局看门狗管理器 ────────────────────────────────────────────────
+// 每次 JS 执行不再 spawn/join 一个独立 OS 线程，而是向常驻看门狗线程注册
+// 监控请求。避免高频执行场景下反复创建销毁 OS 线程的开销。
+//
+// 看门狗线程循环：
+// 1. 非阻塞 try_recv 收集所有 Register 请求
+// 2. 找到最近的 deadline，sleep 到该 deadline（或被新 Register 唤醒）
+// 3. 检查所有已到期请求，设置 kill_flag
+// 4. 清理已取消的请求（cancel_tx drop 后 cancel_rx 返回 Disconnected）
+
+/// 看门狗线程中一条活跃监控记录。
+struct ActiveWatch {
+    deadline_ms: u64,
     kill_flag: Arc<AtomicBool>,
-    duration: std::time::Duration,
-) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
-    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
-    let handle = std::thread::Builder::new()
-        .name("js-runner-watchdog".to_owned())
+    /// 当 `cancel_tx` drop 时，`try_recv` 返回 `Disconnected`，表示执行完成、取消监控。
+    cancel_rx: mpsc::Receiver<()>,
+}
+
+/// 看门狗请求：向常驻看门狗线程注册一条监控。
+struct WatchdogRegister {
+    deadline_ms: u64,
+    kill_flag: Arc<AtomicBool>,
+    cancel_rx: mpsc::Receiver<()>,
+}
+
+/// 全局看门狗管理器，持有向常驻看门狗线程发送注册请求的通道。
+struct WatchdogManager {
+    sender: mpsc::Sender<WatchdogRegister>,
+}
+
+impl WatchdogManager {
+    /// 注册一个看门狗监控请求，返回 `cancel_tx`。
+    /// 执行完成后 `drop` `cancel_tx` 或 `send(())` 即可取消监控。
+    fn register(&self, kill_flag: Arc<AtomicBool>, duration: std::time::Duration) -> mpsc::Sender<()> {
+        let deadline_ms = now_ms() + duration.as_millis() as u64;
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+        // 注册失败（看门狗线程已退出）不影响正确性——看门狗是尽力辅助
+        let _ = self.sender.send(WatchdogRegister {
+            deadline_ms,
+            kill_flag,
+            cancel_rx,
+        });
+        cancel_tx
+    }
+}
+
+/// 当前时间戳（ms since epoch），用于 deadline 计算。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// 启动常驻看门狗线程，返回管理器。
+fn init_watchdog_manager() -> WatchdogManager {
+    let (req_tx, req_rx) = mpsc::channel::<WatchdogRegister>();
+
+    std::thread::Builder::new()
+        .name("js-watchdog-manager".to_owned())
         .spawn(move || {
-            // recv_timeout 返回 Err(Timeout) = 到点未被取消 -> 置 flag
-            // 返回 Ok(_) 或 Err(Disconnected) = 被取消 / sender drop -> 正常退出
-            if cancel_rx.recv_timeout(duration) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-                kill_flag.store(true, Ordering::Relaxed);
+            let mut active: Vec<ActiveWatch> = Vec::new();
+
+            loop {
+                // 1. 非阻塞收集所有新注册请求
+                loop {
+                    match req_rx.try_recv() {
+                        Ok(reg) => active.push(ActiveWatch {
+                            deadline_ms: reg.deadline_ms,
+                            kill_flag: reg.kill_flag,
+                            cancel_rx: reg.cancel_rx,
+                        }),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    }
+                }
+
+                // 2. 清理已取消的请求（cancel_tx 被 drop -> Disconnected）
+                active.retain(|w| w.cancel_rx.try_recv() != Err(mpsc::TryRecvError::Disconnected));
+
+                // 3. 找到最近的 deadline
+                let nearest = active.iter().map(|w| w.deadline_ms).min();
+
+                // 4. Sleep 到最近的 deadline（或短间隔以检查新请求）
+                let sleep_ms = match nearest {
+                    Some(d) => (d.saturating_sub(now_ms())).min(50),
+                    None => 50, // 无活跃请求，短轮询间隔
+                };
+                if sleep_ms > 0 {
+                    let _ = req_rx.recv_timeout(std::time::Duration::from_millis(sleep_ms));
+                }
+
+                // 5. 检查已到期的请求，设置 kill_flag 并移除
+                let now = now_ms();
+                active.retain(|w| {
+                    if w.deadline_ms <= now {
+                        w.kill_flag.store(true, Ordering::Relaxed);
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
         })
-        .expect("failed to spawn js-runner-watchdog OS thread");
-    (cancel_tx, handle)
+        .expect("failed to spawn js-watchdog-manager OS thread");
+
+    WatchdogManager { sender: req_tx }
+}
+
+/// 全局看门狗管理器单例。
+static WATCHDOG_MANAGER: OnceLock<WatchdogManager> = OnceLock::new();
+
+/// 注册看门狗监控请求。返回 `cancel_tx`——执行完成后 `drop` 或 `send(())` 取消监控。
+///
+/// 语义与原 `spawn_kill_watchdog` 一致：到时间仍未被 cancel 就 `store(true)`。
+/// 区别是使用常驻看门狗线程，不再每次 spawn/join。
+pub(crate) fn register_watchdog(kill_flag: Arc<AtomicBool>, duration: std::time::Duration) -> mpsc::Sender<()> {
+    let manager = WATCHDOG_MANAGER.get_or_init(init_watchdog_manager);
+    manager.register(kill_flag, duration)
 }
 
 /// 构造一个带有阶段标识的 `rquickjs::Error`，用于统一错误来源标记。
@@ -179,6 +274,112 @@ pub fn format_js_error(err: &Error) -> String {
         other => other.to_string(),
     }
 }
+
+/// `init_js_runtime_globals` 中注入的 JS 包装代码。
+///
+/// 约 100 行 JS，每次创建 `QuickJS` 上下文时都要 `eval`。`rquickjs` 不直接支持
+/// `Ctx::eval_bytecode()`，因此暂时保留 `ctx.eval()`。未来可改用 Module
+/// 字节码预编译路径来消除重复解析开销。
+static GLOBALS_JS: &str = r#"
+globalThis.nodeget = async (...args) => {
+    let input;
+    if (args.length <= 1) {
+        const json = args[0];
+        input = typeof json === 'string' ? json : JSON.stringify(json);
+    } else {
+        const method = args[0];
+        const params = args[1];
+        const id = args.length >= 3 ? args[2] : globalThis.randomUUID();
+        input = JSON.stringify({ jsonrpc: "2.0", method, params, id });
+    }
+    const raw = await globalThis.__nodeget_rpc_raw(input);
+    return JSON.parse(raw);
+};
+globalThis.__nodeget_inline_call = async (name, paramsJson, timeoutSec, caller) => {
+    const raw = await globalThis.__nodeget_inline_call_raw(name, paramsJson, timeoutSec, caller);
+    return JSON.parse(raw);
+};
+globalThis.execSql = async (token, sql, params) => {
+    const resp = await nodeget("nodeget-server_exec_sql", {
+        token: token,
+        sql: sql,
+        params: params !== undefined && params !== null ? params : null
+    });
+    if (resp.error) throw new Error(resp.error.message);
+    return resp.result;
+};
+globalThis.getDatabaseType = async (token) => {
+    const resp = await nodeget("nodeget-server_get_database_type", {
+        token: token
+    });
+    if (resp.error) throw new Error(resp.error.message);
+    return resp.result;
+};
+// Timer tracking: wrap setTimeout/setInterval/setImmediate to track IDs
+// for cleanup after handler execution (prevents idle() hang from uncleared timers).
+const __nodeget_timer_ids = [];
+const __origST = globalThis.setTimeout;
+const __origSI = globalThis.setInterval;
+const __origSIM = globalThis.setImmediate;
+globalThis.setTimeout = (cb, delay, ...args) => {
+    const id = __origST(cb, delay, ...args);
+    __nodeget_timer_ids.push(id);
+    return id;
+};
+globalThis.setInterval = (cb, delay, ...args) => {
+    // Enforce minimum 4ms interval (browser spec), prevents 250Hz CPU burn
+    const id = __origSI(cb, Math.max(delay || 0, 4), ...args);
+    __nodeget_timer_ids.push(id);
+    return id;
+};
+globalThis.setImmediate = (cb, ...args) => {
+    const id = __origSIM(cb, ...args);
+    __nodeget_timer_ids.push(id);
+    return id;
+};
+globalThis.__nodeget_clear_all_timers = () => {
+    let limit = 100;
+    while (__nodeget_timer_ids.length > 0 && limit-- > 0) {
+        const ids = __nodeget_timer_ids.splice(0);
+        for (const id of ids) { clearTimeout(id); clearInterval(id); }
+    }
+};
+globalThis.db = {
+    async create(token, name) {
+        const resp = await nodeget("db_create", { token, name });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+    async read(token, name) {
+        const resp = await nodeget("db_read", { token, name });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+    async update(token, name, newName) {
+        const resp = await nodeget("db_update", { token, name, new_name: newName });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+    async remove(token, name) {
+        const resp = await nodeget("db_delete", { token, name });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+    async list(token) {
+        const resp = await nodeget("db_list", { token });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+    async execSql(token, name, sql, params) {
+        const resp = await nodeget("db_exec_sql", {
+            token, name, sql,
+            params: params !== undefined && params !== null ? params : null
+        });
+        if (resp.error) throw new Error(resp.error.message);
+        return resp.result;
+    },
+};
+"#;
 
 /// 初始化 JS 运行时全局 API。
 ///
@@ -213,108 +414,8 @@ pub(crate) fn init_js_runtime_globals(ctx: &Ctx<'_>) -> Result<(), Error> {
     )?;
     global.set("randomUUID", Func::from(|| Uuid::new_v4().to_string()))?;
     // Wrap raw functions to return parsed JS objects instead of JSON strings
-    ctx.eval::<(), _>(
-        r#"
-        globalThis.nodeget = async (...args) => {
-            let input;
-            if (args.length <= 1) {
-                const json = args[0];
-                input = typeof json === 'string' ? json : JSON.stringify(json);
-            } else {
-                const method = args[0];
-                const params = args[1];
-                const id = args.length >= 3 ? args[2] : globalThis.randomUUID();
-                input = JSON.stringify({ jsonrpc: "2.0", method, params, id });
-            }
-            const raw = await globalThis.__nodeget_rpc_raw(input);
-            return JSON.parse(raw);
-        };
-        globalThis.__nodeget_inline_call = async (name, paramsJson, timeoutSec, caller) => {
-            const raw = await globalThis.__nodeget_inline_call_raw(name, paramsJson, timeoutSec, caller);
-            return JSON.parse(raw);
-        };
-        globalThis.execSql = async (token, sql, params) => {
-            const resp = await nodeget("nodeget-server_exec_sql", {
-                token: token,
-                sql: sql,
-                params: params !== undefined && params !== null ? params : null
-            });
-            if (resp.error) throw new Error(resp.error.message);
-            return resp.result;
-        };
-        globalThis.getDatabaseType = async (token) => {
-            const resp = await nodeget("nodeget-server_get_database_type", {
-                token: token
-            });
-            if (resp.error) throw new Error(resp.error.message);
-            return resp.result;
-        };
-        // Timer tracking: wrap setTimeout/setInterval/setImmediate to track IDs
-        // for cleanup after handler execution (prevents idle() hang from uncleared timers).
-        const __nodeget_timer_ids = [];
-        const __origST = globalThis.setTimeout;
-        const __origSI = globalThis.setInterval;
-        const __origSIM = globalThis.setImmediate;
-        globalThis.setTimeout = (cb, delay, ...args) => {
-            const id = __origST(cb, delay, ...args);
-            __nodeget_timer_ids.push(id);
-            return id;
-        };
-        globalThis.setInterval = (cb, delay, ...args) => {
-            // Enforce minimum 4ms interval (browser spec), prevents 250Hz CPU burn
-            const id = __origSI(cb, Math.max(delay || 0, 4), ...args);
-            __nodeget_timer_ids.push(id);
-            return id;
-        };
-        globalThis.setImmediate = (cb, ...args) => {
-            const id = __origSIM(cb, ...args);
-            __nodeget_timer_ids.push(id);
-            return id;
-        };
-        globalThis.__nodeget_clear_all_timers = () => {
-            let limit = 100;
-            while (__nodeget_timer_ids.length > 0 && limit-- > 0) {
-                const ids = __nodeget_timer_ids.splice(0);
-                for (const id of ids) { clearTimeout(id); clearInterval(id); }
-            }
-        };
-        globalThis.db = {
-            async create(token, name) {
-                const resp = await nodeget("db_create", { token, name });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async read(token, name) {
-                const resp = await nodeget("db_read", { token, name });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async update(token, name, newName) {
-                const resp = await nodeget("db_update", { token, name, new_name: newName });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async remove(token, name) {
-                const resp = await nodeget("db_delete", { token, name });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async list(token) {
-                const resp = await nodeget("db_list", { token });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-            async execSql(token, name, sql, params) {
-                const resp = await nodeget("db_exec_sql", {
-                    token, name, sql,
-                    params: params !== undefined && params !== null ? params : null
-                });
-                if (resp.error) throw new Error(resp.error.message);
-                return resp.result;
-            },
-        };
-        "#,
-    )?;
+    // JS 代码已提取到 GLOBALS_JS 静态常量，避免每次内联大段字符串
+    ctx.eval::<(), _>(GLOBALS_JS)?;
     Ok(())
 }
 
@@ -617,6 +718,22 @@ pub fn prepare_invoke_globals(
     Ok(())
 }
 
+/// 执行完成后清理 `prepare_invoke_globals` 设置的全局变量，释放 JS 堆内存。
+///
+/// 将 `__nodeget_run_params`、`__nodeget_env` 等大对象设为 `null`，
+/// 让 `QuickJS` GC 在 `idle` 阶段回收这些引用的数据。
+fn cleanup_invoke_globals(ctx: &Ctx<'_>) {
+    // 清理大对象全局变量，释放 JS 堆内存；失败时静默忽略（Runtime 即将销毁）
+    ctx.eval::<(), _>(
+        r#"globalThis.__nodeget_run_params = null;
+        globalThis.__nodeget_env = null;
+        globalThis.__nodeget_entry = null;
+        globalThis.inlineCall = null;
+        globalThis.__nodeget_inline_caller = null;"#,
+    )
+    .ok();
+}
+
 /// 将 JS 返回值转换为 `serde_json::Value`。
 ///
 /// 处理三种情况：
@@ -752,39 +869,45 @@ pub fn js_runner(
                         invoke_promise.into_future::<JsValue<'_>>().await,
                     )?;
 
-                    resolve_invoke_result(&ctx, js_value)
+                    let result = resolve_invoke_result(&ctx, js_value);
+
+                    // 执行完成后清理全局变量，释放 JS 堆内存
+                    cleanup_invoke_globals(&ctx);
+
+                    result
                 })
                 .await;
 
             // 有界 idle：一次性 Runtime 执行后即销毁，但未清理的 setInterval
-            // 仍可能让 idle() 永远挂起。200ms 足够 GC 完成。
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(200), rt.idle()).await;
+            // 仍可能让 idle() 永远挂起。50ms 足够 GC 完成。
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), rt.idle()).await;
             js_result
         };
 
-        // 硬超时路径：OS 线程看门狗 + interrupt handler 打断 CPU 循环，
+        // 硬超时路径：常驻看门狗线程 + interrupt handler 打断 CPU 循环，
         // 外层 tokio::time::timeout 捕捉 async 路径上的挂起（await 点停在
         // 远端 I/O 等）。两层共同保障 max_run_time_ms 兜得住。
-        let (cancel_tx, watchdog) = spawn_kill_watchdog(Arc::clone(&kill_flag), effective_timeout);
+        let cancel_tx = register_watchdog(Arc::clone(&kill_flag), effective_timeout);
         let outcome = match tokio::time::timeout(effective_timeout, execute).await {
             Ok(result) => result,
             Err(_) => Err(js_error("js_runner", "JavaScript execution timed out")),
         };
 
-        // 执行完成或超时后，取消看门狗并回收线程
+        // 执行完成或超时后，取消看门狗监控（常驻线程自动清理，无需 join）
         let _ = cancel_tx.send(());
-        let _ = watchdog.join();
 
         // 释放 QuickJS 上下文——触发 GC 释放所有 JS 对象，包括 fetch()
         // 产生的 Response（其 Incoming body 可能未被 JS 代码消费）。Drop
         // Incoming 向 hyper 连接 task 发出异步关闭信号。
         drop(ctx);
 
-        // 给 tokio runtime 一个短窗口来处理上述关闭信号。
+        // Route 模式需要短窗口让 tokio runtime 处理 hyper 关闭信号，
         // 否则 current_thread runtime 在 block_on 返回后不再被轮询，
-        // TCP 连接将停留在 CLOSE_WAIT（远端已 FIN，本地未 FIN，
-        // Recv-Q 残留字节未被读取）。10ms 相对 30s 默认超时可忽略。
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // TCP 连接将停留在 CLOSE_WAIT。非 Route 模式（inline_call/cron）
+        // 无需此延迟——跳过以减少延迟。
+        if matches!(run_type, RunType::Route) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
 
         if kill_flag.load(Ordering::Relaxed) && outcome.is_err() {
             return Err(js_error(
@@ -873,26 +996,33 @@ pub fn js_runner_source_mode(
                         invoke_promise.into_future::<JsValue<'_>>().await,
                     )?;
 
-                    resolve_invoke_result(&ctx, js_value)
+                    let result = resolve_invoke_result(&ctx, js_value);
+
+                    // 执行完成后清理全局变量，释放 JS 堆内存
+                    cleanup_invoke_globals(&ctx);
+
+                    result
                 })
                 .await;
 
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(200), rt.idle()).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), rt.idle()).await;
             js_result
         };
 
-        let (cancel_tx, watchdog) = spawn_kill_watchdog(Arc::clone(&kill_flag), effective_timeout);
+        let cancel_tx = register_watchdog(Arc::clone(&kill_flag), effective_timeout);
         let outcome = match tokio::time::timeout(effective_timeout, execute).await {
             Ok(result) => result,
             Err(_) => Err(js_error("js_runner", "JavaScript execution timed out")),
         };
         let _ = cancel_tx.send(());
-        let _ = watchdog.join();
 
         // 同 js_runner()：释放 QuickJS 上下文以 drop 未消费的 fetch Response
-        // Incoming body，再 drain 让 hyper 连接 task 处理关闭信号。
+        // Incoming body。Route 模式需要短窗口让 hyper 连接 task 处理关闭信号，
+        // 非 Route 模式跳过此延迟。
         drop(ctx);
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        if matches!(run_type, RunType::Route) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
 
         if kill_flag.load(Ordering::Relaxed) && outcome.is_err() {
             return Err(js_error(

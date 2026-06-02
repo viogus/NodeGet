@@ -13,7 +13,7 @@
 use crate::server_runtime::{
     INVOKE_SCRIPT_JS, RuntimeLimits, apply_runtime_limits, enrich_exception, format_js_error,
     init_js_runtime_globals, install_kill_handler, js_error, prepare_invoke_globals,
-    resolve_invoke_result, spawn_kill_watchdog,
+    register_watchdog, resolve_invoke_result,
 };
 use crate::{RunType, RuntimePoolInfo, RuntimePoolWorkerInfo};
 use ng_core::utils::get_local_timestamp_ms_i64;
@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use tokio::sync::oneshot;
 use tracing::{debug, info, trace, warn};
@@ -30,7 +30,7 @@ use tracing::{debug, info, trace, warn};
 /// `runtime_clean_time` 为 None 时的哨兵值。
 const RUNTIME_CLEAN_TIME_NONE: i64 = -1;
 /// 空闲清理扫描间隔（ms）。
-const CLEANUP_INTERVAL_MS: u64 = 1_000;
+const CLEANUP_INTERVAL_MS: u64 = 5_000;
 
 /// 单个 Worker 线程内的运行时状态，持有 `QuickJS` `AsyncRuntime` 和 `AsyncContext`。
 struct RuntimeState {
@@ -51,16 +51,16 @@ struct RuntimeState {
 enum WorkerCommand {
     /// 执行脚本命令
     Execute {
-        /// `QuickJS` 字节码
-        bytecode: Vec<u8>,
+        /// `QuickJS` 字节码，`None` 表示与上次相同（复用缓存），`Some` 表示新字节码
+        bytecode: Option<Arc<Vec<u8>>>,
         /// 字节码哈希值，用于判断是否需要重新加载
         bytecode_hash: u64,
         /// 运行模式
         run_type: RunType,
-        /// 调用参数
-        params: Value,
-        /// 环境变量
-        env: Value,
+        /// 调用参数（`Arc` 共享避免克隆开销）
+        params: Arc<Value>,
+        /// 环境变量（`Arc` 共享避免克隆开销）
+        env: Arc<Value>,
         /// 本次执行的 `max_run_time`（ms）。heap/stack 已在 Worker 创建时固定，
         /// 这里只用于 per-call 硬超时看门狗。
         max_run_time_ms: u64,
@@ -76,14 +76,16 @@ enum WorkerCommand {
 struct RuntimeWorkerHandle {
     /// Worker 对应的脚本名称
     script_name: String,
-    /// 命令发送通道
-    sender: std::sync::mpsc::Sender<WorkerCommand>,
+    /// 命令发送通道（有界，防止背压失控）
+    sender: std::sync::mpsc::SyncSender<WorkerCommand>,
     /// 当前活跃请求数（原子计数）
     active_requests: AtomicUsize,
     /// 上次使用时间（ms，unix epoch）
     last_used_ms: AtomicI64,
     /// 运行时清理时间阈值（ms），负值表示永不清理
     runtime_clean_time_ms: AtomicI64,
+    /// 上次发送的字节码哈希值，0 表示未发送过（用于判断是否可省略 bytecode 传输）
+    last_bytecode_hash: AtomicU64,
 }
 
 impl RuntimeWorkerHandle {
@@ -109,9 +111,10 @@ impl RuntimeWorkerHandle {
     ///
     /// 内部步骤：
     /// 1. 原子递增 `active_requests`，RAII guard 保证退出时递减
-    /// 2. 计算字节码哈希，构造 `WorkerCommand::Execute` 发送到 Worker 线程
-    /// 3. 等待 oneshot 通道返回结果
-    /// 4. 更新 `last_used_ms` 时间戳
+    /// 2. 计算字节码哈希，若与缓存相同则不发送字节码（Worker 端复用）
+    /// 3. 构造 `WorkerCommand::Execute` 用 `try_send` 发送到 Worker 线程
+    /// 4. 等待 oneshot 通道返回结果
+    /// 5. 更新 `last_used_ms` 时间戳
     async fn execute(
         &self,
         bytecode: Vec<u8>,
@@ -121,25 +124,37 @@ impl RuntimeWorkerHandle {
         max_run_time_ms: u64,
     ) -> anyhow::Result<Value> {
         trace!(target: "js_runtime", "sending execute command to worker");
-        self.active_requests.fetch_add(1, Ordering::SeqCst);
+        self.active_requests.fetch_add(1, Ordering::AcqRel);
         let _guard = ActiveRequestGuard(&self.active_requests);
 
         let send_result = (|| {
             let bytecode_hash = hash_bytes(&bytecode);
             let (response_tx, response_rx) = oneshot::channel();
+
+            // 若哈希与上次相同，发送 None 让 Worker 复用缓存字节码，省略传输
+            let last_hash = self.last_bytecode_hash.load(Ordering::Acquire);
+            let bytecode_opt = if last_hash == bytecode_hash {
+                None
+            } else {
+                Some(Arc::new(bytecode))
+            };
+
             let cmd = WorkerCommand::Execute {
-                bytecode,
+                bytecode: bytecode_opt,
                 bytecode_hash,
                 run_type,
-                params,
-                env,
+                params: Arc::new(params),
+                env: Arc::new(env),
                 max_run_time_ms,
                 response_tx,
             };
 
             self.sender
-                .send(cmd)
-                .map_err(|_| anyhow::anyhow!("Runtime worker channel closed"))?;
+                .try_send(cmd)
+                .map_err(|_| anyhow::anyhow!("Worker queue full, request rejected"))?;
+
+            // 发送成功后更新哈希缓存
+            self.last_bytecode_hash.store(bytecode_hash, Ordering::Release);
 
             Ok(response_rx)
         })();
@@ -152,7 +167,7 @@ impl RuntimeWorkerHandle {
         };
 
         match get_local_timestamp_ms_i64() {
-            Ok(now) => self.last_used_ms.store(now, Ordering::Relaxed),
+            Ok(now) => self.last_used_ms.store(now, Ordering::Release),
             Err(e) => {
                 warn!(target: "js_runtime", error = %e, "Failed to read local timestamp for runtime worker");
             }
@@ -170,7 +185,7 @@ struct ActiveRequestGuard<'a>(&'a AtomicUsize);
 
 impl Drop for ActiveRequestGuard<'_> {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -179,6 +194,22 @@ impl Drop for ActiveRequestGuard<'_> {
 pub struct JsRuntimePool {
     /// Worker 名称 → 句柄的映射表，RwLock 保护并发读写
     workers: RwLock<HashMap<String, Arc<RuntimeWorkerHandle>>>,
+}
+
+/// `RwLock` 中毒恢复：读锁。
+fn recover_read(lock: &RwLock<HashMap<String, Arc<RuntimeWorkerHandle>>>) -> std::sync::RwLockReadGuard<'_, HashMap<String, Arc<RuntimeWorkerHandle>>> {
+    lock.read().unwrap_or_else(|e| {
+        tracing::warn!("workers RwLock poisoned during read, recovering");
+        e.into_inner()
+    })
+}
+
+/// `RwLock` 中毒恢复：写锁。
+fn recover_write(lock: &RwLock<HashMap<String, Arc<RuntimeWorkerHandle>>>) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Arc<RuntimeWorkerHandle>>> {
+    lock.write().unwrap_or_else(|e| {
+        tracing::warn!("workers RwLock poisoned during write, recovering");
+        e.into_inner()
+    })
 }
 
 impl JsRuntimePool {
@@ -225,6 +256,8 @@ impl JsRuntimePool {
     }
 
     /// 获取或初始化 Worker，使用 double-check locking 避免重复创建。
+    ///
+    /// 将 `spawn_worker()` 移入写锁内部，避免并发时创建后被丢弃的 Worker。
     #[allow(clippy::significant_drop_tightening)]
     fn get_or_init_worker(
         &self,
@@ -233,34 +266,25 @@ impl JsRuntimePool {
     ) -> anyhow::Result<Arc<RuntimeWorkerHandle>> {
         debug!(target: "js_runtime", script_name = %script_name, "getting or initializing worker");
         {
-            let workers = self.workers.read().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let workers = recover_read(&self.workers);
             if let Some(worker) = workers.get(script_name).cloned() {
                 return Ok(worker);
             }
         }
 
-        // 先创建 Worker（不持锁），再 double-check
-        let worker = spawn_worker(script_name, limits)?;
-
         {
-            let workers = self.workers.read().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut workers = recover_write(&self.workers);
+
+            // 写锁内最终检查，防止并发创建
             if let Some(existing) = workers.get(script_name).cloned() {
                 return Ok(existing);
             }
+
+            // 在写锁内 spawn，避免竞态创建后丢弃
+            let worker = spawn_worker(script_name, limits)?;
+            workers.insert(script_name.to_owned(), Arc::clone(&worker));
+            Ok(worker)
         }
-
-        let mut workers = match self.workers.write() {
-            Ok(guard) => guard,
-            Err(e) => return Err(anyhow::anyhow!("{e}")),
-        };
-
-        // 写锁内最终检查，防止并发创建
-        if let Some(existing) = workers.get(script_name).cloned() {
-            return Ok(existing);
-        }
-
-        workers.insert(script_name.to_owned(), Arc::clone(&worker));
-        Ok(worker)
     }
 
     /// 清理空闲超时的 Worker。
@@ -273,8 +297,9 @@ impl JsRuntimePool {
             0
         });
 
-        let candidates: Vec<String> = match self.workers.read() {
-            Ok(workers) => workers
+        let candidates: Vec<String> = {
+            let workers = recover_read(&self.workers);
+            workers
                 .iter()
                 .filter_map(|(name, worker)| {
                     let clean_ms = worker.runtime_clean_time()?;
@@ -283,7 +308,7 @@ impl JsRuntimePool {
                         return None;
                     }
 
-                    if worker.active_requests.load(Ordering::SeqCst) > 0 {
+                    if worker.active_requests.load(Ordering::Acquire) > 0 {
                         return None;
                     }
 
@@ -291,31 +316,21 @@ impl JsRuntimePool {
                         return None;
                     }
 
-                    let last_used = worker.last_used_ms.load(Ordering::Relaxed);
+                    let last_used = worker.last_used_ms.load(Ordering::Acquire);
                     if now.saturating_sub(last_used) >= clean_ms {
                         Some(name.clone())
                     } else {
                         None
                     }
                 })
-                .collect(),
-            Err(e) => {
-                warn!(target: "js_runtime", error = %e, "Runtime pool read lock poisoned during cleanup");
-                return;
-            }
+                .collect()
         };
 
         if candidates.is_empty() {
             return;
         }
 
-        let mut workers = match self.workers.write() {
-            Ok(guard) => guard,
-            Err(e) => {
-                warn!(target: "js_runtime", error = %e, "Runtime pool write lock poisoned during cleanup");
-                return;
-            }
-        };
+        let mut workers = recover_write(&self.workers);
 
         for name in candidates {
             let should_remove = workers.get(&name).is_some_and(|worker| {
@@ -327,7 +342,7 @@ impl JsRuntimePool {
                     return false;
                 }
 
-                if worker.active_requests.load(Ordering::SeqCst) > 0 {
+                if worker.active_requests.load(Ordering::Acquire) > 0 {
                     return false;
                 }
 
@@ -335,7 +350,7 @@ impl JsRuntimePool {
                     return false;
                 }
 
-                let last_used = worker.last_used_ms.load(Ordering::Relaxed);
+                let last_used = worker.last_used_ms.load(Ordering::Acquire);
                 now.saturating_sub(last_used) >= clean_ms
             });
 
@@ -354,12 +369,9 @@ impl JsRuntimePool {
     ///
     /// update 操作后调用此方法，确保下次执行时使用新配置重建 Worker。
     pub fn evict_worker(&self, script_name: &str) -> bool {
-        let removed = match self.workers.write() {
-            Ok(mut workers) => workers.remove(script_name),
-            Err(e) => {
-                warn!(target: "js_runtime", error = %e, "Runtime pool write lock poisoned during evict");
-                return false;
-            }
+        let removed = {
+            let mut workers = recover_write(&self.workers);
+            workers.remove(script_name)
         };
 
         removed.is_some_and(|worker| {
@@ -376,25 +388,22 @@ impl JsRuntimePool {
             warn!(target: "js_runtime", error = %e, "Failed to read local timestamp during runtime snapshot");
             0
         });
-        let workers = self
-            .workers
-            .read()
-            .map(|guard| {
-                guard
-                    .values()
-                    .map(|worker| {
-                        let last_used = worker.last_used_ms.load(Ordering::Relaxed);
-                        RuntimePoolWorkerInfo {
-                            script_name: worker.script_name.clone(),
-                            active_requests: worker.active_requests.load(Ordering::SeqCst),
-                            last_used_ms: last_used,
-                            idle_ms: now.saturating_sub(last_used),
-                            runtime_clean_time_ms: worker.runtime_clean_time(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let workers = {
+            let guard = recover_read(&self.workers);
+            guard
+                .values()
+                .map(|worker| {
+                    let last_used = worker.last_used_ms.load(Ordering::Acquire);
+                    RuntimePoolWorkerInfo {
+                        script_name: worker.script_name.clone(),
+                        active_requests: worker.active_requests.load(Ordering::Acquire),
+                        last_used_ms: last_used,
+                        idle_ms: now.saturating_sub(last_used),
+                        runtime_clean_time_ms: worker.runtime_clean_time(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
 
         RuntimePoolInfo {
             total_workers: workers.len(),
@@ -423,7 +432,7 @@ pub fn global_pool() -> &'static Arc<JsRuntimePool> {
 pub fn init_global_pool() -> &'static Arc<JsRuntimePool> {
     let pool = global_pool();
 
-    if !CLEANUP_LOOP_STARTED.swap(true, Ordering::SeqCst) {
+    if !CLEANUP_LOOP_STARTED.swap(true, Ordering::AcqRel) {
         let pool_for_task = Arc::clone(pool);
         tokio::spawn(async move {
             loop {
@@ -445,7 +454,7 @@ fn spawn_worker(
 ) -> anyhow::Result<Arc<RuntimeWorkerHandle>> {
     debug!(target: "js_runtime", script_name = %script_name, max_run_time_ms = limits.max_run_time_ms, max_stack_size_bytes = limits.max_stack_size_bytes, max_heap_size_bytes = limits.max_heap_size_bytes, "spawning new worker thread");
     let script_name = script_name.to_owned();
-    let (tx, rx) = std::sync::mpsc::channel::<WorkerCommand>();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<WorkerCommand>(256);
 
     let handle = Arc::new(RuntimeWorkerHandle {
         script_name: script_name.clone(),
@@ -456,6 +465,7 @@ fn spawn_worker(
             0
         })),
         runtime_clean_time_ms: AtomicI64::new(RUNTIME_CLEAN_TIME_NONE),
+        last_bytecode_hash: AtomicU64::new(0),
     });
 
     std::thread::Builder::new()
@@ -495,6 +505,8 @@ fn worker_loop(
     };
 
     let mut runtime_state: Option<RuntimeState> = None;
+    // 缓存上次发送的 bytecode Arc，避免相同字节码重复传输
+    let mut cached_bytecode: Option<Arc<Vec<u8>>> = None;
 
     for cmd in receiver {
         match cmd {
@@ -507,15 +519,25 @@ fn worker_loop(
                 max_run_time_ms,
                 response_tx,
             } => {
+                // bytecode: Some → 更新缓存；None → 复用上次
+                let effective_bytecode = match bytecode {
+                    Some(bc) => {
+                        cached_bytecode = Some(Arc::clone(&bc));
+                        bc
+                    }
+                    None => cached_bytecode.clone().unwrap_or_else(|| {
+                        Arc::new(Vec::new())
+                    }),
+                };
                 let exec_result = host_rt.block_on(async {
                     execute_on_worker(
                         &mut runtime_state,
                         script_name,
-                        bytecode,
+                        &effective_bytecode,
                         bytecode_hash,
                         run_type,
-                        params,
-                        env,
+                        &params,
+                        &env,
                         limits,
                         max_run_time_ms,
                     )
@@ -546,11 +568,11 @@ fn worker_loop(
 async fn execute_on_worker(
     runtime_state: &mut Option<RuntimeState>,
     script_name: &str,
-    bytecode: Vec<u8>,
+    bytecode: &[u8],
     bytecode_hash: u64,
     run_type: RunType,
-    params: Value,
-    env: Value,
+    params: &Value,
+    env: &Value,
     limits: RuntimeLimits,
     max_run_time_ms: u64,
 ) -> Result<Value, Error> {
@@ -564,7 +586,7 @@ async fn execute_on_worker(
         .ok_or_else(|| js_error("js_runtime", "Runtime state is missing"))?;
 
     // 每次执行前清 flag（上一轮超时留下的 true 会立刻打断新执行）
-    state.kill_flag.store(false, Ordering::Relaxed);
+    state.kill_flag.store(false, Ordering::Release);
 
     // 字节码哈希不同时需要重新加载模块
     if state.loaded_bytecode_hash != Some(bytecode_hash) {
@@ -600,8 +622,7 @@ async fn execute_on_worker(
     // 以 OS 线程看门狗启动硬超时；async_with 里可能卡在纯 CPU 循环上，
     // tokio::time::timeout 打不断它，必须靠 interrupt handler 读 kill_flag。
     let effective_timeout = std::time::Duration::from_millis(max_run_time_ms);
-    let (cancel_tx, watchdog) =
-        spawn_kill_watchdog(Arc::clone(&state.kill_flag), effective_timeout);
+    let cancel_tx = register_watchdog(Arc::clone(&state.kill_flag), effective_timeout);
 
     let run_future = state.ctx.async_with(async |ctx| {
         prepare_invoke_globals(
@@ -629,19 +650,18 @@ async fn execute_on_worker(
             Err(_) => Err(js_error("js_runner", "JavaScript execution timed out")),
         };
     let _ = cancel_tx.send(());
-    let _ = watchdog.join();
 
     // 判定是否是因为硬超时被 interrupt 打断。interrupt 会让 QuickJS 抛不可
     // 捕获异常，但 runtime 内部可能仍残留 pending jobs / 待清理的 promise
     // reactions。pool 场景下这个 AsyncRuntime 之后会继续服务新请求，残留
     // 状态可能影响下一次执行——最稳的做法是丢弃当前 state，下次调用走
     // `create_runtime_state` 重建一个干净的 runtime。
-    let killed_by_timeout = state.kill_flag.load(Ordering::Relaxed) && run_outcome.is_err();
+    let killed_by_timeout = state.kill_flag.load(Ordering::Acquire) && run_outcome.is_err();
 
     // 重置 kill_flag，避免 interrupt handler 打断后续的定时器清理操作。
     // killed 状态已保存在 `killed_by_timeout` 变量中。
     if killed_by_timeout {
-        state.kill_flag.store(false, Ordering::Relaxed);
+        state.kill_flag.store(false, Ordering::Release);
     }
 
     // 清除所有定时器，防止 idle() 因未清理的 setInterval 挂起，

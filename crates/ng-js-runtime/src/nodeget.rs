@@ -6,33 +6,14 @@
 use crate::js_worker_service::get_js_worker_service;
 use crate::server_runtime::js_error;
 use crate::spawn_on_server_runtime::spawn_on_server_runtime;
-use futures_util::future::join_all;
 use rquickjs::Error;
 use serde_json::value::RawValue;
 use std::result::Result as StdResult;
 use tracing::{debug, trace};
 
-/// 处理单条 JSON-RPC 请求。
-///
-/// 将请求字符串转发到 `RawJsonDispatcher::raw_json_request`，
-/// 通过 `spawn_on_server_runtime` 在服务器 Runtime 上执行。
-async fn raw_single_request(json: &str) -> StdResult<String, Error> {
-    trace!(target: "js_runtime", "processing raw JSON-RPC request from JS");
-    let json = json.to_owned();
-
-    let response = spawn_on_server_runtime(async move {
-        let rpc_module = get_js_worker_service().get_rpc_module().await;
-        let (resp, _stream) = rpc_module
-            .raw_json_request(&json, 16)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>(resp)
-    })
-    .await
-    .map_err(|e| js_error("jsonrpc_module", e))?;
-
-    response.map_err(|e| js_error("jsonrpc_module", e))
-}
+/// RPC 响应缓冲区大小。
+/// 足以容纳绝大多数 JSON-RPC 响应，避免因缓冲区过小导致截断重试。
+const RPC_BUF_SIZE: usize = 4096;
 
 /// 从 JS 上下文发起 `nodeget()` RPC 调用，返回响应 JSON 字符串。
 ///
@@ -40,8 +21,8 @@ async fn raw_single_request(json: &str) -> StdResult<String, Error> {
 ///
 /// 内部步骤：
 /// 1. 判断是否为批量请求（以 `[` 开头）
-/// 2. 批量请求：用 `RawValue` 避免解析-序列化-再解析的开销，并行执行所有子请求
-/// 3. 单条请求：直接转发到 `raw_single_request`
+/// 2. 批量请求：单次获取 RPC module 后分发所有子请求，避免每条子请求独立 spawn
+/// 3. 单条请求：直接通过 `spawn_on_server_runtime` 执行
 ///
 /// # Errors
 /// 若 JSON-RPC 请求执行失败，返回 `rquickjs::Error`。
@@ -49,30 +30,53 @@ pub async fn js_nodeget(json: String) -> StdResult<String, Error> {
     debug!(target: "js_runtime", "handling JS nodeget RPC call");
     let trimmed = json.trim();
 
-    // 批量请求：JSON 数组形式，并行处理每条子请求
+    // 批量请求：JSON 数组形式，单次获取 RPC module 后依次分发
     if trimmed.starts_with('[') {
         // 使用 RawValue 避免 parse→serialize→parse 的往返开销
         let items: Vec<Box<RawValue>> =
             serde_json::from_str(trimmed).map_err(|e| js_error("jsonrpc_parse", e.to_string()))?;
 
-        let futs: Vec<_> = items
-            .iter()
-            .map(|item| {
+        let items_len = items.len();
+        let results = spawn_on_server_runtime(async move {
+            let rpc_module = get_js_worker_service().get_rpc_module().await;
+            let mut results = Vec::with_capacity(items_len);
+            for item in &items {
                 let req_str = item.get();
-                async move { raw_single_request(req_str).await }
-            })
-            .collect();
-
-        let results = join_all(futs).await;
+                let (resp, _stream) = rpc_module
+                    .raw_json_request(req_str, RPC_BUF_SIZE)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                results.push(Ok::<_, String>(resp));
+            }
+            Ok::<_, String>(results)
+        })
+        .await
+        .map_err(|e| js_error("jsonrpc_module", e))?
+        .map_err(|e| js_error("jsonrpc_module", e))?;
 
         let mut responses = Vec::with_capacity(results.len());
         for result in results {
-            responses.push(result?);
+            responses.push(result.map_err(|e| js_error("jsonrpc_module", e))?);
         }
 
         Ok(format!("[{}]", responses.join(",")))
     } else {
         // 单条请求
-        raw_single_request(trimmed).await
+        trace!(target: "js_runtime", "processing raw JSON-RPC request from JS");
+        let json = trimmed.to_owned();
+
+        let response = spawn_on_server_runtime(async move {
+            let rpc_module = get_js_worker_service().get_rpc_module().await;
+            let (resp, _stream) = rpc_module
+                .raw_json_request(&json, RPC_BUF_SIZE)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(resp)
+        })
+        .await
+        .map_err(|e| js_error("jsonrpc_module", e))?
+        .map_err(|e| js_error("jsonrpc_module", e))?;
+
+        Ok(response)
     }
 }

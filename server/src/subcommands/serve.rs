@@ -1170,16 +1170,16 @@ impl ng_js_runtime::js_worker_service::JsWorkerService for JsWorkerServiceImpl {
     fn run_inline_call_and_record_result(
         &self,
         js_script_name: String,
-        params: serde_json::Value,
+        params_json: String,
         timeout_sec: Option<f64>,
         inline_caller: Option<String>,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send>,
+        Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>,
     > {
         Box::pin(async move {
             ng_js_worker::service::run_inline_call_and_record_result(
                 js_script_name,
-                params,
+                params_json,
                 timeout_sec,
                 inline_caller,
             )
