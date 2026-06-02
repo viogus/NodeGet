@@ -1,3 +1,5 @@
+//! `db.list` RPC 实现 — 列出所有用户数据库
+
 use crate::db_registry::DbRegistryManager;
 use crate::rpc::{auth_provider, to_rpc_error, token_identity};
 use jsonrpsee::core::RpcResult;
@@ -7,6 +9,14 @@ use ng_core::permission::token_auth::TokenOrAuth;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 列出所有已注册数据库
+///
+/// - `token` — 认证 Token
+/// - 返回值：包含所有 `DbInfo` 的列表
+///
+/// 内部步骤：
+/// 1. 解析 Token 并检查 `Db::List` 权限（Global 作用域）
+/// 2. 通过 `DbRegistryManager::list_all` 获取所有数据库信息
 pub async fn list(token: String) -> RpcResult<Box<RawValue>> {
     let (tk, un) = token_identity(&token);
 

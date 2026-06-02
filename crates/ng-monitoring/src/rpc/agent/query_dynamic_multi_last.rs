@@ -1,3 +1,9 @@
+//! `agent.dynamic_data_multi_last_query` RPC 实现。
+//!
+//! 批量查询多台设备的动态监控最新值。优先从内存 last-cache 获取，
+//! 缓存未命中的部分通过 UNION ALL 查询数据库，最后合并结果。
+//! 这种"部分命中合并"策略避免了全量 DB 查询。
+
 use crate::monitoring_last_cache::MonitoringLastCache;
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::DynamicDataQueryField;
@@ -22,6 +28,19 @@ use std::collections::HashSet;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+/// 批量查询多台设备的动态监控最新值。
+///
+/// - `token` — 身份认证凭据
+/// - `uuids` — 设备 UUID 列表（自动去重）
+/// - `fields` — 需要的字段列表
+/// - 返回值 — 最新记录的 JSON 数组
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `DynamicMonitoring::Read` 权限
+/// 2. UUID 去重并通过缓存转换为 `uuid_id`
+/// 3. 优先从 `MonitoringLastCache` 获取缓存命中
+/// 4. 缓存未命中的部分构建 UNION ALL 语句查询 DB
+/// 5. 合并缓存与 DB 结果，序列化返回
 pub async fn dynamic_data_multi_last_query(
     token: String,
     uuids: Vec<Uuid>,
@@ -178,6 +197,7 @@ pub async fn dynamic_data_multi_last_query(
     }
 }
 
+/// UUID 列表去重，保持原始顺序。
 fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     let mut seen = HashSet::with_capacity(uuids.len());
     let mut deduped = Vec::with_capacity(uuids.len());
@@ -191,6 +211,12 @@ fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     deduped
 }
 
+/// 为多台设备构建 UNION ALL 语句，每个子查询获取单台设备的最新一条记录。
+///
+/// - `uuid_id_pairs` — (UUID, `uuid_id`) 对列表
+/// - `fields` — 需要的字段列表
+/// - `db` — 数据库连接（用于获取数据库后端类型）
+/// - 返回值 — 编译后的 SQL Statement
 fn build_union_last_statement(
     uuid_id_pairs: &[(Uuid, i16)],
     fields: &[DynamicDataQueryField],
@@ -212,6 +238,10 @@ fn build_union_last_statement(
     ))
 }
 
+/// 为单台设备构建获取最新一条记录的 SELECT 语句。
+///
+/// 内层查询：按 `uuid_id` 过滤 + 按 `timestamp` DESC 排序 + LIMIT 1
+/// 外层查询：包装为子查询并选择需要的列（确保 UNION ALL 兼容性）
 fn build_single_last_select(uuid_id: i16, fields: &[DynamicDataQueryField]) -> SelectStatement {
     let inner_query = dynamic_monitoring::Entity::find()
         .select_only()
@@ -270,6 +300,14 @@ fn build_single_last_select(uuid_id: i16, fields: &[DynamicDataQueryField]) -> S
     wrapped.clone()
 }
 
+/// 流式执行 UNION ALL 语句查询，逐行处理并拼接 JSON 数组。
+///
+/// - `db` — 数据库连接
+/// - `statement` — SQL Statement
+/// - `field_mappings` — 列名→JSON 键名映射
+/// - `capacity_hint` — 预估结果行数
+/// - `uuid_cache` — UUID 缓存
+/// - 返回值 — JSON 数组的 `RawValue`
 async fn execute_statement_query(
     db: &DatabaseConnection,
     statement: Statement,

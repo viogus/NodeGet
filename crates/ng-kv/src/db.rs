@@ -1,3 +1,10 @@
+//! KV 数据库操作。
+//!
+//! 提供 KV 存储的数据库 CRUD 操作：
+//! - 命名空间管理（`create_kv`、`delete_kv`、`get_or_create_kv`、`list_all_namespaces`）
+//! - 键值对操作（`get_v_from_kv`、`set_v_to_kv`、`delete_key_from_kv`）
+//! - 批量查询（`get_keys_from_kv`、`get_kv_store`、`get_kv_store_optional`）
+
 use anyhow::{Context, Result};
 use ng_core::error::NodegetError;
 use ng_db::entity::kv;
@@ -10,6 +17,7 @@ use tracing::{debug, error, warn};
 
 use crate::KVStore;
 
+/// 命名空间标记 key，在单表模式中通过此 key 的存在标识一个命名空间已创建
 pub const NAMESPACE_MARKER_KEY: &str = "__nodeget_namespace_marker__";
 
 /// 获取数据库连接

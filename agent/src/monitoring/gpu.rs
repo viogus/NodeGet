@@ -1,26 +1,30 @@
+//! GPU 监控数据采集模块。
+//!
+//! 通过 NVML（NVIDIA Management Library）获取 GPU 的静态信息（型号、CUDA 核心数、架构）
+//! 与动态信息（显存、利用率、温度、时钟频率）。无 NVIDIA 驱动时返回空数据。
+
 use crate::monitoring::get_global_gpu;
 use ng_monitoring::data_structure::{DynamicGpuData, StaticGpuData};
 use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
 use tokio::sync::{Mutex, MutexGuard, OnceCell};
 
-// 从 GPU 获取的静态数据结构，包含 GPU 的基本信息
+/// 从 GPU 获取的静态数据结构，包含所有 GPU 的基本信息。
 #[derive(Debug)]
 pub struct StaticDataFromGpu(pub Vec<StaticGpuData>);
 
-// 全局静态 GPU 数据实例，用于缓存 GPU 静态信息
+/// 全局静态 GPU 数据实例，用于缓存 GPU 静态信息。
 static GLOBAL_STATIC_DATA_FROM_GPU: OnceCell<Mutex<StaticDataFromGpu>> = OnceCell::const_new();
 
 impl StaticDataFromGpu {
-    // 创建新的静态 GPU 数据实例
-    //
-    // 该函数通过 NVML 获取 GPU 的静态信息，如设备 ID、名称、CUDA 核心数和架构。
-    //
-    // NVML 本身是阻塞式 FFI 调用；这里用 `block_in_place` 将当前 worker
-    // 标记为阻塞，允许 runtime 把其它 async 任务重新调度到兄弟 worker，
-    // 避免在占有 `get_global_gpu()` 互斥锁期间拖慢整个 runtime。
-    //
-    // # 返回值
-    // 返回包含所有 GPU 静态数据的向量
+    /// 创建新的静态 GPU 数据实例。
+    ///
+    /// 通过 NVML 获取 GPU 的静态信息，如设备 ID、名称、CUDA 核心数和架构。
+    ///
+    /// NVML 本身是阻塞式 FFI 调用；这里用 `block_in_place` 将当前 worker
+    /// 标记为阻塞，允许 runtime 把其它 async 任务重新调度到兄弟 worker，
+    /// 避免在占有 `get_global_gpu()` 互斥锁期间拖慢整个 runtime。
+    ///
+    /// 返回包含所有 GPU 静态数据的向量。
     pub async fn new() -> Self {
         let nvml_mutex = get_global_gpu().await;
         let nvml_guard = nvml_mutex.lock().await;
@@ -54,12 +58,11 @@ impl StaticDataFromGpu {
         Self(data)
     }
 
-    // 获取静态 GPU 数据的可变引用
-    //
-    // 如果全局静态 GPU 数据实例不存在，则初始化它；否则直接返回现有的实例
-    //
-    // # 返回值
-    // 返回静态 GPU 数据的互斥锁保护的可变引用
+    /// 获取静态 GPU 数据的可变引用。
+    ///
+    /// 如果全局静态 GPU 数据实例不存在，则初始化它；否则直接返回现有的实例。
+    ///
+    /// 返回静态 GPU 数据的 `MutexGuard`。
     pub async fn get() -> MutexGuard<'static, Self> {
         let data_mutex = GLOBAL_STATIC_DATA_FROM_GPU
             .get_or_init(|| async { Mutex::new(Self::new().await) })
@@ -69,21 +72,20 @@ impl StaticDataFromGpu {
     }
 }
 
-// 从 GPU 获取的动态数据结构，包含 GPU 的实时性能数据
+/// 从 GPU 获取的动态数据结构，包含所有 GPU 的实时性能数据。
 #[derive(Debug)]
 pub struct DynamicDataFromGpu(pub Vec<DynamicGpuData>);
 
-// 全局动态 GPU 数据实例，用于缓存 GPU 动态信息
+/// 全局动态 GPU 数据实例，用于缓存 GPU 动态信息。
 static GLOBAL_DYNAMIC_DATA_FROM_GPU: OnceCell<Mutex<DynamicDataFromGpu>> = OnceCell::const_new();
 
 impl DynamicDataFromGpu {
-    // 创建新的动态 GPU 数据实例
-    //
-    // 该函数通过 NVML 获取 GPU 的动态信息，如显存使用情况、利用率、温度和时钟频率。
-    // NVML 调用是阻塞式 FFI，这里使用 `block_in_place` 避免持锁期间卡住 runtime。
-    //
-    // # 返回值
-    // 返回包含所有 GPU 动态数据的向量
+    /// 创建新的动态 GPU 数据实例。
+    ///
+    /// 通过 NVML 获取 GPU 的动态信息，如显存使用情况、利用率、温度和时钟频率。
+    /// NVML 调用是阻塞式 FFI，这里使用 `block_in_place` 避免持锁期间卡住 runtime。
+    ///
+    /// 返回包含所有 GPU 动态数据的向量。
     async fn new() -> Self {
         let nvml_mutex = get_global_gpu().await;
         let data = {
@@ -126,12 +128,12 @@ impl DynamicDataFromGpu {
         Self(data)
     }
 
-    // 更新动态 GPU 数据
-    //
-    // 该函数刷新现有 GPU 数据，更新显存使用情况、利用率、温度和时钟频率等信息。
-    //
-    // 若 NVML 报告的设备数量超过当前缓存，额外的 GPU 会以默认值追加到尾部（#55 增量枚举），
-    // 以支持虚拟化场景下 vGPU 的热增。已存在的 GPU 条目不会重建，避免 FFI 反复读取静态字段。
+    /// 更新动态 GPU 数据。
+    ///
+    /// 刷新现有 GPU 数据，更新显存使用情况、利用率、温度和时钟频率等信息。
+    ///
+    /// 若 NVML 报告的设备数量超过当前缓存，额外的 GPU 会以默认值追加到尾部（#55 增量枚举），
+    /// 以支持虚拟化场景下 vGPU 的热增。已存在的 GPU 条目不会重建，避免 FFI 反复读取静态字段。
     async fn update(&mut self) {
         let nvml_mutex = get_global_gpu().await;
         let nvml_guard = nvml_mutex.lock().await;
@@ -203,12 +205,11 @@ impl DynamicDataFromGpu {
         });
     }
 
-    // 异步刷新并获取动态 GPU 数据
-    //
-    // 如果全局动态 GPU 数据实例不存在，则初始化它；否则更新现有数据并返回
-    //
-    // # 返回值
-    // 返回动态 GPU 数据的互斥锁保护的可变引用
+    /// 异步刷新并获取动态 GPU 数据。
+    ///
+    /// 如果全局动态 GPU 数据实例不存在，则初始化它；否则更新现有数据并返回。
+    ///
+    /// 返回动态 GPU 数据的 `MutexGuard`。
     pub async fn refresh_and_get() -> MutexGuard<'static, Self> {
         let data_mutex = GLOBAL_DYNAMIC_DATA_FROM_GPU
             .get_or_init(|| async { Mutex::new(Self::new().await) })

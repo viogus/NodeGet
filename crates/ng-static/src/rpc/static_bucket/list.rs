@@ -1,9 +1,18 @@
+//! `static-bucket.list` RPC 实现。
+//!
+//! 职责：鉴权（仅 SuperToken 可调用） -> 调用业务层 -> 序列化返回。
+
 use super::auth::check_super_token;
 use crate::ops::list_all_names;
 use ng_core::error::NodegetError;
 use serde_json::value::RawValue;
 use tracing::{debug, warn};
 
+/// 处理 `static-bucket.list` RPC 请求。
+///
+/// - `token` - 认证 Token（必须为 SuperToken）
+///
+/// 返回：所有桶名称列表序列化为 `RawValue`。
 pub async fn list_rpc(token: String) -> jsonrpsee::core::RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "static_bucket", "processing static-bucket_list request");

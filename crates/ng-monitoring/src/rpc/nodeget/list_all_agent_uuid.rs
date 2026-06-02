@@ -1,3 +1,12 @@
+//! `nodeget-server.list_all_agent_uuid` RPC 实现。
+//!
+//! 列出所有 Agent UUID，根据 Token 权限过滤可见范围。
+//! 权限判定逻辑：
+//! - Super-token → 可见所有 UUID
+//! - 拥有 `ListAllAgentUuid` 全局权限 → 可见所有 UUID
+//! - 拥有 `ListAllAgentUuid` `AgentUuid` 级权限 + 至少一种非 List 操作权限 → 可见对应 UUID
+//! - 其他 → 拒绝访问
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -10,16 +19,38 @@ use std::collections::HashSet;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
+/// Agent UUID 列表权限等级。
 enum AgentUuidListPermission {
+    /// 可见所有 UUID
     All,
+    /// 仅可见指定集合的 UUID
     Scoped(HashSet<Uuid>),
 }
 
+/// 列出 Agent UUID 的响应结构体。
 #[derive(Serialize)]
 struct ListAllAgentUuidResponse {
+    /// 可见的 UUID 列表
     uuids: Vec<Uuid>,
 }
 
+/// 列出所有 Agent UUID，根据 Token 权限过滤可见范围。
+///
+/// - `token` — 身份认证凭据
+/// - 返回值 — `{"uuids": [...]}` 格式的 JSON
+///
+/// 内部步骤：
+/// 1. 解析 Token 并判断权限等级
+/// 2. 从 `MonitoringUuidCache` 获取所有活跃 UUID
+/// 3. 根据权限等级过滤可见 UUID
+/// 4. 序列化返回
+///
+/// # Errors
+///
+/// - Token 解析失败时返回 `NodegetError::ParseError`
+/// - 权限不足时返回 `NodegetError::PermissionDenied`
+/// - 数据库查询失败时返回 `NodegetError::DatabaseError`
+/// - 序列化失败时返回 `NodegetError::SerializationError`
 pub async fn list_all_agent_uuid(token: String) -> RpcResult<Box<RawValue>> {
     debug!(target: "server", "listing all agent uuids");
     let process_logic = async {
@@ -56,6 +87,16 @@ pub async fn list_all_agent_uuid(token: String) -> RpcResult<Box<RawValue>> {
     }
 }
 
+/// 解析 Token 对 Agent UUID 列表的访问权限。
+///
+/// 内部步骤：
+/// 1. 解析 Token 为 `TokenOrAuth`
+/// 2. 检查是否为 Super-token → `All`
+/// 3. 获取 Token 信息并检查有效期
+/// 4. 遍历 Token 的 limit 列表，收集 List 权限和操作权限的 Scope
+/// 5. 拥有全局 List 权限 → `All`
+/// 6. 拥有 `AgentUuid` 级 List 权限 + 至少一种操作权限 → `Scoped`
+/// 7. 无任何 List 权限 → 返回权限拒绝错误
 async fn resolve_list_agent_uuid_permission(
     token: &str,
 ) -> anyhow::Result<AgentUuidListPermission> {

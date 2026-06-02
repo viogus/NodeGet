@@ -1,3 +1,7 @@
+//! `agent-uuid.list_all` RPC 实现。
+//!
+//! 列出所有非软删除的 Agent UUID，需要 `MonitoringUuid::List` 权限。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -7,6 +11,15 @@ use ng_token::get::check_token_limit;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 列出所有非软删除的 Agent UUID。
+///
+/// - `token` — 身份认证凭据
+/// - 返回值 — UUID 数组的 JSON 序列化
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `MonitoringUuid::List` 权限
+/// 2. 从 `MonitoringUuidCache` 获取所有活跃 UUID
+/// 3. 序列化返回
 pub async fn list_all_agent_uuids(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         let token_or_auth = TokenOrAuth::from_full_token(&token)

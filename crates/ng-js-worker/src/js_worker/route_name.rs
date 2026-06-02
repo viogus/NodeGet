@@ -1,6 +1,21 @@
+//! 路由名称规范化 —— 验证和清理 `route_name` 输入。
+//!
+//! 防止路径遍历攻击：限制字符集为 `[a-zA-Z0-9._-]`，
+//! 拒绝纯点组合（`.` / `..`），限制长度 128 字符。
+
 use ng_core::error::NodegetError;
 use tracing::warn;
 
+/// 规范化并验证 `route_name`。
+///
+/// - `route_name` —— 原始路由名称（可选）
+///
+/// 校验规则：
+/// 1. None 直接返回 Ok(None)
+/// 2. 去首尾空白后不能为空
+/// 3. 长度不超过 128 字符
+/// 4. 仅允许 `[a-zA-Z0-9._-]` 字符
+/// 5. 不能为纯点组合（`.` / `..`）
 pub fn normalize_route_name(route_name: Option<String>) -> anyhow::Result<Option<String>> {
     let Some(raw) = route_name else {
         return Ok(None);

@@ -1,3 +1,5 @@
+//! `js-worker_get_rt_pool` RPC —— 获取 QuickJS 运行时池状态快照。
+
 use crate::js_worker::auth::check_get_rt_pool_permission;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -5,6 +7,11 @@ use ng_js_runtime::runtime_pool;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 获取运行时池状态快照。
+///
+/// - `token` —— 认证 Token（需要 `nodeget.get_rt_pool` 权限）
+///
+/// 返回 `RuntimePoolInfo`，包含每个 Worker 的脚本名、活跃请求数、空闲时长等。
 pub async fn get_rt_pool(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_worker", "processing get runtime pool request");

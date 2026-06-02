@@ -1,3 +1,7 @@
+//! `token_list_all_tokens` RPC 方法实现。
+//!
+//! 列出所有令牌信息，仅超级令牌可调用。
+
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Token;
@@ -9,11 +13,23 @@ use tracing::{debug, warn};
 use crate::cache::TokenCache;
 use crate::super_token::check_super_token;
 
+/// 列出所有令牌的响应结构体。
 #[derive(Serialize)]
 struct ListAllTokensResponse {
+    /// 所有令牌信息列表
     tokens: Vec<Token>,
 }
 
+/// 列出所有令牌信息（仅超级令牌可调用）。
+///
+/// - `token`：超级令牌凭据（用于鉴权）
+/// - 返回：`{"tokens":[...]}` 格式的所有 Token 信息
+/// - 错误：鉴权失败
+///
+/// 内部步骤：
+/// 1. 验证调用者为超级令牌
+/// 2. 从 TokenCache 获取所有条目
+/// 3. 将 CachedToken 转换为 Token 结构体并序列化
 pub async fn list_all_tokens(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "token", "processing list all tokens request");
@@ -57,6 +73,7 @@ pub async fn list_all_tokens(token: String) -> RpcResult<Box<RawValue>> {
             .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
     };
 
+    // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject
     match process_logic.await {
         Ok(result) => Ok(result),
         Err(e) => {

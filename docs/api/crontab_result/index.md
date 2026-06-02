@@ -121,3 +121,5 @@ CrontabResult 的查询和删除权限仅在 `Global` Scope 下有效
 - `delete`: 允许删除指定 cron_name 的结果记录，支持通配符 `*`
 
 注意: AgentUuid Scope 下的 CrontabResult 权限无效
+
+当查询或删除操作匹配到多个不同的 `cron_name` 时，Token 必须对每个 `cron_name` 都具备对应的权限，而非仅检查其中一个

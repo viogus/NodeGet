@@ -1,3 +1,7 @@
+//! `static-bucket.create` RPC 实现。
+//!
+//! 职责：鉴权（需 `StaticBucket::Write` 权限） -> 调用业务层 -> 序列化返回。
+
 use crate::auth::check_static_bucket_permission;
 use crate::ops::create_static;
 use jsonrpsee::core::RpcResult;
@@ -6,6 +10,15 @@ use ng_core::permission::data_structure::StaticBucket;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 处理 `static-bucket.create` RPC 请求。
+///
+/// - `token` - 认证 Token
+/// - `name` - 桶名称
+/// - `path` - 磁盘子目录路径
+/// - `is_http_root` - 是否设为 HTTP 根路径回退桶
+/// - `cors` - 是否启用 CORS
+///
+/// 返回：新创建的桶模型序列化为 `RawValue`。
 pub async fn create(
     token: String,
     name: String,

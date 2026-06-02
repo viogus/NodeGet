@@ -1,3 +1,8 @@
+//! PTY（伪终端）WebShell 任务模块。
+//!
+//! 建立 Agent 到 Server 的 WebSocket 连接，创建本地 PTY 会话，
+//! 双向转发 WebSocket 消息与 PTY IO。支持终端尺寸调整和心跳协议。
+
 use crate::AGENT_CONFIG;
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
@@ -17,15 +22,21 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{WebSocketStream, connect_async_tls_with_config};
 use url::Url;
 
-/// PTY result type
+/// PTY 结果类型
 pub type Result<T> = std::result::Result<T, NodegetError>;
 
+/// 终端连接池类型，用于防止同一 `terminal_id` 重复连接。
 type TerminalConnectionPool = Arc<RwLock<HashSet<String>>>;
 
-// 改用 LazyLock：初始化闭包里没有参数依赖，无须 `get_or_init` + 辅助函数。
+/// 全局终端连接池，跟踪当前活跃的 `terminal_id`，防止重复连接。
 static TERMINAL_CONNECTION_POOL: LazyLock<TerminalConnectionPool> =
     LazyLock::new(|| Arc::new(RwLock::new(HashSet::new())));
 
+/// 预留 `terminal_id`，防止同一终端 ID 被并发连接。
+///
+/// - `terminal_id` - 终端连接 ID
+///
+/// 返回 `Ok(())`；ID 已存在时返回错误。
 async fn reserve_terminal_id(terminal_id: &str) -> Result<()> {
     let mut guard = TERMINAL_CONNECTION_POOL.write().await;
     if guard.contains(terminal_id) {
@@ -37,21 +48,27 @@ async fn reserve_terminal_id(terminal_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// 释放 `terminal_id`，从连接池中移除。
+///
+/// - `terminal_id` - 终端连接 ID
 async fn release_terminal_id(terminal_id: &str) {
     let mut guard = TERMINAL_CONNECTION_POOL.write().await;
     guard.remove(terminal_id);
 }
 
-// Handle PTY (pseudo terminal) websocket URL.
-//
-// This function connects to the target websocket URL and starts a PTY session.
-//
-// # Arguments
-// * `url` - websocket URL wrapped in Result
-// * `terminal_id` - terminal connection ID
-//
-// # Returns
-// Returns `Ok(())` on success, otherwise an error message.
+/// 处理 PTY WebSocket URL，建立连接并启动终端会话。
+///
+/// - `url` - WebSocket URL（可能包含解析错误）
+/// - `terminal_id` - 终端连接 ID
+/// - `ignore_cert` - 是否跳过 TLS 证书校验
+///
+/// 1. 预留 `terminal_id`（防止重复连接）
+/// 2. 建立 WebSocket 连接（带 10 秒超时）
+/// 3. 获取终端 shell 路径
+/// 4. 启动 PTY 会话
+/// 5. 会话结束后释放 `terminal_id`
+///
+/// 返回 `Ok(())`；连接失败或 PTY 错误时返回错误。
 pub async fn handle_pty_url(
     url: std::result::Result<Url, String>,
     terminal_id: String,
@@ -104,6 +121,11 @@ pub async fn handle_pty_url(
     connect_result
 }
 
+/// 获取终端 shell 路径。
+///
+/// 优先使用配置中的 `terminal_shell`，未配置或为空时回退到默认值
+///（Windows: `cmd.exe`，有 `/bin/bash` 则用 bash，否则 `sh`）。
+/// 配置的路径若包含多级目录且不存在，返回错误。
 fn terminal_shell() -> Result<String> {
     let Some(config) = AGENT_CONFIG.get() else {
         return Err(NodegetError::Other(
@@ -139,6 +161,7 @@ fn terminal_shell() -> Result<String> {
     Ok(shell)
 }
 
+/// 返回平台默认终端 shell 路径。
 fn default_terminal_shell() -> &'static str {
     if cfg!(windows) {
         "cmd.exe"
@@ -149,16 +172,18 @@ fn default_terminal_shell() -> &'static str {
     }
 }
 
-// Handle a PTY session.
-//
-// This function creates a PTY, and forwards websocket messages and PTY IO bidirectionally.
-//
-// # Arguments
-// * `ws_stream` - websocket stream
-// * `cmd` - command to run inside PTY
-//
-// # Returns
-// Returns `Ok(())` on success, otherwise an error message.
+/// 处理 PTY 会话，双向转发 WebSocket 消息与 PTY IO。
+///
+/// - `ws_stream` - WebSocket 流
+/// - `cmd` - 在 PTY 中运行的命令
+///
+/// 1. 创建 PTY 并设置初始尺寸（24x80）
+/// 2. 配置子进程环境变量（TERM、LANG、PATH、HOME、USER）
+/// 3. 启动三个并发任务：PTY→WebSocket、WebSocket→PTY、PTY 读取
+/// 4. 任一方向结束后 abort 对端任务
+/// 5. 整组 SIGTERM → 200ms 等待 → SIGKILL 终止子进程组
+///
+/// 返回 `Ok(())`；PTY 或 WebSocket 错误时返回错误。
 async fn handle_pty_session<S>(ws_stream: WebSocketStream<S>, cmd: &str) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -332,33 +357,37 @@ where
     Ok(())
 }
 
-// Terminal resize request payload.
+/// 终端尺寸调整请求载荷。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct NeedResize {
+    /// 消息类型
     #[serde(rename = "type")]
-    type_str: String, // message type
-    cols: u16, // columns
-    rows: u16, // rows
+    type_str: String,
+    /// 列数
+    cols: u16,
+    /// 行数
+    rows: u16,
 }
 
-// Heartbeat payload.
+/// 心跳载荷。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct HeartBeat {
+    /// 消息类型
     #[serde(rename = "type")]
-    type_str: String, // message type
-    timestamp: String, // timestamp
+    type_str: String,
+    /// 时间戳
+    timestamp: String,
 }
 
-// Handle websocket message.
-//
-// Depending on message type, this can be heartbeat, resize, or terminal input.
-//
-// # Arguments
-// * `msg` - websocket message
-// * `pty_writer` - PTY writer
-//
-// # Returns
-// Returns resize info (if any), otherwise `None`. Returns error on failure.
+/// 处理 WebSocket 消息，分派为终端输入、尺寸调整或心跳。
+///
+/// - `msg` - WebSocket 消息
+/// - `pty_writer` - PTY 写入器
+///
+/// 先尝试 JSON 解析：有 `cols`/`rows` 字段视为 resize，有 `type`/`timestamp` 视为心跳丢弃；
+/// 非 JSON 或无控制字段则作为终端输入写入 PTY。
+///
+/// 返回 `Ok(Some(NeedResize))` 表示需要调整尺寸；`Ok(None)` 表示无需调整；解析失败返回错误。
 fn handle_ws_message(
     msg: Message,
     pty_writer: &Arc<Mutex<Box<dyn Write + Send>>>,
@@ -413,19 +442,17 @@ fn handle_ws_message(
     Ok(None)
 }
 
-// Parse PTY URL.
-//
-// Converts an original URL into an effective terminal URL.
-// If path is `/auto_gen`, it is replaced with a generated terminal path.
-//
-// # Arguments
-// * `url` - original URL
-// * `task_id` - task ID
-// * `task_token` - task token
-// * `terminal_id` - terminal connection ID
-//
-// # Returns
-// Returns parsed URL on success, or an error message.
+/// 解析并构造 PTY WebSocket URL。
+///
+/// - `url` - 原始 URL
+/// - `task_id` - 任务 ID
+/// - `task_token` - 任务令牌
+/// - `terminal_id` - 终端连接 ID
+///
+/// 若路径为 `/auto_gen`，自动生成包含 `agent_uuid`、`task_id`、`task_token`、`terminal_id` 的完整 URL；
+/// 否则仅追加/替换 `terminal_id` 查询参数。
+///
+/// 返回解析后的 URL；URL 格式错误时返回错误字符串。
 pub fn parse_url(
     url: Url,
     task_id: u64,
@@ -463,6 +490,11 @@ pub fn parse_url(
     Ok(url)
 }
 
+/// 设置或替换 URL 中的查询参数。
+///
+/// - `url` - 可变 URL 引用
+/// - `key` - 参数名
+/// - `value` - 参数值
 fn set_or_replace_query_param(url: &mut Url, key: &str, value: &str) {
     let pairs: Vec<(String, String)> = url
         .query_pairs()

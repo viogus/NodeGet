@@ -1,3 +1,13 @@
+//! RPC 通信模块。
+//!
+//! 提供 Agent 与 Server 之间的 JSON-RPC 2.0 通信基础设施：
+//! - 消息封装（[`wrap_json_into_rpc_with_id_1`]）
+//! - 任务结构体反序列化（[`JsonRpcTask`]）
+//! - 错误消息处理循环（[`handle_error_message`]）
+//!
+//! 子模块 `monitoring_data_report` 负责监控数据上报，
+//! `multi_server` 负责多服务器 WebSocket 连接管理。
+
 // 监控数据报告模块
 pub mod monitoring_data_report;
 // 多服务器连接管理模块
@@ -15,31 +25,34 @@ use tokio::task::JoinSet;
 use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 
-// `get_agent_config_safe` 的旧名，作为兼容别名保留，防止外部模块未同步更新引用。
-// 新代码请直接用 `crate::config_access::get_agent_config`。
+/// `get_agent_config_safe` 的兼容别名，防止外部模块未同步更新引用。
+///
+/// 新代码请直接用 [`crate::config_access::get_agent_config`]。
 #[deprecated(note = "use crate::config_access::get_agent_config instead")]
 #[allow(dead_code)]
 pub fn get_agent_config_safe() -> anyhow::Result<AgentConfig> {
     get_agent_config().map_err(Into::into)
 }
 
-// JSON-RPC 2.0 请求结构体
+/// JSON-RPC 2.0 请求结构体，用于向 Server 发起 RPC 调用。
 #[derive(Serialize, Deserialize)]
 struct JsonRpc {
-    jsonrpc: String,                // JSON-RPC 版本号，固定为 "2.0"
-    id: u64,                        // 请求ID，用于匹配响应
-    method: String,                 // 要调用的方法名
-    params: Vec<serde_json::Value>, // 方法参数
+    /// JSON-RPC 版本号，固定为 "2.0"
+    jsonrpc: String,
+    /// 请求 ID，用于匹配响应
+    id: u64,
+    /// 要调用的方法名
+    method: String,
+    /// 方法参数向量
+    params: Vec<serde_json::Value>,
 }
 
-// 将方法和参数包装成 JSON-RPC 2.0 格式的字符串，使用 ID 1
-//
-// # 参数
-// * `method` - 要调用的方法名
-// * `params` - 方法参数向量
-//
-// # 返回值
-// 返回 JSON-RPC 2.0 格式的字符串
+/// 将方法和参数包装成 JSON-RPC 2.0 格式的字符串，固定使用 ID 1。
+///
+/// - `method` - 要调用的方法名
+/// - `params` - 方法参数向量
+///
+/// 返回 JSON-RPC 2.0 格式的字符串；序列化失败时返回包含错误信息的降级 JSON。
 pub fn wrap_json_into_rpc_with_id_1(method: &str, params: Vec<serde_json::Value>) -> String {
     let rpc = JsonRpc {
         jsonrpc: "2.0".to_owned(),
@@ -55,34 +68,39 @@ pub fn wrap_json_into_rpc_with_id_1(method: &str, params: Vec<serde_json::Value>
     })
 }
 
-// JSON-RPC 任务结构体，用于接收服务器下发的任务
+/// JSON-RPC 任务结构体，用于接收 Server 下发的任务。
 #[derive(Serialize, Deserialize)]
 pub struct JsonRpcTask {
-    pub jsonrpc: String,           // JSON-RPC 版本号
-    pub method: String,            // 方法名
-    pub params: JsonRpcTaskResult, // 任务参数
+    /// JSON-RPC 版本号
+    pub jsonrpc: String,
+    /// 方法名
+    pub method: String,
+    /// 任务参数
+    pub params: JsonRpcTaskResult,
 }
 
-// JSON-RPC 任务结果结构体
+/// JSON-RPC 任务结果结构体，包裹 [`TaskEvent`]。
 #[derive(Serialize, Deserialize)]
 pub struct JsonRpcTaskResult {
-    pub result: TaskEvent, // 任务事件
+    /// 任务事件
+    pub result: TaskEvent,
 }
 
-// JSON-RPC 错误消息结构体
+/// JSON-RPC 错误消息结构体，用于接收 Server 返回的错误。
 #[derive(Serialize, Deserialize)]
 pub struct JsonRpcErrorMessage {
-    pub result: JsonError, // 错误信息
+    /// 错误信息
+    pub result: JsonError,
 }
 
-// 处理来自服务器的错误消息
-//
-// 该函数订阅各个服务器的错误消息通道，并打印接收到的错误信息。
-//
-// 每个 server 的订阅循环以及其派生的逐条处理任务都放入同一个
-// [`JoinSet`]，并在函数 await 点上托管其所有权。当调用方（例如
-// 配置热重载时）abort 了本函数的顶层 JoinHandle，`JoinSet` 会被
-// drop 并自动 abort 所有子任务，避免新旧订阅并存。
+/// 处理来自 Server 的错误消息。
+///
+/// 订阅各个 Server 的下行消息通道，过滤出 JSON-RPC 错误响应并打印日志。
+///
+/// 每个 server 的订阅循环以及其派生的逐条处理任务都放入同一个
+/// [`JoinSet`]，并在函数 await 点上托管其所有权。当调用方（例如
+/// 配置热重载时）abort 了本函数的顶层 `JoinHandle`，`JoinSet` 会被
+/// drop 并自动 abort 所有子任务，避免新旧订阅并存。
 pub async fn handle_error_message() {
     time::sleep(Duration::from_secs(1)).await;
 

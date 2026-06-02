@@ -1,3 +1,7 @@
+//! `token_change_password` RPC 方法实现。
+//!
+//! 修改指定 Token 的密码，仅超级令牌可调用。
+
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_db::entity::token;
@@ -9,16 +13,21 @@ use super::utils::{find_target_token, verify_supertoken};
 use crate::cache::TokenCache;
 use crate::hash_string;
 
-/// 修改指定 token 的密码（Super Token 专用）
+/// 修改指定 Token 的密码（仅超级令牌可调用）。
 ///
-/// # 参数
-/// - `token` — Super Token（用于鉴权）
-/// - `target_token` — 目标 token 的 `token_key` 或 `username`
-///   - 支持纯 `token_key`、`username`，或 `token_key:secret` 格式（secret 不校验）
-/// - `new_password` — 新密码，非空且不少于 6 个字符
+/// - `token`：超级令牌凭据（用于鉴权）
+/// - `target_token`：目标 Token 的 `token_key` 或 `username`；
+///   支持纯 `token_key`、`username`，或 `token_key:secret` 格式（secret 不校验）
+/// - `new_password`：新密码，非空且不少于 6 个字符
+/// - 返回：成功时为 `{"success":true,"message":"Password changed successfully"}`
+/// - 错误：鉴权失败、目标不存在、数据库错误
 ///
-/// # 鉴权
-/// 仅 Super Token 可以调用。
+/// 内部步骤：
+/// 1. 验证调用者为超级令牌
+/// 2. 校验新密码非空且长度 >= 6
+/// 3. 查找目标 Token 记录
+/// 4. 计算新密码哈希，更新数据库
+/// 5. 刷新 TokenCache
 pub async fn change_password(
     token: String,
     target_token: String,
@@ -62,6 +71,7 @@ pub async fn change_password(
             "password changed successfully"
         );
 
+        // 更新成功后刷新缓存
         if let Err(e) = TokenCache::reload().await {
             tracing::error!(
                 target: "token",
@@ -75,6 +85,7 @@ pub async fn change_password(
             .map_err(|e| NodegetError::SerializationError(format!("{e}")).into())
     };
 
+    // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject
     match process_logic.await {
         Ok(result) => Ok(result),
         Err(e) => {

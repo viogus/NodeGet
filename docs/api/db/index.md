@@ -10,15 +10,14 @@ Db 命名空间允许在服务端创建和管理多个独立的 SQLite 数据库
 
 ## 方法列表
 
-| 方法名                                 | 描述                  | 权限要求          |
-|-------------------------------------|---------------------|---------------|
-| [create](./crud.md#create)          | 创建新的本地数据库           | `Db::Create`  |
-| [read](./crud.md#read)              | 获取数据库元信息            | `Db::Read`    |
-| [update](./crud.md#update)          | 重命名数据库              | `Db::Update`  |
-| [delete](./crud.md#delete)          | 删除数据库并清理文件          | `Db::Delete`  |
-| [list](./crud.md#list)              | 列出所有数据库             | `Db::List`    |
-| [exec_sql](./crud.md#exec-sql)      | 执行原始 SQL（允许参数和复合语句） | `Db::ExecSql` |
-| [exec_templating](./crud.md#exec-templating) | 参数化 SQL 执行，参数必须为数组  | `Db::ExecSql` |
+| 方法名                            | 描述              | 权限要求          |
+|--------------------------------|-----------------|---------------|
+| [create](./crud.md#create)     | 创建新的本地数据库       | `Db::Create`  |
+| [read](./crud.md#read)         | 获取数据库元信息        | `Db::Read`    |
+| [update](./crud.md#update)     | 重命名数据库          | `Db::Update`  |
+| [delete](./crud.md#delete)     | 删除数据库并清理文件      | `Db::Delete`  |
+| [list](./crud.md#list)         | 列出所有数据库         | `Db::List`    |
+| [exec_sql](./crud.md#exec-sql) | 执行 SQL（支持参数化查询） | `Db::ExecSql` |
 
 ## 数据库存储
 

@@ -1,32 +1,37 @@
+//! HTTP Ping 任务实现。
+//!
+//! 向目标 URL 发送 HTTP GET 请求，测量请求往返耗时。
+
 use ng_core::error::NodegetError;
 use reqwest::Client;
 use std::sync::OnceLock;
 use tokio::sync::OnceCell;
 
-// 全局 HTTP 客户端实例
+/// 全局 HTTP 客户端单例。
 static GLOBAL_CLIENT: OnceCell<Client> = OnceCell::const_new();
+/// rustls crypto provider 初始化标记。
 static RUSTLS_PROVIDER_INIT: OnceLock<()> = OnceLock::new();
-// HTTP Ping 超时时间，设定为 10 秒
+/// HTTP Ping 超时时间，10 秒。
 static PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// HTTP Ping 结果类型
 pub type Result<T> = std::result::Result<T, NodegetError>;
 
+/// 确保 rustls ring crypto provider 已安装（幂等）。
 fn ensure_rustls_ring_provider() {
     let () = RUSTLS_PROVIDER_INIT.get_or_init(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
 }
 
-// 对目标执行 HTTP Ping
-//
-// 该函数向指定的 URL 发送 HTTP GET 请求，并测量请求所需的时间
-//
-// # 参数
-// * `target` - 目标 URL
-//
-// # 返回值
-// 成功时返回请求耗时，失败时返回错误信息
+/// 对目标执行 HTTP Ping。
+///
+/// - `target` - 目标 URL
+///
+/// 1. 初始化全局 HTTP 客户端（含 rustls provider）
+/// 2. 发送 GET 请求并测量耗时
+///
+/// 成功时返回请求耗时；请求失败时返回错误。
 pub async fn httping_target(target: url::Url) -> Result<std::time::Duration> {
     let client = GLOBAL_CLIENT
         .get_or_try_init(async || {

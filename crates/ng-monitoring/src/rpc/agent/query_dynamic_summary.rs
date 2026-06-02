@@ -1,3 +1,8 @@
+//! `agent.query_dynamic_summary` RPC 实现。
+//!
+//! 按条件查询动态摘要监控数据，支持字段选择、UUID/时间戳/入库时间过滤、Limit/Last。
+//! 查询结果中对缩放列（`SCALED_SUMMARY_COLUMNS`）执行反缩放处理。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::{DynamicSummaryQuery, DynamicSummaryQueryField, QueryCondition};
 use crate::rpc::agent::AgentRpcImpl;
@@ -18,6 +23,31 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, error};
 
+/// 查询动态摘要监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `query_data` — 查询参数（字段 + 条件）
+/// - 返回值 — 匹配记录的 JSON 数组（缩放列已反缩放）
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `DynamicMonitoringSummary::Read` 权限
+/// 2. 构建 `SeaORM` 查询（`select_only` + 字段映射 + 条件过滤）
+/// 3. UUID 条件通过缓存转换为 `uuid_id`
+/// 4. 应用排序和 Limit
+/// 5. 流式执行查询，逐行执行 `uuid_id`→`uuid` 转换和反缩放处理
+/// 6. 手动拼接 JSON 数组字符串，返回 `RawValue`
+///
+/// # Errors
+///
+/// - Token 解析失败时返回 `NodegetError::ParseError`
+/// - 权限不足时返回 `NodegetError::PermissionDenied`
+/// - UUID 未找到时返回 `NodegetError::NotFound`
+/// - 数据库查询失败时返回 `NodegetError::DatabaseError`
+/// - 序列化失败时返回 `NodegetError::SerializationError`
+///
+/// # Panics
+///
+/// 内部使用 `uuid_id_iter.next().unwrap()`，若 UUID 条件数量与缓存解析结果不一致则 panic（理论上不会发生）。
 pub async fn query_dynamic_summary(
     token: String,
     query_data: DynamicSummaryQuery,
@@ -203,10 +233,9 @@ pub async fn query_dynamic_summary(
     }
 }
 
-/// Map a query field to its corresponding entity column.
+/// 将查询字段映射到对应的 Entity 列。
 ///
-/// Exposed as `pub` because `query_dynamic_summary_multi_last` reuses the
-/// same mapping.
+/// 公开是因为 `query_dynamic_summary_multi_last` 复用同一映射。
 #[must_use]
 pub const fn field_to_column(
     field: &DynamicSummaryQueryField,
@@ -252,6 +281,13 @@ pub const fn field_to_column(
     }
 }
 
+/// 流式执行动态摘要查询，逐行处理（`uuid_id`→`uuid` + 反缩放）并拼接 JSON 数组。
+///
+/// - `db` — 数据库连接
+/// - `query` — `SeaORM` `Selector`
+/// - `capacity_hint` — 预估结果行数
+/// - `uuid_cache` — UUID 缓存
+/// - 返回值 — JSON 数组的 `RawValue`
 async fn execute_query(
     db: &sea_orm::DatabaseConnection,
     query: Selector<SelectModel<serde_json::Value>>,

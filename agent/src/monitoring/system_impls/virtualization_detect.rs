@@ -1,3 +1,13 @@
+//! 虚拟化环境检测模块。
+//!
+//! 检测当前系统是否运行在虚拟化环境中：
+//! - Linux：通过 `heim_virt` 库检测（读取 systemd-detect-virt 等信息源）
+//! - Windows：通过 CPUID `HypervisorPresent` 位及 vendor 字符串检测
+//! - 其他平台：返回 "Unknown" 占位
+
+/// 检测虚拟化环境（Linux 平台）。
+///
+/// 通过 `heim_virt` 库查询虚拟化类型，检测失败时返回 "Unknown"。
 #[cfg(target_os = "linux")]
 pub async fn detect_virtualization() -> String {
     heim_virt::detect()
@@ -7,6 +17,11 @@ pub async fn detect_virtualization() -> String {
         .to_string()
 }
 
+/// 检测虚拟化环境（Windows 平台）。
+///
+/// 通过 CPUID 指令检查 `HypervisorPresent` 特征位，若存在则读取
+/// Hypervisor Vendor 字符串（如 "Microsoft Hv"、"VMwareVmware" 等）。
+/// 非 x86/x86_64 架构无法执行 CPUID，返回 "Unknown"。
 #[cfg(target_os = "windows")]
 pub async fn detect_virtualization() -> String {
     {
@@ -45,6 +60,9 @@ pub async fn detect_virtualization() -> String {
     }
 }
 
+/// 检测虚拟化环境（其他平台）。
+///
+/// 目前尚未支持 macOS 等平台，返回 "Unknown" 占位。
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub async fn detect_virtualization() -> String {
     "Unknown".to_string() // TODO: MacOS Support

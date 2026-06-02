@@ -1,18 +1,18 @@
-//! ng-monitoring: Monitoring data structures, caches, and RPC methods for `NodeGet`.
+//! ng-monitoring：监控数据结构、缓存与 RPC 方法。
 //!
-//! ## Default features (types only)
-//! - `StaticMonitoringData`, `DynamicMonitoringData`, `DynamicMonitoringSummaryData`
-//! - Query DSL (`QueryCondition`, `StaticDataQuery`, `DynamicDataQuery`, `DynamicSummaryQuery`, etc.)
-//! - Response types (`StaticResponseItem`, `DynamicResponseItem`, `DynamicSummaryResponseItem`)
-//! - Descaling helpers (`apply_descaling_to_json_object`, `SCALED_SUMMARY_COLUMNS`)
+//! ## 默认 feature（仅类型，Agent 端可安全依赖）
+//! - `StaticMonitoringData`、`DynamicMonitoringData`、`DynamicMonitoringSummaryData`
+//! - 查询 DSL（`QueryCondition`、`StaticDataQuery`、`DynamicDataQuery`、`DynamicSummaryQuery` 等）
+//! - 响应类型（`StaticResponseItem`、`DynamicResponseItem`、`DynamicSummaryResponseItem`）
+//! - 反缩放工具（`apply_descaling_to_json_object`、`SCALED_SUMMARY_COLUMNS`）
 //!
-//! ## `server` feature
-//! - `MonitoringBuffer` — batched write buffer for monitoring data
-//! - `MonitoringUuidCache` — DB-backed UUID-to-ID cache
-//! - `MonitoringLastCache` — in-memory last-value cache
-//! - `StaticHashCache` — in-memory static data hash dedup cache
-//! - RPC namespaces: `agent`, `agent-uuid`, `nodeget-server`
-//! - `rpc_module()` — merged RPC module for all monitoring-related methods
+//! ## `server` feature（仅 Server 端启用）
+//! - `MonitoringBuffer` — 监控数据批量写入缓冲区
+//! - `MonitoringUuidCache` — 基于 DB 的 UUID↔ID 双向缓存
+//! - `MonitoringLastCache` — 内存中的最新值缓存
+//! - `StaticHashCache` — 内存中的静态数据哈希去重缓存
+//! - RPC 命名空间：`agent`、`agent-uuid`、`nodeget-server`
+//! - `rpc_module()` — 合并所有监控相关 RPC 方法的统一入口
 
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
@@ -41,10 +41,19 @@ pub mod rpc;
 #[cfg(feature = "server")]
 pub mod static_hash_cache;
 
-/// Build and return an `RpcModule` containing all monitoring-related RPC methods
-/// (agent + agent-uuid + nodeget-server).
+/// 构建并返回包含所有监控相关 RPC 方法的 `RpcModule`。
 ///
-/// The caller should merge this into the main RPC module during startup.
+/// 合并了 `agent`、`agent-uuid`、`nodeget-server` 三个命名空间。
+/// 调用方应在启动时将此模块 merge 到主 RPC 模块中。
+///
+/// - 注册 `agent_ping` 心跳方法（直接返回 `"pong"`）
+/// - 合并 `AgentRpcImpl`（agent 命名空间）
+/// - 合并 `AgentUuidRpcImpl`（agent-uuid 命名空间）
+/// - 合并 `NodegetServerRpcImpl`（nodeget-server 命名空间）
+///
+/// # Panics
+///
+/// 若各 RPC 模块 `merge` 失败则 panic（配置正确时不应发生）。
 #[cfg(feature = "server")]
 #[must_use]
 pub fn rpc_module() -> jsonrpsee::RpcModule<()> {

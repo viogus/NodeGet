@@ -1,3 +1,11 @@
+//! KV 权限校验。
+//!
+//! 提供 KV 存储的 RBAC 权限校验功能：
+//! - `TokenPermissionChecker` trait 及全局注入（`set_token_checker`、`get_token_checker`）
+//! - Key 校验（`validate_key`、`validate_key_pattern`）
+//! - 读写删权限检查（`check_kv_read_permission`、`check_kv_write_permission`、`check_kv_delete_permission`）
+//! - 命名空间级权限（`check_kv_delete_namespace_permission`、`check_kv_list_keys_permission`、`resolve_kv_list_namespace_permission`、`check_kv_create_permission`）
+
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{Kv, Permission, Scope, Token};
 use ng_core::permission::token_auth::TokenOrAuth;
@@ -8,14 +16,13 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use tracing::{debug, trace, warn};
 
-// ── TokenPermissionChecker trait + global injection ────────────────────
+// ── TokenPermissionChecker trait + 全局注入 ────────────────────
 
-/// Trait for token permission checking operations needed by KV auth.
+/// Token 权限检查 trait，由服务器二进制在启动时注入具体实现
 ///
-/// The server crate must implement this trait and inject it via
-/// [`set_token_checker`] during startup.
+/// 服务器 crate 必须实现此 trait，并通过 [`set_token_checker`] 在启动时注入
 pub trait TokenPermissionChecker: Send + Sync {
-    /// Check if the token/auth satisfies the given scopes and permissions.
+    /// 检查 Token/Auth 是否满足给定的 scope 和 permission 约束
     fn check_token_limit(
         &self,
         token_or_auth: &TokenOrAuth,
@@ -23,31 +30,30 @@ pub trait TokenPermissionChecker: Send + Sync {
         permissions: Vec<Permission>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
-    /// Check if the token/auth is a super token.
+    /// 检查 Token/Auth 是否为 SuperToken
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
-    /// Get token metadata for the given token/auth.
+    /// 获取 Token/Auth 的元数据信息
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Token>> + Send + '_>>;
 }
 
+/// 全局 TokenPermissionChecker 单例，由服务器启动时通过 `set_token_checker` 注入
 static TOKEN_CHECKER: OnceLock<Box<dyn TokenPermissionChecker>> = OnceLock::new();
 
-/// Set the global token permission checker.
-///
-/// Must be called once during server startup.
+/// 设置全局 Token 权限检查器，服务器启动时调用一次
 pub fn set_token_checker(checker: Box<dyn TokenPermissionChecker>) {
     let _ = TOKEN_CHECKER.set(checker);
 }
 
-/// Get the global token permission checker.
+/// 获取全局 Token 权限检查器
 ///
-/// Panics if not initialized — call [`set_token_checker`] first.
+/// 若未初始化则 panic，需确保先调用 [`set_token_checker`]
 pub fn get_token_checker() -> &'static dyn TokenPermissionChecker {
     TOKEN_CHECKER
         .get()
@@ -55,10 +61,16 @@ pub fn get_token_checker() -> &'static dyn TokenPermissionChecker {
         .as_ref()
 }
 
-// ── KV permission types ────────────────────────────────────────────────
+// ── KV 权限类型 ────────────────────────────────────────────────
 
+/// 命名空间列表权限范围
+///
+/// - `All` — 可列出所有命名空间（SuperToken 或 Global scope）
+/// - `Scoped` — 仅可列出指定集合中的命名空间
 pub enum KvNamespaceListPermission {
+    /// 可列出所有命名空间
     All,
+    /// 仅可列出指定集合中的命名空间
     Scoped(HashSet<String>),
 }
 

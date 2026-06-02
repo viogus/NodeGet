@@ -1,3 +1,5 @@
+//! `task_delete` RPC 方法：按条件删除任务记录
+
 use crate::types::query::TaskQueryCondition;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -14,12 +16,27 @@ use tracing::{debug, error};
 
 /// 转义 SQL LIKE 特殊字符，防止注入攻击
 ///
-/// SQL LIKE 中 `%` 匹配任意字符序列，`_` 匹配单个字符
-/// 这些字符需要转义才能进行精确匹配
+/// SQL LIKE 中 `%` 匹配任意字符序列，`_` 匹配单个字符，
+/// 这些字符需要转义才能在 JSON 文本搜索中进行精确匹配
 fn escape_like_pattern(pattern: &str) -> String {
     pattern.replace('%', r"\%").replace('_', r"\_")
 }
 
+/// 按条件删除任务记录
+///
+/// - `token` — 身份令牌，需拥有对应任务类型的 `Task::Delete` 权限
+/// - `conditions` — 删除条件列表，各条件之间为 AND 关系
+///
+/// 返回 `{"success":true,"deleted":N,"condition_count":N}`。
+/// 当使用 `Last` 或 `Limit` 条件时，先查询匹配的 ID 再按 ID 删除。
+/// 删除成功后会尝试刷新 MonitoringUuid 缓存。
+///
+/// 内部步骤：
+/// 1. 解析 Token，收集查询条件中的 UUID 构建 scope，确定需要的 Delete 权限
+/// 2. 检查权限：无 UUID 条件时使用 Global scope
+/// 3. 构建查询和删除语句，处理各条件类型
+/// 4. 若有 `Last` 或 `Limit` 条件，先查 ID 再按 ID 删除
+/// 5. 刷新 MonitoringUuid 缓存（删除可能影响关联数据）
 pub async fn delete(
     token: String,
     conditions: Vec<TaskQueryCondition>,

@@ -1,3 +1,11 @@
+//! KV 存储数据结构定义。
+//!
+//! 定义 [`KVStore`] 结构体，提供基于命名空间的键值对存储操作：
+//! - 创建与初始化（`new`）
+//! - 读写删除（`get`、`set`、`remove`）
+//! - 查询（`contains_key`、`keys`、`values`、`len`、`is_empty`）
+//! - 内部 HashMap 访问（`inner`、`inner_mut`）
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

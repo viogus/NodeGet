@@ -1,3 +1,9 @@
+//! `agent.report_dynamic` RPC 实现。
+//!
+//! Agent 上报动态监控数据。数据经权限校验后同时送入：
+//! 1. `MonitoringBuffer` — 异步批量写入数据库
+//! 2. `MonitoringLastCache` — 更新内存中的最新值缓存
+
 use crate::data_structure::DynamicMonitoringData;
 use crate::monitoring_buffer;
 use crate::monitoring_last_cache::MonitoringLastCache;
@@ -13,6 +19,18 @@ use sea_orm::{ActiveValue, Set};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// Agent 上报动态监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `dynamic_monitoring_data` — 动态监控数据
+/// - 返回值 — `{"status": "buffered"}`
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `DynamicMonitoring::Write` 权限（`Scope`: `AgentUuid`）
+/// 2. 通过 `MonitoringUuidCache::get_or_insert` 查找或创建 UUID→ID 映射
+/// 3. 将各字段序列化为 JSON 并构建 `ActiveModel`
+/// 4. 送入 `MonitoringBuffer` 等待批量写入
+/// 5. 同时更新 `MonitoringLastCache` 内存缓存
 pub async fn report_dynamic(
     token: String,
     dynamic_monitoring_data: DynamicMonitoringData,

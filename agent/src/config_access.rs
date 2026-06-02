@@ -40,6 +40,7 @@ pub fn current_agent_uuid() -> uuid::Uuid {
         .parse()
         .expect("agent_uuid in config is not a valid UUID")
 }
+/// 返回当前 Agent 的 UUID 字符串。
 ///
 /// # Panics
 ///

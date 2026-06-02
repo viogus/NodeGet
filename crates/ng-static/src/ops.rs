@@ -1,3 +1,12 @@
+//! 静态文件桶核心操作模块。
+//!
+//! 职责：提供 Bucket CRUD、文件上传/读取/删除/重命名/列表等业务逻辑，
+//! 以及路径安全校验（`validate_name`、`validate_sub_path`、`resolve_safe_file_path`）。
+//!
+//! 协作关系：RPC handler 层调用此模块的函数完成具体操作；
+//! HTTP router 层通过 `resolve_safe_file_path` 确保磁盘路径安全；
+//! 所有写操作完成后调用 `StaticCache::reload()` 刷新内存缓存。
+
 use anyhow::Context;
 use base64::Engine as _;
 use ng_core::error::NodegetError;
@@ -164,6 +173,22 @@ pub fn resolve_safe_file_path(
     Ok(resolved)
 }
 
+/// 创建新的静态文件桶记录并创建对应磁盘目录。
+///
+/// - `name` - 桶名称，需通过 [`validate_name`] 校验
+/// - `path` - 磁盘子目录路径，需通过 [`validate_sub_path`] 校验
+/// - `is_http_root` - 是否作为 HTTP 根路径回退桶（全局唯一）
+/// - `cors` - 是否为该桶启用 CORS 响应头
+///
+/// 返回：新插入的数据库行模型。
+///
+/// 内部步骤：
+/// 1. 校验 name 和 path 合法性
+/// 2. 查询数据库确认同名桶不存在
+/// 3. 若 `is_http_root` 为 true，确认无其他桶已占用此标记
+/// 4. 插入数据库行
+/// 5. 创建磁盘目录 `{static_path}/{path}`
+/// 6. 刷新 [`StaticCache`]
 pub async fn create_static(
     name: String,
     path: String,
@@ -227,6 +252,12 @@ pub async fn create_static(
     Ok(model)
 }
 
+/// 按 name 从缓存读取静态文件桶配置。
+///
+/// - `name` - 目标桶名称
+///
+/// 返回：命中时返回 `Some(model)`，未命中返回 `None`。
+/// 数据源为 [`StaticCache`]，不访问数据库。
 pub async fn read_static(name: &str) -> anyhow::Result<Option<static_entity::Model>> {
     let cache = StaticCache::global();
     let model = cache.get_by_name(name).map(|arc| (*arc).clone());
@@ -234,6 +265,23 @@ pub async fn read_static(name: &str) -> anyhow::Result<Option<static_entity::Mod
     Ok(model)
 }
 
+/// 更新已有的静态文件桶配置。
+///
+/// - `name` - 目标桶名称
+/// - `new_path` - 新的磁盘子目录路径，需通过 [`validate_sub_path`] 校验
+/// - `new_is_http_root` - 是否设为 HTTP 根路径回退桶（全局唯一）
+/// - `new_cors` - 是否启用 CORS
+/// - `new_enable` - 是否启用（`None` 表示不修改）
+///
+/// 返回：更新后的数据库行模型。
+///
+/// 内部步骤：
+/// 1. 校验 name 和 new_path 合法性
+/// 2. 查询当前记录，确认存在
+/// 3. 若 `new_is_http_root` 从 false 变为 true，确认无其他桶已占用此标记
+/// 4. 更新数据库行
+/// 5. 如新 path 目录尚不存在则创建（不迁移旧目录内容）
+/// 6. 刷新 [`StaticCache`]
 pub async fn update_static(
     name: String,
     new_path: String,
@@ -292,6 +340,17 @@ pub async fn update_static(
     Ok(updated)
 }
 
+/// 删除指定的静态文件桶记录（仅删数据库行，不删除磁盘文件）。
+///
+/// - `name` - 目标桶名称，需通过 [`validate_name`] 校验
+///
+/// 返回：删除成功返回 `Ok(())`，桶不存在时返回 `NotFound` 错误。
+///
+/// 内部步骤：
+/// 1. 校验 name 合法性
+/// 2. 查询数据库确认存在
+/// 3. 按主键删除数据库行
+/// 4. 刷新 [`StaticCache`]
 pub async fn delete_static(name: &str) -> anyhow::Result<()> {
     let db = get_db().context("DB not initialized")?;
     let name_trimmed = name.trim();
@@ -312,6 +371,22 @@ pub async fn delete_static(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 向指定桶上传文件，支持二进制 body 或 Base64 编码字符串（二选一）。
+///
+/// - `name` - 目标桶名称
+/// - `file_path` - 文件相对路径（相对于桶的磁盘子目录）
+/// - `body` - 二进制文件内容（与 `base64_str` 二选一）
+/// - `base64_str` - Base64 编码的文件内容（与 `body` 二选一）
+///
+/// 返回：上传成功返回 `Ok(())`。
+///
+/// 内部步骤：
+/// 1. 校验 body 与 base64 互斥且非空
+/// 2. 校验 name 合法性，查询缓存确认桶存在
+/// 3. 若提供 base64 则解码为二进制
+/// 4. 通过 [`resolve_safe_file_path`] 解析安全磁盘路径
+/// 5. 自动创建缺失的父目录
+/// 6. 写入文件
 pub async fn upload_file(
     name: &str,
     file_path: &str,
@@ -362,6 +437,18 @@ pub async fn upload_file(
     Ok(())
 }
 
+/// 读取指定桶内的文件内容，返回 Base64 编码字符串。
+///
+/// - `name` - 目标桶名称
+/// - `file_path` - 文件相对路径（相对于桶的磁盘子目录）
+///
+/// 返回：Base64 编码的文件内容字符串。
+///
+/// 内部步骤：
+/// 1. 校验 name 合法性，查询缓存确认桶存在
+/// 2. 通过 [`resolve_safe_file_path`] 解析安全磁盘路径
+/// 3. 读取文件二进制内容
+/// 4. Base64 编码后返回
 pub async fn read_file(name: &str, file_path: &str) -> anyhow::Result<String> {
     validate_name(name)?;
     let model = StaticCache::global()
@@ -384,6 +471,17 @@ pub async fn read_file(name: &str, file_path: &str) -> anyhow::Result<String> {
     Ok(encoded)
 }
 
+/// 删除指定桶内的文件。
+///
+/// - `name` - 目标桶名称
+/// - `file_path` - 文件相对路径（相对于桶的磁盘子目录）
+///
+/// 返回：删除成功返回 `Ok(())`；文件不存在也视为成功（幂等）。
+///
+/// 内部步骤：
+/// 1. 校验 name 合法性，查询缓存确认桶存在
+/// 2. 通过 [`resolve_safe_file_path`] 解析安全磁盘路径
+/// 3. 删除文件，NotFound 时忽略
 pub async fn delete_file(name: &str, file_path: &str) -> anyhow::Result<()> {
     validate_name(name)?;
     let model = StaticCache::global()

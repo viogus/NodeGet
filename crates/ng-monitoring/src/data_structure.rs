@@ -1,32 +1,36 @@
-// 若数据量字段中未注明单位，则以字节 (Bytes) 为单位
+//! 监控数据结构体定义。
+//!
+//! 定义了三类监控数据（静态、动态、动态摘要）及其子结构体，
+//! 以及相关的辅助工具（哈希计算、虚拟接口/排除挂载点判断、缩放转换）。
+//! 若数据量字段中未注明单位，则以字节（Bytes）为单位。
 
 use sha2::{Digest, Sha256};
 
-// 静态监控数据结构体，包含不会随时间变化的硬件信息
+/// 静态监控数据，包含不会随时间变化的硬件信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StaticMonitoringData {
-    // 设备 UUID
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
-    // 时间戳（毫秒）
+    /// 时间戳（毫秒）
     pub time: u64,
-    // 数据内容的 SHA-256 哈希（前 16 字节原始二进制），用于去重
+    /// 数据内容的 SHA-256 哈希（前 16 字节原始二进制），用于去重
     pub data_hash: Vec<u8>,
 
-    // CPU 静态信息
+    /// CPU 静态信息
     pub cpu: StaticCPUData,
-    // 系统静态信
+    /// 系统静态信息
     pub system: StaticSystemData,
-    // GPU 静态信息列表
+    /// GPU 静态信息列表
     pub gpu: Vec<StaticGpuData>,
 }
 
-/// 将 u64 安全饱和转换为 i64，超过 `i64::MAX` 时返回 `i64::MAX，避免静默回绕`
+/// 将 u64 安全饱和转换为 i64，超过 `i64::MAX` 时返回 `i64::MAX`，避免静默回绕。
 #[must_use]
 fn u64_to_i64_saturating(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// 将 u64 安全饱和转换为 i32，超过 `i32::MAX` 时返回 `i32::MAX，避免静默回绕`
+/// 将 u64 安全饱和转换为 i32，超过 `i32::MAX` 时返回 `i32::MAX`，避免静默回绕。
 #[must_use]
 fn u64_to_i32_saturating(value: u64) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
@@ -43,6 +47,11 @@ impl StaticMonitoringData {
     ///
     /// 当任何字段的序列化失败时返回 `serde_json::Error`。
     /// 对于仅包含标准可序列化类型的结构体，此情况在实际上不会发生。
+    ///
+    /// - `cpu` — CPU 静态信息
+    /// - `system` — 系统静态信息
+    /// - `gpu` — GPU 静态信息列表
+    /// - 返回值 — 前 16 字节（128 bit）的 SHA-256 哈希摘要
     pub fn compute_data_hash(
         cpu: &StaticCPUData,
         system: &StaticSystemData,
@@ -78,7 +87,7 @@ impl StaticMonitoringData {
     }
 }
 
-// 将 `std::io::Write` 调用桥接到 `Sha256::update`，实现零分配流式哈希
+/// 将 `std::io::Write` 调用桥接到 `Sha256::update`，实现零分配流式哈希。
 struct WriteToDigest<'a>(&'a mut Sha256);
 
 impl std::io::Write for WriteToDigest<'_> {
@@ -133,68 +142,96 @@ fn write_canonical_json<W: std::io::Write>(
     Ok(())
 }
 
-// 动态监控数据结构体，包含随时间变化的系统状态信息
+/// 动态监控数据，包含随时间变化的系统状态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicMonitoringData {
-    // 设备 UUID
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
-    // 时间戳（毫秒）
+    /// 时间戳（毫秒）
     pub time: u64,
 
-    // CPU 动态信息
+    /// CPU 动态信息
     pub cpu: DynamicCPUData,
-    // 内存动态信息
+    /// 内存动态信息
     pub ram: DynamicRamData,
-    // 系统负载动态信息
+    /// 系统负载动态信息
     pub load: DynamicLoadData,
-    // 系统动态信息
+    /// 系统动态信息
     pub system: DynamicSystemData,
-    // 磁盘动态信息列表
+    /// 磁盘动态信息列表
     pub disk: Vec<DynamicPerDiskData>,
-    // 网络动态信息
+    /// 网络动态信息
     pub network: DynamicNetworkData,
-    // GPU 动态信息列表
+    /// GPU 动态信息列表
     pub gpu: Vec<DynamicGpuData>,
 }
 
-// 动态监控摘要数据结构体，包含扁平化的系统状态摘要信息
+/// 动态监控摘要数据，包含扁平化的系统状态摘要信息。
+///
+/// 字段均为 `Option` 以应对 Agent 采集缺失的情况。
+/// 缩放字段（`cpu_usage`、`load_*`）在写入时乘以 10 存储，读取时需除以 10.0 还原。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicMonitoringSummaryData {
-    // 设备 UUID
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
-    // 时间戳（毫秒）
+    /// 时间戳（毫秒）
     pub time: u64,
 
+    /// CPU 使用率百分比，缩放存储（实际值 = 存储值 / 10.0）
     pub cpu_usage: Option<i16>,
+    /// GPU 使用率百分比（0-100）
     pub gpu_usage: Option<i16>,
+    /// 已用交换空间（字节）
     pub used_swap: Option<i64>,
+    /// 总交换空间（字节）
     pub total_swap: Option<i64>,
+    /// 已用内存（字节）
     pub used_memory: Option<i64>,
+    /// 总内存（字节）
     pub total_memory: Option<i64>,
+    /// 可用内存（字节）
     pub available_memory: Option<i64>,
+    /// 1 分钟平均负载，缩放存储（实际值 = 存储值 / 10.0）
     pub load_one: Option<i16>,
+    /// 5 分钟平均负载，缩放存储（实际值 = 存储值 / 10.0）
     pub load_five: Option<i16>,
+    /// 15 分钟平均负载，缩放存储（实际值 = 存储值 / 10.0）
     pub load_fifteen: Option<i16>,
+    /// 系统运行时间（秒）
     pub uptime: Option<i32>,
+    /// 系统启动时间（秒时间戳）
     pub boot_time: Option<i64>,
+    /// 进程数量
     pub process_count: Option<i32>,
+    /// 磁盘总空间（字节）
     pub total_space: Option<i64>,
+    /// 磁盘可用空间（字节）
     pub available_space: Option<i64>,
+    /// 磁盘读取速度（字节/秒）
     pub read_speed: Option<i64>,
+    /// 磁盘写入速度（字节/秒）
     pub write_speed: Option<i64>,
+    /// TCP 连接数
     pub tcp_connections: Option<i32>,
+    /// UDP 连接数
     pub udp_connections: Option<i32>,
+    /// 网络总接收量（字节）
     pub total_received: Option<i64>,
+    /// 网络总发送量（字节）
     pub total_transmitted: Option<i64>,
+    /// 网络发送速度（字节/秒）
     pub transmit_speed: Option<i64>,
+    /// 网络接收速度（字节/秒）
     pub receive_speed: Option<i64>,
 }
 
+/// 虚拟网卡前缀列表，匹配这些前缀的接口在摘要统计中被排除。
 const VIRTUAL_INTERFACE_PREFIXES: &[&str] = &[
     "br", "cni", "docker", "podman", "flannel", "lo", "veth", "virbr", "vmbr", "tap", "fwbr",
     "fwpr",
 ];
 
+/// 排除的挂载点前缀列表，匹配这些前缀的磁盘在摘要统计中被排除。
 const EXCLUDED_MOUNT_PREFIXES: &[&str] = &[
     "/tmp",
     "/var/tmp",
@@ -210,6 +247,10 @@ const EXCLUDED_MOUNT_PREFIXES: &[&str] = &[
     "/nix/store",
 ];
 
+/// 判断网卡名称是否为虚拟接口。
+///
+/// - `name` — 网卡名称
+/// - 返回值 — 若匹配虚拟接口前缀则返回 `true`
 #[must_use]
 pub fn is_virtual_interface(name: &str) -> bool {
     VIRTUAL_INTERFACE_PREFIXES
@@ -217,6 +258,10 @@ pub fn is_virtual_interface(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// 判断挂载点是否应被排除（不纳入摘要统计）。
+///
+/// - `mount_point` — 挂载点路径
+/// - 返回值 — 若匹配排除前缀则返回 `true`
 #[must_use]
 pub fn is_excluded_mount(mount_point: &str) -> bool {
     EXCLUDED_MOUNT_PREFIXES
@@ -224,24 +269,19 @@ pub fn is_excluded_mount(mount_point: &str) -> bool {
         .any(|prefix| mount_point.starts_with(prefix))
 }
 
-/// Scale a percent value in the expected range `[0.0, 100.0]` by `10` and
-/// encode it as the `i16` shape used by `dynamic_monitoring_summary.cpu_usage`.
+/// 将百分比数值缩放为 i16 存储格式（乘以 10，保留一位小数精度）。
 ///
-/// The column semantically holds a percentage with one decimal place
-/// (`value/10.0` on read). This helper is the single place that enforces
-/// that invariant on the write side and guards against two classes of
-/// upstream corruption that the previous `clamp(i16::MIN..=i16::MAX)` did
-/// **not** catch:
+/// 用于 `dynamic_monitoring_summary.cpu_usage` 列，读取时需除以 10.0 还原。
+/// 此函数是写入侧唯一强制执行该不变量的位置，并防护两类上游数据损坏：
 ///
-/// * **`NaN` / `±Infinity`** — `f64::clamp` is a no-op on `NaN`, and
-///   `f64 as i16` then silently folds the result to `0`, which would show
-///   up as "0% CPU" on the dashboard. We return `None` instead so the
-///   server records a gap rather than fabricated zeroes.
-/// * **Out-of-range percentages (e.g. sysinfo returning `> 100.0` on a
-///   container first-sample edge case)** — the previous clamp allowed up
-///   to `i16::MAX = 32767` (i.e. 3276.7%), which propagated straight into
-///   the database. We now clamp to `[0, 1000]` so the summary is always in
-///   the documented `[0.0, 100.0]` range post-descaling.
+/// * **`NaN` / `±Infinity`** — `f64::clamp` 对 `NaN` 无效，`f64 as i16` 会静默
+///   折叠为 0，导致面板显示"0% CPU"。此处返回 `None` 以记录空缺而非伪造零值。
+/// * **超范围百分比**（如 sysinfo 在容器首次采样时返回 `> 100.0`）—
+///   旧实现允许最大 `i16::MAX = 32767`（即 3276.7%）直接写入数据库。
+///   现在将结果 clamp 至 `[0, 1000]`，确保反缩放后始终在 `[0.0, 100.0]` 范围内。
+///
+/// - `percent` — 原始百分比浮点数
+/// - 返回值 — 缩放后的 `i16`（`Some`），或 `None`（输入非有限数）
 #[must_use]
 fn scale_cpu_percent_to_i16(percent: f64) -> Option<i16> {
     if !percent.is_finite() {
@@ -258,14 +298,14 @@ fn scale_cpu_percent_to_i16(percent: f64) -> Option<i16> {
     Some(v)
 }
 
-/// Scale a 1/5/15-minute load average by `10` and encode as `i16`, matching
-/// the `load_one` / `load_five` / `load_fifteen` column shape.
+/// 将 1/5/15 分钟平均负载缩放为 i16 存储格式（乘以 10）。
 ///
-/// Unlike CPU percent, load averages can legitimately exceed 100 on heavily
-/// contended systems (e.g. load of 200 on a 256-thread machine). We still
-/// clamp to `i16` range to avoid silent `as i16` wrap-around, but the upper
-/// bound is `i16::MAX` rather than `1000`. `NaN` is again represented as
-/// `None` (missing datum) instead of being folded to `0`.
+/// 与 CPU 百分比不同，负载平均值在高负载系统上可以合法超过 100（如 256 线程机器上
+/// 负载 200）。仍然 clamp 至 `i16` 范围以避免 `as i16` 静默回绕，但上限为
+/// `i16::MAX` 而非 `1000`。`NaN` 同样以 `None`（缺失数据）表示，而非折叠为 0。
+///
+/// - `load` — 原始负载浮点数
+/// - 返回值 — 缩放后的 `i16`（`Some`），或 `None`（输入非有限数）
 #[must_use]
 fn scale_load_to_i16(load: f64) -> Option<i16> {
     if !load.is_finite() {
@@ -360,207 +400,207 @@ impl From<&DynamicMonitoringData> for DynamicMonitoringSummaryData {
     }
 }
 
-// CPU 静态信息结构体
+/// CPU 静态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StaticCPUData {
-    // 物理核心数
+    /// 物理核心数
     pub physical_cores: u64,
-    // 逻辑核心数
+    /// 逻辑核心数
     pub logical_cores: u64,
-    // 每个 CPU 核心的静态信息列表
+    /// 每个 CPU 核心的静态信息列表
     pub per_core: Vec<StaticPerCpuCoreData>,
 }
 
-// CPU 动态信息结构体
+/// CPU 动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicCPUData {
-    // 每个 CPU 核心的动态信息列表
+    /// 每个 CPU 核心的动态信息列表
     pub per_core: Vec<DynamicPerCpuCoreData>,
-    // CPU 总使用率（0-100）
+    /// CPU 总使用率（0-100）
     pub total_cpu_usage: f64,
 }
 
-// 每个 CPU 核心的静态信息结构体
+/// 每个 CPU 核心的静态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StaticPerCpuCoreData {
-    // 核心 ID，从 1 开始
+    /// 核心 ID，从 1 开始
     pub id: u32,
-    // 核心名称
+    /// 核心名称
     pub name: String,
-    // 供应商 ID
+    /// 供应商 ID
     pub vendor_id: String,
-    // CPU 品牌
+    /// CPU 品牌
     pub brand: String,
 }
 
-// 每个 CPU 核心的动态信息结构体
+/// 每个 CPU 核心的动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicPerCpuCoreData {
-    // 核心 ID，从 1 开始
+    /// 核心 ID，从 1 开始
     pub id: u32,
-    // CPU 使用率（0-100）
+    /// CPU 使用率（0-100）
     pub cpu_usage: f64,
-    // CPU 频率（MHz）
+    /// CPU 频率（MHz）
     pub frequency_mhz: u64,
 }
 
-// 内存动态信息结构体
+/// 内存动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicRamData {
-    // 总内存大小（字节）
+    /// 总内存大小（字节）
     pub total_memory: u64,
-    // 可用内存大小（字节）
+    /// 可用内存大小（字节）
     pub available_memory: u64,
-    // 已使用内存大小（字节）
+    /// 已使用内存大小（字节）
     pub used_memory: u64,
-    // 总交换空间大小（字节）
+    /// 总交换空间大小（字节）
     pub total_swap: u64,
-    // 已使用交换空间大小（字节）
+    /// 已使用交换空间大小（字节）
     pub used_swap: u64,
 }
 
-// 系统负载动态信息结构体
+/// 系统负载动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicLoadData {
-    // 1分钟平均负载
+    /// 1 分钟平均负载
     pub one: f64,
-    // 5分钟平均负载
+    /// 5 分钟平均负载
     pub five: f64,
-    // 15分钟平均负载
+    /// 15 分钟平均负载
     pub fifteen: f64,
 }
 
-// 系统静态信息结构体
+/// 系统静态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StaticSystemData {
-    // 系统名称
+    /// 系统名称
     pub system_name: String,
-    // 系统内核版本
+    /// 系统内核版本
     pub system_kernel: String,
-    // 系统内核详细版本
+    /// 系统内核详细版本
     pub system_kernel_version: String,
-    // 系统操作系统版本
+    /// 系统操作系统版本
     pub system_os_version: String,
-    // 系统操作系统详细版本
+    /// 系统操作系统详细版本
     pub system_os_long_version: String,
-    // 发行版 ID
+    /// 发行版 ID
     pub distribution_id: String,
-    // 系统主机名
+    /// 系统主机名
     pub system_host_name: String,
-    // 系统架构
+    /// 系统架构
     pub arch: String,
-    // 虚拟化平台
+    /// 虚拟化平台
     pub virtualization: String,
 }
 
-// 系统动态信息结构体
+/// 系统动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicSystemData {
-    // 系统启动时间（秒时间戳）
+    /// 系统启动时间（秒时间戳）
     pub boot_time: u64,
-    // 系统运行时间（秒）
+    /// 系统运行时间（秒）
     pub uptime: u64,
-    // 进程数量
+    /// 进程数量
     pub process_count: u64,
 }
 
-// 磁盘类型枚举
+/// 磁盘类型枚举。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum DiskKind {
-    // 机械硬盘
+    /// 机械硬盘
     Hdd,
-    // 固态硬盘
+    /// 固态硬盘
     Ssd,
-    // 未知类型
+    /// 未知类型
     Unknown,
 }
 
-// 每个磁盘的动态信息结构体
+/// 每个磁盘的动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicPerDiskData {
-    // 磁盘类型
+    /// 磁盘类型
     pub kind: DiskKind,
-    // 磁盘名称
+    /// 磁盘名称
     pub name: String,
-    // 文件系统类型
+    /// 文件系统类型
     pub file_system: String,
-    // 挂载点
+    /// 挂载点
     pub mount_point: String,
-    // 总空间大小（字节）
+    /// 总空间大小（字节）
     pub total_space: u64,
-    // 可用空间大小（字节）
+    /// 可用空间大小（字节）
     pub available_space: u64,
-    // 是否可移动
+    /// 是否可移动
     pub is_removable: bool,
-    // 是否只读
+    /// 是否只读
     pub is_read_only: bool,
-    // 读取速度（字节/秒）
+    /// 读取速度（字节/秒）
     pub read_speed: u64,
-    // 写入速度（字节/秒）
+    /// 写入速度（字节/秒）
     pub write_speed: u64,
 }
 
-// 网络动态信息结构体
+/// 网络动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicNetworkData {
-    // 网络接口列表
+    /// 网络接口列表
     pub interfaces: Vec<DynamicPerNetworkInterfaceData>,
-    // UDP 连接数
+    /// UDP 连接数
     pub udp_connections: u64,
-    // TCP 连接数
+    /// TCP 连接数
     pub tcp_connections: u64,
 }
 
-// 每个网络接口的动态信息结构体
+/// 每个网络接口的动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicPerNetworkInterfaceData {
-    // 网络接口名称
+    /// 网络接口名称
     pub interface_name: String,
-    // 总接收数据量（字节），从上次网卡重启开始计算
-    pub total_received: u64, // 从上次网卡重启开始计算
-    // 总发送数据量（字节），从上次网卡重启开始计算
-    pub total_transmitted: u64, // 从上次网卡重启开始计算
-    // 接收速度（字节/秒）
+    /// 总接收数据量（字节），从上次网卡重启开始计算
+    pub total_received: u64,
+    /// 总发送数据量（字节），从上次网卡重启开始计算
+    pub total_transmitted: u64,
+    /// 接收速度（字节/秒）
     pub receive_speed: u64,
-    // 发送速度（字节/秒）
+    /// 发送速度（字节/秒）
     pub transmit_speed: u64,
 }
 
-// GPU 静态信息结构体
+/// GPU 静态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct StaticGpuData {
-    // GPU ID，从 1 开始
+    /// GPU ID，从 1 开始
     pub id: u32,
-    // GPU 名称
+    /// GPU 名称
     pub name: String,
-    // CUDA 核心数（对于非 NVIDIA 显卡，该值为 0）
-    pub cuda_cores: u64, // 对于非 NVIDIA 显卡，该值为 0
-    // GPU 架构
+    /// CUDA 核心数（对于非 NVIDIA 显卡，该值为 0）
+    pub cuda_cores: u64,
+    /// GPU 架构
     pub architecture: String,
 }
 
-// GPU 动态信息结构体
+/// GPU 动态信息。
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DynamicGpuData {
-    // GPU ID，从 1 开始
+    /// GPU ID，从 1 开始
     pub id: u32,
-    // 已使用显存（字节）
+    /// 已使用显存（字节）
     pub used_memory: u64,
-    // 总显存（字节）
+    /// 总显存（字节）
     pub total_memory: u64,
-    // 图形时钟频率（MHz）
+    /// 图形时钟频率（MHz）
     pub graphics_clock_mhz: u64,
-    // 流处理器时钟频率（MHz），NV: Streaming Multiprocessor; AMD: Compute Unit
-    pub sm_clock_mhz: u64, // NV: Streaming Multiprocessor; AMD: Compute Unit
-    // 显存时钟频率（MHz）
+    /// 流处理器时钟频率（MHz），NV: Streaming Multiprocessor；AMD: Compute Unit
+    pub sm_clock_mhz: u64,
+    /// 显存时钟频率（MHz）
     pub memory_clock_mhz: u64,
-    // 视频时钟频率（MHz）
+    /// 视频时钟频率（MHz）
     pub video_clock_mhz: u64,
-    // GPU 使用率百分比
+    /// GPU 使用率百分比
     pub utilization_gpu: u8,
-    // 显存使用率百分比 (不是显存占用率，反应内存读写频率的数值)
+    /// 显存使用率百分比（不是显存占用率，反映内存读写频率的数值）
     pub utilization_memory: u8,
-    // 温度（摄氏度）
+    /// 温度（摄氏度）
     pub temperature: u8,
 }
 

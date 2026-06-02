@@ -1,3 +1,5 @@
+//! `task_create_task` RPC 方法：创建任务并立即返回任务 ID
+
 use crate::rpc::TaskManager;
 use crate::types::{TaskEvent, TaskEventType};
 use jsonrpsee::core::RpcResult;
@@ -13,6 +15,9 @@ use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+/// 校验任务类型参数是否合法
+///
+/// 当前仅检查 `Execute` 类型：cmd 不能为空字符串
 pub fn validate_task_type(task_type: &TaskEventType) -> anyhow::Result<()> {
     if let TaskEventType::Execute(execute_task) = task_type
         && execute_task.cmd.trim().is_empty()
@@ -23,6 +28,22 @@ pub fn validate_task_type(task_type: &TaskEventType) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 创建任务并立即返回任务 ID
+///
+/// - `manager` — 任务广播管理器，用于向 Agent 推送任务事件
+/// - `token` — 身份令牌，需拥有 `Task::Create` 权限
+/// - `target_uuid` — 目标 Agent UUID
+/// - `task_type` — 任务类型及其参数
+///
+/// 返回 `{"id": task_id}`。若 Agent 不在线则回滚数据库记录并返回错误。
+///
+/// 内部步骤：
+/// 1. 校验任务类型参数
+/// 2. 解析 Token 并检查 `Task::Create` 权限
+/// 3. 生成随机 task_token，插入数据库记录
+/// 4. 确保 Agent UUID 在 monitoring_uuid 表中注册
+/// 5. 通过 `TaskManager::send_event` 推送给 Agent
+/// 6. 发送失败则回滚数据库记录
 pub async fn create_task(
     manager: &Arc<TaskManager>,
     token: String,

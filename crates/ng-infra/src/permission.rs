@@ -1,35 +1,36 @@
-//! Permission types and resolvers.
+//! 权限类型与解析器。
 //!
-//! [`ScopedPermission<T>`] is a generic scope-restriction enum used to
-//! express "all access" vs "restricted to specific items" for any domain type.
+//! [`ScopedPermission<T>`] 是通用范围限制枚举，表达「全部访问」与「限定条目」两种模式。
 //!
-//! [`PermissionResolver`] is the trait that concrete implementations
-//! (e.g. the server's token-based permission checker) must satisfy.
+//! [`PermissionResolver`] 是具体实现（如 Server 端基于 Token 的权限检查器）必须满足的 trait。
 
 use ng_core::permission::data_structure::{Permission, Scope, Token};
 use serde::{Deserialize, Serialize};
 
 // ── ScopedPermission ──────────────────────────────────────────────────
 
-/// Permission scope restriction enum.
+/// 权限范围限制枚举。
 ///
-/// `All` — no restriction, full access to all scopes.
-/// `Scoped(Vec<T>)` — access restricted to the listed items.
+/// - `All` — 无限制，拥有所有范围的完整访问权。
+/// - `Scoped(Vec<T>)` — 仅允许访问列表中的条目。
 ///
-/// Uses `Vec<T>` instead of `HashSet<T>` so that the `Eq` bound suffices
-/// (the concrete `Scope` type from ng-core does not implement `Hash`).
+/// 使用 `Vec<T>` 而非 `HashSet<T>`，因为只需 `Eq` 约束即可
+/// （ng-core 的 `Scope` 类型未实现 `Hash`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopedPermission<T> {
-    /// Full access — no scope restrictions.
+    /// 全部访问——无范围限制
     #[default]
     All,
-    /// Restricted access — only the listed items are permitted.
+    /// 受限访问——仅列表中的条目被允许
     Scoped(Vec<T>),
 }
 
 impl<T: Eq> ScopedPermission<T> {
-    /// Check if a specific item is permitted.
+    /// 检查指定条目是否被允许访问。
+    ///
+    /// - `item` — 待检查的条目
+    /// - 返回 `true` 表示允许，`false` 表示拒绝
     pub fn is_allowed(&self, item: &T) -> bool {
         match self {
             Self::All => true,
@@ -37,12 +38,12 @@ impl<T: Eq> ScopedPermission<T> {
         }
     }
 
-    /// Returns `true` if there are no restrictions.
+    /// 返回是否为无限制模式（`All`）。
     pub const fn is_all(&self) -> bool {
         matches!(self, Self::All)
     }
 
-    /// Returns the inner list if scoped, `None` if `All`.
+    /// 返回受限列表；若为 `All` 则返回 `None`。
     pub fn as_scoped(&self) -> Option<&[T]> {
         match self {
             Self::All => None,
@@ -53,14 +54,14 @@ impl<T: Eq> ScopedPermission<T> {
 
 // ── PermissionResolver ────────────────────────────────────────────────
 
-/// Trait for resolving permissions for a token.
+/// Token 权限解析 trait。
 ///
-/// Implementations determine the effective scope restrictions
-/// for a given token and permission combination.
+/// 实现类根据给定的 Token 和 Permission 组合，确定实际生效的范围限制。
 pub trait PermissionResolver: Send + Sync {
-    /// Resolve the effective scope restriction for a permission.
+    /// 解析指定权限的有效范围限制。
     ///
-    /// Returns [`ScopedPermission::All`] if the token has unrestricted access,
-    /// or [`ScopedPermission::Scoped`] with the allowed scopes.
+    /// - `token` — 待解析的 Token
+    /// - `permission` — 待检查的权限类型
+    /// - 返回 [`ScopedPermission::All`] 表示无限制，或 [`ScopedPermission::Scoped`] 列出允许的范围
     fn resolve(&self, token: &Token, permission: &Permission) -> ScopedPermission<Scope>;
 }

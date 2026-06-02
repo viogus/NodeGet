@@ -1,3 +1,7 @@
+//! 配置文件结构体与解析逻辑模块。
+//!
+//! 包含 Agent 和 Server 的配置定义，以及 UUID 自动生成（`auto_gen`）的处理工具。
+
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
 
@@ -7,10 +11,10 @@ pub mod server;
 // Agent 配置模块
 pub mod agent;
 
-// 自定义 UUID 反序列化函数
-//
-// auto_gen 被禁止直接反序列化；持久化替换由 get_and_parse_config 完成。
-// 否则尝试解析输入字符串为标准 UUID 格式
+/// 自定义 UUID 反序列化函数。
+///
+/// `auto_gen` 被禁止直接反序列化；持久化替换由 `get_and_parse_config` 完成。
+/// 否则尝试解析输入字符串为标准 UUID 格式。
 pub(crate) fn deserialize_uuid_or_auto<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
 where
     D: Deserializer<'de>,
@@ -31,23 +35,25 @@ where
 /// 仅处理非注释、非空行，且匹配到 `"auto_gen"`（不区分大小写）开头的字符串值。
 /// 如果 key 不存在或值不是 auto_gen，则原样返回内容。
 ///
-/// # 参数
-/// * `content` — 原始配置文件内容
-/// * `key` — 要查找的 key（如 `"server_uuid"` 或 `"agent_uuid"`）
-/// * `uuid` — 替换后的 UUID 字符串
+/// - `content` — 原始配置文件内容
+/// - `key` — 要查找的 key（如 `"server_uuid"` 或 `"agent_uuid"`）
+/// - `uuid` — 替换后的 UUID 字符串
+/// - 返回替换后的完整配置文本
 pub(crate) fn replace_auto_gen_uuid(content: &str, key: &str, uuid: &str) -> String {
     let mut new_content = String::with_capacity(content.len() + 32);
     for line in content.lines() {
         let trimmed = line.trim_start();
+        // 跳过注释行和空行，原样保留
         if trimmed.starts_with('#') || trimmed.is_empty() {
             new_content.push_str(line);
             new_content.push('\n');
             continue;
         }
+        // 定位 key 结束位置（到等号或空白符为止）
         let key_end = trimmed
             .find(|c: char| c == '=' || c.is_ascii_whitespace())
             .unwrap_or(trimmed.len());
-        // 使用 key 长度替代魔法数字，避免 key 改名时代码不同步
+        // 使用 key 长度而非硬编码数字，避免 key 改名时代码不同步
         if key_end == key.len()
             && trimmed[..key_end].eq_ignore_ascii_case(key)
             && let Some(eq_pos) = line.find('=')
@@ -58,9 +64,9 @@ pub(crate) fn replace_auto_gen_uuid(content: &str, key: &str, uuid: &str) -> Str
             if let Some(first_char) = after_trimmed.chars().next()
                 && (first_char == '"' || first_char == '\'')
             {
-                // first_char 是 ASCII 单字节字符， slicing at [1..] 安全
+                // first_char 是 ASCII 单字节引号字符，slicing at [1..] 安全
                 let rest = &after_trimmed[1..];
-                // 使用 get(..8) 替代直接索引，防止非 ASCII 边界 panic
+                // 使用 get(..8) 替代直接索引 [..8]，防止非 ASCII 边界 panic
                 if rest
                     .get(..8)
                     .is_some_and(|s| s.eq_ignore_ascii_case("auto_gen"))

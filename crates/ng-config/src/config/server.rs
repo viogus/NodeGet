@@ -1,57 +1,62 @@
+//! Server 配置文件结构体与解析逻辑。
+//!
+//! 定义 `ServerConfig`、`DatabaseConfig`、`LoggingConfig`、`MonitoringBufferConfig` 等类型，
+//! 以及配置读取与 auto_gen UUID 替换方法。
+
 use crate::config::deserialize_uuid_or_auto;
 use crate::config::replace_auto_gen_uuid;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
 
-// 服务器配置结构体
+/// 服务器配置结构体，定义 Server 的运行参数。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerConfig {
-    // Server UUID，默认自动生成
+    /// Server UUID，默认自动生成
     #[serde(deserialize_with = "deserialize_uuid_or_auto")]
     pub server_uuid: uuid::Uuid,
 
-    // WebSocket 监听地址
+    /// WebSocket 监听地址（如 `0.0.0.0:3000`）
     pub ws_listener: String,
 
-    // JSON-RPC 最大并发连接数，默认 100
+    /// JSON-RPC 最大并发连接数，默认 100
     pub jsonrpc_max_connections: Option<u32>,
 
-    // 是否启用 Unix Socket（仅非 Windows 平台）
+    /// 是否启用 Unix Socket（仅非 Windows 平台）
     pub enable_unix_socket: Option<bool>,
 
-    // Unix Socket 路径（仅非 Windows 平台，默认 /var/lib/nodeget.sock）
+    /// Unix Socket 路径（仅非 Windows 平台，默认 `/var/lib/nodeget.sock`）
     pub unix_socket_path: Option<String>,
 
-    // 日志配置（可选，不填则使用默认值）
+    /// 日志配置（可选，不填则使用默认值）
     pub logging: Option<LoggingConfig>,
 
-    // 数据库配置
+    /// 数据库连接配置
     pub database: DatabaseConfig,
 
-    // 监控数据缓冲写入配置（可选）
+    /// 监控数据缓冲写入配置（可选）
     pub monitoring_buffer: Option<MonitoringBufferConfig>,
 
-    // JSON-RPC 最大请求体大小（字节），默认 10485760（10MB）
+    /// JSON-RPC 最大请求体大小（字节），默认 10485760（10MB）
     pub max_request_body_size: Option<u32>,
 
-    // JSON-RPC 最大响应体大小（字节），默认 104857600（100MB）
+    /// JSON-RPC 最大响应体大小（字节），默认 104857600（100MB）
     pub max_response_body_size: Option<u32>,
 
-    // TLS 证书文件路径（PEM），必须与 tls_key 同时指定才启用 TLS
+    /// TLS 证书文件路径（PEM 格式），必须与 `tls_key` 同时指定才启用 TLS
     pub tls_cert: Option<String>,
 
-    // TLS 私钥文件路径（PEM），必须与 tls_cert 同时指定才启用 TLS
+    /// TLS 私钥文件路径（PEM 格式），必须与 `tls_cert` 同时指定才启用 TLS
     pub tls_key: Option<String>,
 
-    // 静态文件服务根目录，默认 `./static/`
+    /// 静态文件服务根目录，默认 `./static/`
     pub static_path: Option<String>,
 
-    // 本地 SQLite 数据库存放目录，默认 `./db/`
+    /// 本地 SQLite 数据库存放目录，默认 `./db/`
     pub db_path: Option<String>,
 }
 
-/// 监控数据缓冲写入配置
+/// 监控数据缓冲写入配置。
 ///
 /// 控制 `report_static`、`report_dynamic`、`report_dynamic_summary` 三个写入接口
 /// 的批量插入行为。启用后，数据先缓存在内存中，按间隔批量写入数据库。
@@ -63,15 +68,15 @@ pub struct MonitoringBufferConfig {
     pub max_batch_size: Option<usize>,
 }
 
-/// 日志配置
+/// 日志配置。
 ///
 /// `log_filter` / `json_log_filter` 的语法与 `RUST_LOG` 环境变量一致，
 /// 例如 `"info,kv=debug,monitoring=trace,db=warn"`。
 ///
-/// 可用的 target:
-///   `server`, `rpc`, `db`, `kv`, `monitoring`, `task`, `token`,
-///   `js_worker`, `js_result`, `crontab`, `crontab_result`,
-///   `js_runtime`, `terminal`
+/// 可用的 target：
+///   `server`、`rpc`、`db`、`kv`、`monitoring`、`task`、`token`、
+///   `js_worker`、`js_result`、`crontab`、`crontab_result`、
+///   `js_runtime`、`terminal`
 ///
 /// 虚拟 target `db` 会自动展开为
 /// `sea_orm=<level>,sea_orm_migration=<level>,sqlx=<level>`。
@@ -96,38 +101,47 @@ pub struct LoggingConfig {
     pub memory_log_filter: Option<String>,
 }
 
-// 数据库配置结构体，定义数据库连接参数
+/// 数据库配置结构体，定义数据库连接参数。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DatabaseConfig {
-    // 数据库连接 URL
+    /// 数据库连接 URL
     pub database_url: String,
-    // 数据库连接超时时间（毫秒）
+    /// 数据库连接超时时间（毫秒）
     pub connect_timeout_ms: Option<u64>,
-    // 获取连接超时时间（毫秒）
+    /// 获取连接超时时间（毫秒）
     pub acquire_timeout_ms: Option<u64>,
-    // 连接空闲超时时间（毫秒）
+    /// 连接空闲超时时间（毫秒）
     pub idle_timeout_ms: Option<u64>,
-    // 连接最大生存时间（毫秒）
+    /// 连接最大生存时间（毫秒）
     pub max_lifetime_ms: Option<u64>,
-    // 最大连接数
+    /// 最大连接数
     pub max_connections: Option<u32>,
 }
 
 impl ServerConfig {
-    /// 从指定路径读取并解析服务器配置
+    /// 从指定路径读取并解析服务器配置。
     ///
-    /// 若配置文件中 `server_uuid` 为 `"auto_gen"`，则会生成随机 `UUIDv4`
+    /// 若配置文件中 `server_uuid` 为 `"auto_gen"`，则会生成随机 UUIDv4
     /// 并直接覆盖原配置文件，后续启动不再触发自动生成。
+    ///
+    /// - `path` — 配置文件路径
+    /// - 返回解析后的 `ServerConfig`
+    ///
+    /// 内部步骤：
+    /// 1. 读取配置文件内容
+    /// 2. 检查 `server_uuid` 是否为 `auto_gen`，若是则生成 UUID 并原子写回
+    /// 3. 解析 TOML 为 `ServerConfig`
     ///
     /// # Errors
     ///
-    /// 当文件读取失败或TOML解析失败时返回错误
+    /// 当文件读取失败或 TOML 解析失败时返回错误
     pub async fn get_and_parse_config(
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // 1. 读取配置文件内容
         let content = fs::read_to_string(path.as_ref()).await?;
 
-        // 检查并替换 auto_gen
+        // 2. 检查并替换 auto_gen
         let value: toml::Value = toml::from_str(&content)?;
         let is_auto_gen = value
             .get("server_uuid")
@@ -143,10 +157,12 @@ impl ServerConfig {
             fs::write(&tmp_path, &new_content).await?;
             fs::rename(&tmp_path, path.as_ref()).await?;
 
+            // 3. 解析替换后的配置
             let config: Self = toml::from_str(&new_content)?;
             return Ok(config);
         }
 
+        // 3. 解析原始配置（无需替换）
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }

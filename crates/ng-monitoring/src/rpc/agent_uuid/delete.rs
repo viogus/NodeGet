@@ -1,3 +1,7 @@
+//! `agent-uuid.delete` RPC 实现。
+//!
+//! 按 UUID 软删除 Agent 记录，需要 `MonitoringUuid::Delete` 权限。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -8,6 +12,16 @@ use serde_json::value::RawValue;
 use tracing::debug;
 use uuid::Uuid;
 
+/// 软删除指定 Agent UUID。
+///
+/// - `token` — 身份认证凭据
+/// - `agent_uuid` — 待软删除的 Agent UUID
+/// - 返回值 — `{"success": true/false, "message": "..."}`
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `MonitoringUuid::Delete` 权限
+/// 2. 调用 `MonitoringUuidCache::soft_delete()` 执行软删除
+/// 3. 返回操作结果
 pub async fn delete_agent_uuid(token: String, agent_uuid: Uuid) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         let token_or_auth = TokenOrAuth::from_full_token(&token)

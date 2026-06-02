@@ -1,3 +1,14 @@
+//! `js-worker` RPC 命名空间 —— JS Worker 的 CRUD、执行和运行时池管理。
+//!
+//! 提供七个 RPC 方法：
+//! - `js-worker_create` —— 创建新 Worker（编译字节码并入库）
+//! - `js-worker_update` —— 更新 Worker（重新编译字节码、驱逐旧 Runtime）
+//! - `js-worker_delete` —— 删除 Worker（驱逐 Runtime 后从数据库移除）
+//! - `js-worker_read` —— 读取 Worker 详情
+//! - `js-worker_run` —— 执行 Worker（字节码或源码模式）
+//! - `js-worker_get_rt_pool` —— 获取运行时池状态快照
+//! - `js-worker_list_all_js_worker` —— 列出所有可见 Worker 名称
+
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::proc_macros::rpc;
@@ -18,6 +29,7 @@ pub mod route_name;
 mod run;
 mod update;
 
+/// `js-worker` RPC trait 定义。
 #[rpc(server, namespace = "js-worker")]
 pub trait Rpc {
     #[method(name = "create")]
@@ -74,6 +86,7 @@ pub trait Rpc {
     async fn list_all_js_worker(&self, token: String) -> RpcResult<Box<RawValue>>;
 }
 
+/// `js-worker` RPC 实现。
 pub struct JsWorkerRpcImpl;
 
 impl RpcHelper for JsWorkerRpcImpl {}
@@ -203,7 +216,7 @@ impl RpcServer for JsWorkerRpcImpl {
     }
 }
 
-/// Build and return an [`jsonrpsee::RpcModule`] with all js-worker RPC methods registered.
+/// 构建并返回 `js-worker` 命名空间的 RPC Module。
 pub fn rpc_module() -> jsonrpsee::RpcModule<JsWorkerRpcImpl> {
     JsWorkerRpcImpl.into_rpc()
 }

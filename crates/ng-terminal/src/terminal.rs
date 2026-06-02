@@ -1,3 +1,19 @@
+//! Terminal WebSocket 中继模块。
+//!
+//! 职责：在 User（浏览器终端）和 Agent（远程 Shell）之间建立双向 WebSocket 中继，
+//! 通过 mpsc 通道解耦两端的收发。
+//!
+//! 连接流程：
+//! 1. Agent 发起 WebSocket 连接，携带 `task_token` + `task_id` + `terminal_id`
+//! 2. 校验 Agent 身份（通过 `task` 表验证 WebShell 任务）
+//! 3. Agent 创建 `SessionSlots` 并注册到 `TerminalState`
+//! 4. User 发起 WebSocket 连接，携带 `token` + `terminal_id`
+//! 5. 校验 User 权限（Token 需持有 `Terminal::Connect` 权限）
+//! 6. User 从 `SessionSlots` 取走 `rx_from_agent`，建立双向通道
+//!
+//! 协作关系：`auth` 模块校验 User 权限，`check_agent` 模块校验 Agent 身份，
+//! 服务器二进制通过 `router()` 挂载到 axum Router。
+
 use crate::auth::check_terminal_connect_permission;
 use crate::check_agent::check_agent;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
@@ -13,47 +29,60 @@ use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-// 终端消息通道缓冲区大小 - 防止内存耗尽
+/// 终端消息通道缓冲区大小，防止无界通道导致内存耗尽。
 const TERMINAL_CHANNEL_BUFFER_SIZE: usize = 4096;
 
-// 终端状态结构体，管理 Agent 和 User 之间的会话
-// Key 是 (agent_uuid, terminal_id)
+/// 终端全局状态，管理所有活跃的 Agent-User 会话。
+///
+/// Key 为 `(agent_uuid, terminal_id)` 组合，保证每个 Agent 下的每个终端会话唯一。
 #[derive(Clone)]
 pub struct TerminalState {
-    // 存储终端会话的并发安全映射
+    /// 终端会话的并发安全映射，`RwLock` 保护。
     pub sessions: Arc<RwLock<HashMap<TerminalSessionKey, SessionSlots>>>,
 }
 
+/// 终端会话标识，由 Agent UUID 和终端 ID 组成。
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct TerminalSessionKey {
+    /// Agent 的 UUID 标识。
     pub agent_uuid: Uuid,
+    /// 终端会话 ID，由 Agent 在连接时生成。
     pub terminal_id: Uuid,
 }
 
-// 会话槽位结构，Agent 连接时创建，User 连接时取走需要的部分
-//
-// Agent 连接时创建这个结构，User 连接时取走需要的部分
+/// 会话槽位：Agent 连接时创建，User 连接时取走需要的通道。
+///
+/// Agent 持有 `tx_to_agent`（向自身 WebSocket 转发 User 消息）和
+/// `rx_from_agent`（接收自身 WebSocket 消息转给 User）。
+/// User 连接时 `take()` 走 `rx_from_agent`，与 `tx_to_agent.clone()` 一起使用。
 pub struct SessionSlots {
-    // User -> Agent 的有界发送通道，防止内存耗尽
+    /// User -> Agent 的有界发送通道，Agent 端持有时用于接收 User 消息。
     pub tx_to_agent: mpsc::Sender<Message>,
 
-    // Agent -> User 的有界接收通道，可选参数
+    /// Agent -> User 的有界接收通道，User 连接时 take 走。
+    /// 若为 `None`，说明该会话已有 User 占用。
     pub rx_from_agent: Option<mpsc::Receiver<Message>>,
 
-    // 任务令牌
+    /// 任务令牌，用于验证 Agent 连接合法性。
     pub task_token: String,
 }
 
-// 终端参数结构体，用于解析 WebSocket 连接参数
+/// WebSocket 连接参数，从查询字符串解析。
 #[derive(Deserialize)]
 pub struct TerminalParams {
-    // Agent 的 UUID
+    /// Agent 的 UUID 字符串。
     pub agent_uuid: String,
 
-    pub task_id: Option<u64>,       // 任务ID
-    pub task_token: Option<String>, // Task Token
-    pub terminal_id: Option<Uuid>,  // 终端连接 ID
+    /// 任务 ID，Agent 连接时必传。
+    pub task_id: Option<u64>,
 
+    /// 任务令牌，Agent 连接时必传。
+    pub task_token: Option<String>,
+
+    /// 终端连接 ID，Agent 和 User 连接时均必传。
+    pub terminal_id: Option<Uuid>,
+
+    /// User 的认证 Token，User 连接时必传。
     pub token: Option<String>,
 }
 
@@ -69,30 +98,35 @@ pub fn router() -> axum::Router {
         })
 }
 
-// 终端 WebSocket 处理器
-//
-// # 参数
-// * `ws` - WebSocket 升级实例
-// * `Query(params)` - 查询参数
-// * `State(state)` - 终端状态
-//
-// # 返回值
-// 返回可转换为响应的类型
+/// Terminal WebSocket 升级处理器。
+///
+/// - `ws` - WebSocket 升级请求实例
+/// - `Query(params)` - 查询字符串解析的连接参数
+/// - `State(state)` - 共享的终端会话状态
+///
+/// 返回：WebSocket 升级响应。
+///
+/// 内部步骤：
+/// 1. 设置最大帧大小 1MB、最大消息大小 4MB（防止 oversized frame/message）
+/// 2. 升级为 WebSocket 后委托给 [`handle_socket`]
 pub async fn terminal_ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<TerminalParams>,
     State(state): State<TerminalState>,
 ) -> impl IntoResponse {
     debug!(target: "terminal", agent_uuid = %params.agent_uuid, "WebSocket upgrade request");
-    ws.on_upgrade(move |socket| handle_socket(socket, params, state))
+    ws.max_frame_size(1024 * 1024)
+        .max_message_size(4 * 1024 * 1024)
+        .on_upgrade(move |socket| handle_socket(socket, params, state))
 }
 
-// 处理 WebSocket 连接
-//
-// # 参数
-// * `socket` - WebSocket 连接实例
-// * `params` - 终端参数
-// * `state` - 终端状态
+/// 处理已升级的 WebSocket 连接，根据参数分发到 Agent 或 User 处理逻辑。
+///
+/// - `socket` - 已升级的 WebSocket 连接
+/// - `params` - 连接参数
+/// - `state` - 共享的终端会话状态
+///
+/// 分发逻辑：携带 `task_token` + `task_id` 的是 Agent，否则是 User。
 async fn handle_socket(socket: WebSocket, params: TerminalParams, state: TerminalState) {
     debug!(target: "terminal", "routing terminal connection");
     let TerminalParams {
@@ -120,14 +154,22 @@ async fn handle_socket(socket: WebSocket, params: TerminalParams, state: Termina
     }
 }
 
-// 处理 Agent 连接
-//
-// # 参数
-// * `socket` - WebSocket 连接实例
-// * `agent_uuid` - Agent 的 UUID
-// * `task_token` - 任务令牌
-// * `id` - 任务 ID
-// * `state` - 终端状态
+/// 处理 Agent 端的 WebSocket 连接。
+///
+/// - `socket` - WebSocket 连接实例
+/// - `agent_uuid` - Agent 的 UUID 字符串
+/// - `terminal_id` - 终端会话 ID
+/// - `task_token` - 任务令牌，用于验证连接合法性
+/// - `id` - 任务 ID
+/// - `state` - 共享的终端会话状态
+///
+/// 内部步骤：
+/// 1. 调用 [`check_agent`] 验证 Agent 身份（task_id + uuid + token 匹配且为 WebShell）
+/// 2. 解析 agent_uuid 为 [`Uuid`]
+/// 3. 创建双向 mpsc 通道（User->Agent 和 Agent->User）
+/// 4. 使用 Entry API 原子插入 `SessionSlots`，避免 TOCTOU 竞态
+/// 5. 启动两个异步任务：从 User 通道转发到 Agent WS、从 Agent WS 转发到 User 通道
+/// 6. WebSocket 断开后清理会话映射
 async fn handle_agent(
     mut socket: WebSocket,
     agent_uuid: String,
@@ -236,11 +278,12 @@ async fn handle_agent(
         }
     });
 
-    // 等待 WebSocket 断开
+    // 等待 Agent WS 侧断开（send_task 依赖 WS 读取）
     let _ = send_task.await;
+    // recv_task 依赖 mpsc 通道，Agent WS 断开后通道不会自动关闭，需主动 abort
     recv_task.abort();
 
-    // 清理 Map - 直接删除，无需检查（remove操作本身就是幂等的）
+    // 清理会话映射：remove 本身幂等，无需先 contains_key 再删
     {
         let mut sessions = state.sessions.write().await;
         sessions.remove(&session_key);
@@ -248,13 +291,20 @@ async fn handle_agent(
     info!(target: "terminal", agent_uuid = %agent_uuid, terminal_id = %terminal_id, "Agent terminal disconnected");
 }
 
-// 处理 User 连接
-//
-// # 参数
-// * `socket` - WebSocket 连接实例
-// * `agent_uuid` - Agent 的 UUID
-// * `token` - 用户令牌
-// * `state` - 终端状态
+/// 处理 User 端的 WebSocket 连接。
+///
+/// - `socket` - WebSocket 连接实例
+/// - `agent_uuid` - 目标 Agent 的 UUID 字符串
+/// - `terminal_id` - 终端会话 ID（必须提供）
+/// - `token` - User 的认证 Token（必须提供）
+/// - `state` - 共享的终端会话状态
+///
+/// 内部步骤：
+/// 1. 校验 `terminal_id` 和 `token` 必须存在
+/// 2. 调用 [`check_terminal_connect_permission`] 验证 User 权限
+/// 3. 从 `TerminalState` 中取出对应的 `SessionSlots`，拿走 `rx_from_agent`
+/// 4. 启动两个异步任务：从 Agent 通道转发到 User WS、从 User WS 转发到 Agent 通道
+/// 5. 两个任务任一结束时断开连接
 async fn handle_user(
     mut socket: WebSocket,
     agent_uuid: String,
@@ -351,6 +401,11 @@ async fn handle_user(
     info!(target: "terminal", agent_uuid = %agent_uuid, terminal_id = %terminal_id, "User terminal disconnected");
 }
 
+/// 向 WebSocket 连接发送错误消息后关闭。
+///
+/// - `socket` - WebSocket 连接实例
+/// - `error_id` - 错误代码，用于构造 JSON 错误消息
+/// - `message` - 错误描述文本
 async fn reject_with_error(mut socket: WebSocket, error_id: i32, message: &str) {
     warn!(target: "terminal", error_id = error_id, message = %message, "rejecting WebSocket with error");
     let error_json = generate_error_message(error_id, message);

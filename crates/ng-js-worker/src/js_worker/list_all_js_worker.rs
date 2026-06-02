@@ -1,3 +1,5 @@
+//! `js-worker_list_all_js_worker` RPC —— 列出所有可见的 JS Worker 名称。
+
 use crate::js_worker::auth::filter_workers_by_list_permission;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -7,6 +9,13 @@ use sea_orm::{EntityTrait, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 列出 token 有权查看的所有 JS Worker 名称。
+///
+/// - `token` —— 认证 Token
+///
+/// 内部步骤：
+/// 1. 从数据库查询所有 Worker 名称
+/// 2. 按 `ListAllJsWorker` 权限过滤，仅返回有权查看的子集
 pub async fn list_all_js_worker(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_worker", "processing list all js_worker request");

@@ -1,3 +1,8 @@
+//! `js-result` 删除操作 —— 按条件删除 JS 执行结果记录。
+//!
+//! 支持 ID、Worker 名称、运行类型、时间范围、状态等多种筛选条件，
+//! 以及 Limit/Last 修饰符控制删除范围。
+
 use crate::auth::{
     JsResultAction, ensure_js_result_permission, resolve_accessible_js_result_workers,
 };
@@ -11,6 +16,17 @@ use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Quer
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 删除符合条件的 JS 执行结果记录。
+///
+/// - `token` —— 认证 Token
+/// - `query` —— 查询条件集合
+///
+/// 内部步骤：
+/// 1. 解析条件中的 Worker 名称，确定权限范围
+/// 2. 若未指定 Worker 名称，自动解析 token 可访问的所有 Worker
+/// 3. 为 select 和 delete 两个查询分别应用筛选条件
+/// 4. 若有 Limit/Last 修饰符，先 select ID 再按 ID 删除
+/// 5. 否则直接 delete_many 按条件删除
 pub async fn delete(token: String, query: JsResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_result", condition_count = query.condition.len(), "processing js_result delete request");
@@ -162,6 +178,7 @@ pub async fn delete(token: String, query: JsResultDataQuery) -> RpcResult<Box<Ra
                     );
                 }
                 JsResultQueryCondition::Limit(limit) => {
+                    // 单次删除上限 10000 条，防止误操作删除过多数据
                     const MAX_LIMIT: u64 = 10_000;
                     limit_count = Some(std::cmp::min(limit, MAX_LIMIT));
                 }
@@ -171,6 +188,7 @@ pub async fn delete(token: String, query: JsResultDataQuery) -> RpcResult<Box<Ra
             }
         }
 
+        // Limit/Last 模式：先查 ID 再按 ID 删除，避免条件不精确导致误删
         let deleted_rows = if is_last || limit_count.is_some() {
             let limit = if is_last { 1 } else { limit_count.unwrap_or(0) };
             let ids: Vec<i64> = select_query

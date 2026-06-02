@@ -1,52 +1,73 @@
+//! Linux Netlink SOCK_DIAG 网络连接统计实现。
+//!
+//! 通过 Netlink 的 `SOCK_DIAG_BY_FAMILY` 请求查询内核 socket 表，
+//! 统计指定协议族和传输协议的连接数。TCP 仅统计 `ESTABLISHED` 状态。
+//!
+//! 参考：linux/inet_diag.h、linux/sock_diag.h
+
 use libc::{c_void, close, recvfrom, sendto, sockaddr, sockaddr_nl, socket};
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::RawFd;
 use std::ptr;
 
+/// Netlink 请求类型：按协议族查询 socket 诊断信息。
 const SOCK_DIAG_BY_FAMILY: u16 = 20;
+/// 查询所有 TCP 状态的位掩码。
 const ALL_TCP_STATES: u32 = 0xffffffff;
+/// TCP ESTABLISHED 状态的位索引。
 const TCP_ESTABLISHED: u32 = 1;
+/// Netlink 消息头部长度。
 const NLMSG_HDRLEN: usize = size_of::<libc::nlmsghdr>();
 
-/// ---- C structures aligned with kernel ----
+/// ---- 与内核对齐的 C 结构体定义 ----
 
-// from linux/inet_diag.h
+/// 对应 linux/inet_diag.h 的 `inet_diag_sock_id`。
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InetDiagSockId {
     idiag_sport: u16,
     idiag_dport: u16,
-    idiag_src: [u32; 4], // Enough to hold IPv6 (IPv4 only uses idiag_src[0])
+    /// 源地址，长度足以容纳 IPv6（IPv4 仅使用 `[0]`）
+    idiag_src: [u32; 4],
     idiag_dst: [u32; 4],
     idiag_if: u32,
     idiag_cookie: [u32; 2],
 }
 
-// from linux/inet_diag.h
+/// 对应 linux/inet_diag.h 的 `inet_diag_req_v2`。
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InetDiagReqV2 {
+    /// 协议族（AF_INET / AF_INET6）
     family: u8,
+    /// 传输协议（IPPROTO_TCP / IPPROTO_UDP）
     protocol: u8,
     ext: u8,
     pad: u8,
+    /// 查询的状态位掩码
     states: u32,
     id: InetDiagSockId,
 }
 
-/// Entry: Count connection messages by protocol
+/// 按协议族和传输协议查询连接数。
+///
+/// - `family` - 协议族（`AF_INET` 或 `AF_INET6`）
+/// - `protocol` - 传输协议（`IPPROTO_TCP` 或 `IPPROTO_UDP`）
+///
+/// TCP 仅查询 `ESTABLISHED` 状态；UDP 查询所有状态。
+/// 返回匹配的连接数；Netlink 通信失败时返回 IO 错误。
 pub fn connections_count_with_protocol(family: u8, protocol: u8) -> io::Result<u64> {
-    // Construct netlink header
+    // 1. 构造 Netlink 消息头
     let hdr = libc::nlmsghdr {
-        nlmsg_len: 0, // Set to 0 first, filled back during serialization
+        nlmsg_len: 0, // 先置 0，序列化时回填
         nlmsg_type: SOCK_DIAG_BY_FAMILY,
         nlmsg_flags: (libc::NLM_F_DUMP | libc::NLM_F_REQUEST) as u16,
         nlmsg_seq: 0,
         nlmsg_pid: 0,
     };
 
-    // Construct inet_diag_req_v2
+    // 2. 构造 inet_diag_req_v2 请求体
     let mut req = InetDiagReqV2 {
         family,
         protocol,
@@ -63,18 +84,23 @@ pub fn connections_count_with_protocol(family: u8, protocol: u8) -> io::Result<u
         },
     };
 
-    // For TCP, only query ESTABLISHED state
+    // TCP 仅查询 ESTABLISHED 状态
     if protocol == libc::IPPROTO_TCP as u8 {
         req.states = 1 << TCP_ESTABLISHED;
     }
 
-    // Serialize into a Netlink message (header + payload)
+    // 3. 序列化为 Netlink 消息（头 + 载荷）
     let msg = serialize_netlink_message(&hdr, &req)?;
 
-    // Send and only count the number of returned messages
+    // 4. 发送请求并统计返回消息数
     netlink_inet_diag_only_count(&msg)
 }
 
+/// 发送 Netlink 请求并统计内核返回的 socket 诊断消息数。
+///
+/// - `request` - 已序列化的 Netlink 请求字节
+///
+/// 返回连接数；IO 失败时返回错误。
 fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
     let fd = unsafe { socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_SOCK_DIAG) };
     if fd < 0 {
@@ -87,7 +113,7 @@ fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
     addr.nl_pid = 0;
     addr.nl_groups = 0;
 
-    // sendto
+    // 发送请求
     let ret = unsafe {
         sendto(
             fd,
@@ -102,7 +128,7 @@ fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
 
-    // Prepare read buffer
+    // 准备读取缓冲区，按页大小分配
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     let page_size = if page_size > 0 {
         page_size as usize
@@ -114,7 +140,7 @@ fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
     let mut total_count: u64 = 0;
 
     loop {
-        // Use the whole buf each time, nr is the effective length for this batch
+        // 每次用整个 buf 接收，nr 为本批次有效长度
         let nr = unsafe {
             recvfrom(
                 fd,
@@ -130,10 +156,7 @@ fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
         }
         let nr = nr as usize;
         if nr < NLMSG_HDRLEN {
-            // A batch shorter than the header is malformed but should not
-            // abort the outer drain loop; skip it and wait for the next
-            // recvfrom() which will typically deliver a well-formed batch
-            // (or NLMSG_DONE).
+            // 短于头部的批次是畸形数据，跳过等待下一个正常批次或 NLMSG_DONE
             continue;
         }
 
@@ -149,23 +172,24 @@ fn netlink_inet_diag_only_count(request: &[u8]) -> io::Result<u64> {
     Ok(total_count)
 }
 
-/// Only count netlink messages in this batch buffer; return done=true upon DONE/ERROR
+/// 统计一批 Netlink 消息中的实际连接记录数。
+///
+/// - `b` - 从 `recvfrom` 获得的原始字节切片
+///
+/// 返回 `(消息数, 是否遇到 DONE/ERROR)`；遇到畸形数据时返回 IO 错误。
 fn count_netlink_messages(mut b: &[u8]) -> io::Result<(u64, bool)> {
     let mut msgs: u64 = 0;
     let mut done = false;
 
     while b.len() >= NLMSG_HDRLEN {
         let (dlen, at_end) = netlink_message_header(b)?;
-        // DONE / ERROR are control messages, not actual connection records,
-        // so they must not be counted toward the caller's total.
+        // DONE / ERROR 是控制消息，不是实际连接记录，不应计入
         if at_end {
             done = true;
             break;
         }
         msgs += 1;
-        // Defensive: an aligned length of zero would make the slice advance
-        // a no-op and the outer `while b.len() >= NLMSG_HDRLEN` loop spin
-        // forever. Bail out instead.
+        // 防御：对齐长度为零会导致切片不前进、外层 while 死循环，直接退出
         if dlen == 0 {
             break;
         }
@@ -175,15 +199,17 @@ fn count_netlink_messages(mut b: &[u8]) -> io::Result<(u64, bool)> {
     Ok((msgs, done))
 }
 
-/// Parse nlmsghdr of the current slice, return (aligned length of this message, whether DONE/ERROR)
+/// 解析当前切片的首个 `nlmsghdr`，返回其对齐长度及是否为 DONE/ERROR。
+///
+/// - `b` - 原始字节切片
+///
+/// 使用 `ptr::read_unaligned` 读取头部，因为 `recvfrom` 返回的缓冲区无对齐保证，
+/// 在严格对齐目标（如 ARMv7）上直接引用转换可能产生 SIGBUS。
 fn netlink_message_header(b: &[u8]) -> io::Result<(usize, bool)> {
     if b.len() < NLMSG_HDRLEN {
         return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }
 
-    // Read the header via `ptr::read_unaligned` because the buffer comes
-    // from `recvfrom()` and has no alignment guarantee. On strict-alignment
-    // targets (e.g. ARMv7) a direct reference cast could produce SIGBUS.
     let h: libc::nlmsghdr = unsafe { ptr::read_unaligned(b.as_ptr().cast::<libc::nlmsghdr>()) };
     let len = h.nlmsg_len as usize;
     let l = nlm_align_of(len as i32) as usize;
@@ -199,29 +225,34 @@ fn netlink_message_header(b: &[u8]) -> io::Result<(usize, bool)> {
     Ok((l, false))
 }
 
-/// Align to 4 bytes
+/// 将消息长度按 4 字节对齐（Netlink 协议要求）。
 #[inline]
 fn nlm_align_of(msglen: i32) -> i32 {
     (msglen + libc::NLA_ALIGNTO - 1) & !(libc::NLA_ALIGNTO - 1)
 }
 
-/// Serialize (header, payload) into a Netlink message (fill back header.len)
+/// 将头部和载荷序列化为完整的 Netlink 消息，回填 `nlmsg_len`。
+///
+/// - `hdr` - Netlink 消息头部模板
+/// - `req` - `inet_diag_req_v2` 载荷
+///
+/// 返回序列化后的字节向量。
 fn serialize_netlink_message(hdr: &libc::nlmsghdr, req: &InetDiagReqV2) -> io::Result<Vec<u8>> {
     let total = NLMSG_HDRLEN + size_of::<InetDiagReqV2>();
     let mut msg = vec![0u8; total];
 
-    // Write header (copy first, fill back nlmsg_len)
+    // 拷贝头部并回填 nlmsg_len
     let mut h = *hdr;
     h.nlmsg_len = total as u32;
 
     unsafe {
-        // header
+        // 头部
         ptr::copy_nonoverlapping(
             &h as *const libc::nlmsghdr as *const u8,
             msg.as_mut_ptr(),
             NLMSG_HDRLEN,
         );
-        // payload
+        // 载荷
         ptr::copy_nonoverlapping(
             req as *const InetDiagReqV2 as *const u8,
             msg.as_mut_ptr().add(NLMSG_HDRLEN),
@@ -232,7 +263,7 @@ fn serialize_netlink_message(hdr: &libc::nlmsghdr, req: &InetDiagReqV2) -> io::R
     Ok(msg)
 }
 
-/// Simple FD guard
+/// 文件描述符 RAII 守卫，drop 时自动 `close`。
 struct FdGuard(RawFd);
 impl Drop for FdGuard {
     fn drop(&mut self) {

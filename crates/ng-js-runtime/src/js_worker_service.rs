@@ -1,42 +1,47 @@
-//! `JsWorkerService` trait -- injection point for js-worker callbacks.
+//! `JsWorkerService` trait —— JS Worker 服务回调的依赖注入点。
 //!
-//! The runtime pool and `inline_call/nodeget` modules need to call back into
-//! the js-worker service (which lives in `ng-js-worker`). To break the
-//! circular dependency, we define a trait here and inject the implementation
-//! via `OnceLock` at startup, the same pattern used by `AuthChecker` in
-//! `ng-infra`.
+//! 运行时池和 `inline_call/nodeget` 模块需要回调到 js-worker 服务（位于 `ng-js-worker`）。
+//! 为打破循环依赖，在此定义 trait 并通过 `OnceLock` 在启动时注入实现，
+//! 与 `ng-infra` 中 `AuthChecker` 使用相同的模式。
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use serde_json::Value;
-
-/// Trait for js-worker service callbacks.
+/// JS Worker 服务回调 trait。
 ///
-/// Implemented by `ng-js-worker` (or the server crate) and injected once
-/// during startup via [`set_js_worker_service`].
+/// 由 `ng-js-worker`（或 server crate）实现，启动时通过 [`set_js_worker_service`] 注入。
 pub trait JsWorkerService: Send + Sync + 'static {
-    /// Execute an inline call and record the result in the DB.
+    /// 执行内联调用并记录结果到数据库。
+    ///
+    /// - `js_script_name` —— 目标 Worker 名称
+    /// - `params_json` —— 调用参数的 JSON 字符串（直接透传，避免冗余 parse/serialize）
+    /// - `timeout_sec` —— 调用方软超时（秒）
+    /// - `inline_caller` —— 发起调用的源 Worker 名称
+    ///
+    /// 返回执行结果的 JSON 字符串（直接透传，避免冗余 parse/serialize）。
     fn run_inline_call_and_record_result(
         &self,
         js_script_name: String,
-        params: Value,
+        params_json: String,
         timeout_sec: Option<f64>,
         inline_caller: Option<String>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Value>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>;
 
-    /// Get a cloned RPC module for dispatching internal JSON-RPC requests.
+    /// 获取 RPC Module 的克隆，用于分发内部 JSON-RPC 请求。
     fn get_rpc_module(
         &self,
     ) -> Pin<Box<dyn Future<Output = Box<dyn RawJsonDispatcher + Send>> + Send>>;
 }
 
-/// Trait for raw JSON-RPC dispatch, abstracting over `jsonrpsee::RpcModule`.
+/// 原始 JSON-RPC 分发 trait，对 `jsonrpsee::RpcModule` 的抽象。
 ///
-/// This avoids depending on `jsonrpsee` in `ng-js-runtime`.
+/// 避免在 `ng-js-runtime` 中直接依赖 `jsonrpsee`。
 pub trait RawJsonDispatcher: Send + Sync {
-    /// Dispatch a raw JSON-RPC request string, return the response string.
+    /// 分发原始 JSON-RPC 请求字符串，返回响应字符串。
+    ///
+    /// - `json` —— JSON-RPC 请求原始字符串
+    /// - `buf_size` —— 响应缓冲区大小
     fn raw_json_request(
         &self,
         json: &str,
@@ -46,16 +51,16 @@ pub trait RawJsonDispatcher: Send + Sync {
 
 static JS_WORKER_SERVICE: OnceLock<Box<dyn JsWorkerService>> = OnceLock::new();
 
-/// Set the global `JsWorkerService` implementation.
+/// 设置全局 `JsWorkerService` 实现。
 ///
-/// Must be called once during server startup.
+/// 必须在服务器启动时调用一次。
 pub fn set_js_worker_service(service: Box<dyn JsWorkerService>) {
     let _ = JS_WORKER_SERVICE.set(service);
 }
 
-/// Get the global `JsWorkerService`.
+/// 获取全局 `JsWorkerService`。
 ///
-/// Panics if not initialized -- call [`set_js_worker_service`] first.
+/// 若未初始化则 panic —— 必须先调用 [`set_js_worker_service`]。
 pub fn get_js_worker_service() -> &'static dyn JsWorkerService {
     JS_WORKER_SERVICE
         .get()

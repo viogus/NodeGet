@@ -1,3 +1,8 @@
+//! `js-worker_update` RPC —— 更新 JS Worker。
+//!
+//! 重新编译字节码、更新数据库记录、驱逐运行时池中的旧 Worker，
+//! 确保下次执行使用新配置和字节码。
+
 use crate::js_worker::auth::check_js_worker_permission;
 use crate::js_worker::route_name::normalize_route_name;
 use base64::Engine;
@@ -15,6 +20,26 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, trace};
 
+/// 更新指定 JS Worker。
+///
+/// - `token` —— 认证 Token
+/// - `name` —— Worker 名称
+/// - `description` —— 新描述
+/// - `js_script_base64` —— 新 JS 脚本的 Base64 编码
+/// - `route_name` —— 新路由名称（可选）
+/// - `runtime_clean_time` —— 新清理时间阈值（ms，可选）
+/// - `env` —— 新环境变量（可选）
+/// - `max_run_time` —— 新执行时长上限（ms，可选）
+/// - `max_stack_size` —— 新栈大小上限（bytes，可选）
+/// - `max_heap_size` —— 新堆大小上限（bytes，可选）
+///
+/// 内部步骤：
+/// 1. 校验 name 非空、js_script_base64 非空且合法
+/// 2. 检查 Write 权限
+/// 3. 查询现有记录，检查 route_name 唯一性（排除自身）
+/// 4. 重新编译字节码
+/// 5. 更新 `js_worker` 表（含 update_at 时间戳）
+/// 6. 驱逐运行时池中的旧 Worker
 pub async fn update(
     token: String,
     name: String,

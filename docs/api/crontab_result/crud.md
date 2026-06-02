@@ -27,6 +27,7 @@
 - 需要 `CrontabResult::Read(String)` 权限
 - 仅在 `Global` Scope 下有效
 - `read` 权限中的字符串对应 `cron_name`，支持通配符 `*`
+- 若结果涉及多个不同的 `cron_name`，则 Token 必须对每个 `cron_name` 都具备对应的读取权限
 
 ### 返回值
 
@@ -191,6 +192,7 @@
 
 - 若指定了 `cron_name` 条件，则检查对该 `cron_name` 的删除权限
 - 若未指定 `cron_name` 条件（删除所有匹配记录），则需要全局删除权限 `{"delete": "*"}`
+- 若匹配的记录涉及多个不同的 `cron_name`，则 Token 必须对每个 `cron_name` 都具备对应的删除权限
 
 ### 返回值
 

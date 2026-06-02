@@ -1,3 +1,8 @@
+//! `agent.static_data_multi_last_query` RPC 实现。
+//!
+//! 批量查询多台设备的静态监控最新值。优先从内存 last-cache 获取，
+//! 缓存未命中的部分通过 UNION ALL 查询数据库，最后合并结果。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::StaticDataQueryField;
 use crate::rpc::agent::AgentRpcImpl;
@@ -21,6 +26,19 @@ use std::collections::HashSet;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+/// 批量查询多台设备的静态监控最新值。
+///
+/// - `token` — 身份认证凭据
+/// - `uuids` — 设备 UUID 列表（自动去重）
+/// - `fields` — 需要的字段列表
+/// - 返回值 — 最新记录的 JSON 数组
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `StaticMonitoring::Read` 权限
+/// 2. UUID 去重并通过缓存转换为 `uuid_id`
+/// 3. 优先从 `MonitoringLastCache` 获取缓存命中
+/// 4. 缓存未命中的部分构建 UNION ALL 语句查询 DB
+/// 5. 合并缓存与 DB 结果，序列化返回
 pub async fn static_data_multi_last_query(
     token: String,
     uuids: Vec<Uuid>,
@@ -169,6 +187,7 @@ pub async fn static_data_multi_last_query(
     }
 }
 
+/// UUID 列表去重，保持原始顺序。
 fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     let mut seen = HashSet::with_capacity(uuids.len());
     let mut deduped = Vec::with_capacity(uuids.len());
@@ -182,6 +201,7 @@ fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     deduped
 }
 
+/// 为多台设备构建 UNION ALL 语句。
 fn build_union_last_statement(
     uuid_id_pairs: &[(Uuid, i16)],
     fields: &[StaticDataQueryField],
@@ -203,6 +223,7 @@ fn build_union_last_statement(
     ))
 }
 
+/// 为单台设备构建获取最新一条静态记录的 SELECT 语句。
 fn build_single_last_select(uuid_id: i16, fields: &[StaticDataQueryField]) -> SelectStatement {
     let inner_query = static_monitoring::Entity::find()
         .select_only()
@@ -245,6 +266,7 @@ fn build_single_last_select(uuid_id: i16, fields: &[StaticDataQueryField]) -> Se
     wrapped.clone()
 }
 
+/// 流式执行 UNION ALL 语句查询，逐行处理并拼接 JSON 数组。
 async fn execute_statement_query(
     db: &DatabaseConnection,
     statement: Statement,

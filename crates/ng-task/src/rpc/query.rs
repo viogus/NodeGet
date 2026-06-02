@@ -1,3 +1,5 @@
+//! `task_query` RPC 方法：按条件查询任务记录
+
 use crate::types::query::{TaskDataQuery, TaskQueryCondition};
 use futures_util::StreamExt;
 use jsonrpsee::core::RpcResult;
@@ -15,12 +17,27 @@ use tracing::{debug, error};
 
 /// 转义 SQL LIKE 特殊字符，防止注入攻击
 ///
-/// SQL LIKE 中 `%` 匹配任意字符序列，`_` 匹配单个字符
-/// 这些字符需要转义才能进行精确匹配
+/// SQL LIKE 中 `%` 匹配任意字符序列，`_` 匹配单个字符，
+/// 这些字符需要转义才能在 JSON 文本搜索中进行精确匹配
 fn escape_like_pattern(pattern: &str) -> String {
     pattern.replace('%', r"\%").replace('_', r"\_")
 }
 
+/// 按条件查询任务记录，流式序列化返回
+///
+/// - `token` — 身份令牌，需拥有对应任务类型的 `Task::Read` 权限
+/// - `task_data_query` — 查询条件，包含条件列表
+///
+/// 返回任务记录 JSON 数组。默认限制 1000 条，使用 `Limit` 条件可调整。
+/// 无 `Last`/`Limit` 条件时按时间正序；有则按时间倒序取最新记录。
+///
+/// 内部步骤：
+/// 1. 解析 Token，收集查询条件中的 UUID 构建 scope，确定需要的 Read 权限
+/// 2. 检查权限：无 UUID 条件时使用 Global scope
+/// 3. 构建查询语句，处理各条件类型
+/// 4. 设置排序和 limit（`Last` 取 1 条倒序，`Limit` 取指定条数倒序，默认 1000 条正序）
+/// 5. 使用流式查询逐条序列化，减少内存占用
+/// 6. 对每条记录做字段转换：`id` → `task_id`，`task_event_type`/`task_event_result` 反序列化
 pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "task", condition_count = task_data_query.condition.len(), "processing task query request");
@@ -169,7 +186,8 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
             }
         }
 
-        const DEFAULT_LIMIT: u64 = 10_000;
+        /// 默认查询上限 1000 条，客户端需要更多时须显式指定 `Limit` 条件
+        const DEFAULT_LIMIT: u64 = 1000;
 
         if is_last {
             query = query
@@ -193,7 +211,7 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
             NodegetError::DatabaseError(format!("Database query error: {e}"))
         })?;
 
-        let capacity = limit_count.unwrap_or(100) as usize * 500;
+        let capacity = limit_count.unwrap_or(DEFAULT_LIMIT) as usize * 500;
         let mut output_buffer: Vec<u8> = Vec::with_capacity(capacity);
 
         output_buffer.push(b'[');

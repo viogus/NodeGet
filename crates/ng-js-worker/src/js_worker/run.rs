@@ -1,3 +1,7 @@
+//! `js-worker_run` RPC —— 执行 JS Worker。
+//!
+//! 根据编译模式选择字节码路径（运行时池）或源码路径（一次性 Runtime）。
+
 use crate::js_worker::auth::check_js_worker_permission;
 use crate::service::{enqueue_defined_js_worker_run, enqueue_source_js_worker_run};
 use jsonrpsee::core::RpcResult;
@@ -8,6 +12,16 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 执行指定的 JS Worker。
+///
+/// - `token` —— 认证 Token
+/// - `js_script_name` —— Worker 名称
+/// - `run_type` —— 运行模式（默认 Call）
+/// - `params` —— 调用参数
+/// - `env` —— 环境变量覆盖（可选）
+/// - `compile_mode` —— 编译模式（默认 Bytecode）
+///
+/// 返回 `js_result` 行的 ID，结果异步写入数据库。
 pub async fn run(
     token: String,
     js_script_name: String,

@@ -1,20 +1,19 @@
-//! ng-infra: Infrastructure traits and types for NodeGet.
+//! ng-infra：NodeGet 基础设施层，提供 Server 与 Agent 共用的 trait 和类型。
 //!
-//! This crate provides shared infrastructure that both the server and agent
-//! can depend on, without pulling in heavy dependencies like jsonrpsee or sea-orm.
+//! 本 crate 不引入 jsonrpsee、sea-orm 等重依赖，Agent 可安全依赖。
 //!
-//! ## Default features (types only)
-//! - [`ScopedPermission<T>`] — permission scope restriction enum
-//! - [`PermissionResolver`] — trait for resolving permissions
-//! - [`RpcDispatcher`] — trait for RPC method dispatch
+//! ## 默认 feature（仅类型）
+//! - [`ScopedPermission<T>`] — 权限范围限制枚举
+//! - [`PermissionResolver`] — 权限解析 trait
+//! - [`RpcDispatcher`] — RPC 方法派发 trait
 //!
 //! ## `server` feature
-//! - [`DbBackedCache`] trait + [`make_global_cache!`] macro
-//! - [`rpc_exec!`] macro
-//! - [`TruncatedRaw`] — truncated Display wrapper for RawValue
-//! - [`RpcHelper`] trait — DB and serialization utilities
-//! - [`token_identity`] — token string parser
-//! - [`AuthChecker`] trait + global injection
+//! - [`DbBackedCache`] trait + [`make_global_cache!`] 宏 — DB 全量加载缓存
+//! - [`rpc_exec!`] 宏 — RPC 调用统一日志
+//! - [`TruncatedRaw`] — RawValue 截断 Display 包装
+//! - [`RpcHelper`] trait — DB 连接与序列化工具
+//! - [`token_identity`] — Token 字符串解析
+//! - [`AuthChecker`] trait + 全局注入
 
 pub mod dispatcher;
 pub mod permission;

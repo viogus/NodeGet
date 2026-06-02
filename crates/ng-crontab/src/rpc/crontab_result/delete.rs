@@ -1,3 +1,5 @@
+//! `crontab-result.delete` RPC 实现：按条件删除定时任务执行结果。
+
 use crate::query::{CrontabResultDataQuery, CrontabResultQueryCondition};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::{NodegetError, anyhow_to_nodeget_error};
@@ -5,37 +7,52 @@ use ng_db::entity::crontab_result;
 use ng_db::get_db;
 use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use tracing::debug;
 
+/// 按条件删除定时任务执行结果。
+///
+/// 1. 从查询条件中收集所有 CronName，逐个检查删除权限
+/// 2. 同时构建 select_query 和 delete_query，应用相同的过滤条件
+/// 3. 有 Limit/Last 条件时，先 select 出目标 ID 再按 ID 删除（SeaORM 不支持 LIMIT DELETE）
+/// 4. 无 Limit/Last 时直接执行 delete_query
+///
+/// - `token` - 认证 Token 字符串
+/// - `query` - 查询条件
+/// - 返回 `{"success": true, "deleted": <删除行数>, "condition_count": <条件数>}`
 pub async fn delete(token: String, query: CrontabResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab_result", condition_count = query.condition.len(), "processing crontab_result delete request");
         let db =
             get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
-        // 权限检查 —— 与 query 相同的模式
-        let mut permission_checked = false;
+        // 收集所有 CronName 条件并逐个检查删除权限
+        let mut cron_names: HashSet<&str> = HashSet::new();
         let mut has_cron_name_filter = false;
         let condition_count = query.condition.len();
 
         for condition in &query.condition {
             if let CrontabResultQueryCondition::CronName(cron_name) = condition {
-                if !permission_checked {
-                    super::auth::check_crontab_result_delete_permission(&token, Some(cron_name))
-                        .await?;
-                    permission_checked = true;
-                }
+                cron_names.insert(cron_name);
                 has_cron_name_filter = true;
             }
         }
 
-        if !has_cron_name_filter && !permission_checked {
+        // 权限检查：每个 distinct CronName 都需要删除权限
+        if has_cron_name_filter {
+            for cron_name in &cron_names {
+                super::auth::check_crontab_result_delete_permission(&token, Some(cron_name))
+                    .await?;
+            }
+        } else {
+            // 没有 CronName 过滤时需要全局删除权限
             super::auth::check_crontab_result_delete_permission(&token, None).await?;
         }
 
         debug!(target: "crontab_result", condition_count, has_cron_name_filter, "crontab_result delete permission check passed");
 
-        // 同时构建 select_query 与 delete_query，应用完全相同的 condition
+        // 同时构建 select_query 与 delete_query，应用完全相同的过滤条件
+        // select_query 用于 Limit/Last 模式下先选出目标 ID
         let mut select_query = crontab_result::Entity::find()
             .select_only()
             .column(crontab_result::Column::Id);
@@ -97,7 +114,8 @@ pub async fn delete(token: String, query: CrontabResultDataQuery) -> RpcResult<B
             }
         }
 
-        // 有 Limit / Last 时，先 select 出目标 id 再按 id 删除；否则直接 delete_query.exec
+        // 有 Limit/Last 时：先 select 出目标 ID 再按 ID 删除（SeaORM 不支持 LIMIT DELETE）
+        // 否则直接 delete_query.exec
         let deleted_rows = if is_last || limit_count.is_some() {
             let limit = if is_last { 1 } else { limit_count.unwrap_or(0) };
             let ids: Vec<i64> = select_query

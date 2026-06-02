@@ -1,3 +1,5 @@
+//! `crontab.delete` RPC 实现：删除定时任务。
+
 use crate::rpc::crontab::CrontabRpcImpl;
 use crate::server_cron::delete_crontab_by_name;
 use jsonrpsee::core::RpcResult;
@@ -10,6 +12,16 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 删除定时任务。
+///
+/// 1. 解析 Token 格式
+/// 2. 查询数据库确认任务存在
+/// 3. 解析 CronType 并检查删除权限
+/// 4. 调用 `delete_crontab_by_name` 执行删除并刷新缓存
+///
+/// - `token` - 认证 Token 字符串
+/// - `name` - 待删除的定时任务名称
+/// - 返回 `{"success": true/false}`
 pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab", name = %name, "processing crontab delete request");
@@ -17,6 +29,8 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
             .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
         let db = CrontabRpcImpl::get_db()?;
+
+        // 查询待删除的任务
         let model = crontab::Entity::find()
             .filter(crontab::Column::Name.eq(&name))
             .one(db)
@@ -29,6 +43,7 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
         debug!(target: "crontab", id = model.id, name = %name, "Crontab found for deletion");
 
+        // 解析 CronType 并检查删除权限
         let cron_type = super::auth::parse_cron_type(&model.cron_type, &name)?;
         super::auth::ensure_crontab_scope_permission(
             &token_or_auth,
@@ -40,6 +55,7 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
         debug!(target: "crontab", name = %name, "Crontab delete permission check passed");
 
+        // 执行删除（内部会刷新缓存）
         let deleted = delete_crontab_by_name(name.clone())
             .await
             .map_err(|e| NodegetError::Other(format!("Failed to delete crontab: {e}")))?;
@@ -50,7 +66,8 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
         debug!(target: "crontab", name = %name, "Crontab deleted successfully");
 
-        let json_str = format!("{{\"success\":{deleted}}}");
+        let json_str = serde_json::to_string(&serde_json::json!({"success": deleted}))
+            .map_err(|e| NodegetError::SerializationError(e.to_string()))?;
         RawValue::from_string(json_str)
             .map_err(|e| NodegetError::SerializationError(format!("{e}")).into())
     };

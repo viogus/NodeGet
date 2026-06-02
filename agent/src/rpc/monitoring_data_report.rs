@@ -1,3 +1,12 @@
+//! 监控数据上报模块。
+//!
+//! 负责按配置间隔采集静态与动态监控数据，并通过 WebSocket RPC 上报至各 Server。
+//! - 静态数据（CPU 型号、系统信息、GPU 规格）：默认 5 分钟间隔
+//! - 动态摘要数据（CPU 使用率、内存等摘要）：默认 1 秒间隔
+//! - 动态完整数据（含每核、每盘、每网卡详情）：默认 1 秒间隔
+//!
+//! 支持配置热重载：每次 tick 重新读取 `AGENT_CONFIG`，间隔变化时重建 ticker。
+
 use crate::config_access::get_agent_config;
 use crate::monitoring::impls::Monitor;
 use crate::rpc::multi_server::send_to;
@@ -12,8 +21,11 @@ use std::time::Duration;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 
-// 若 AGENT_CONFIG 尚未就绪，等待其可用后返回一份快照。
-// 每次失败短暂 sleep 而不是 panic 退出任务，从而保证上报循环能在 reload/初始化瞬态后继续生效。
+/// 若 `AGENT_CONFIG` 尚未就绪，等待其可用后返回一份快照。
+///
+/// 每次失败短暂 sleep 而不是 panic 退出任务，从而保证上报循环能在 reload/初始化瞬态后继续生效。
+///
+/// 返回可用的 [`AgentConfig`] 快照。
 async fn wait_for_agent_config() -> AgentConfig {
     loop {
         match get_agent_config() {
@@ -55,13 +67,13 @@ fn build_rpc_with_raw_data(method: &str, token: &str, data_json: &str) -> String
     format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":[{token_json},{data_json}]}}"#)
 }
 
-// 处理静态监控数据上报
-//
-// 该函数按照配置的间隔时间刷新并获取静态监控数据（如 CPU、系统、GPU 基本信息），然后将其发送到配置的服务器
-// 默认间隔时间为 5 分钟。
-//
-// 每次 tick 都会重新读取 AGENT_CONFIG，使运行时 reload 能立即影响 server 列表、token 以及
-// 上报间隔。当 `static_report_interval_ms` 发生变化时会重建 ticker，让改动在下一轮立即生效。
+/// 处理静态监控数据上报。
+///
+/// 按配置的间隔时间刷新并获取静态监控数据（CPU、系统、GPU 基本信息），然后发送到配置的所有 Server。
+/// 默认间隔时间为 5 分钟。
+///
+/// 每次 tick 都会重新读取 `AGENT_CONFIG`，使运行时 reload 能立即影响 server 列表、token 以及
+/// 上报间隔。当 `static_report_interval_ms` 发生变化时会重建 ticker，让改动在下一轮立即生效。
 pub async fn handle_static_monitoring_data_report() {
     let initial_config = wait_for_agent_config().await;
     let mut interval_ms = initial_config.static_report_interval_ms_or_default();
@@ -110,15 +122,14 @@ pub async fn handle_static_monitoring_data_report() {
     }
 }
 
-// 处理动态监控数据及摘要数据上报
-//
-// 该函数同时处理动态监控数据和动态监控摘要数据的上报。
-// 以 summary 间隔为基础 tick，每次 tick 采集一次 DynamicMonitoringData 并提取摘要上报。
-// 当累计 tick 次数达到 dynamic_interval / summary_interval 时，同时上报完整的动态监控数据。
-// 默认两个间隔均为 1 秒。
-//
-// 与静态上报相同，每个 tick 都会重新读取 AGENT_CONFIG 以使 reload 生效。当 summary 间隔或
-// dynamic 间隔发生变化时，会重建 ticker 并重置 `tick_count`。
+/// 处理动态监控数据及摘要数据上报。
+///
+/// 以 summary 间隔为基础 tick，每次 tick 采集一次 [`DynamicMonitoringData`] 并提取摘要上报。
+/// 当累计 tick 次数达到 `dynamic_interval / summary_interval` 时，同时上报完整的动态监控数据。
+/// 默认两个间隔均为 1 秒。
+///
+/// 与静态上报相同，每个 tick 都会重新读取 `AGENT_CONFIG` 以使 reload 生效。当 summary 间隔或
+/// dynamic 间隔发生变化时，会重建 ticker 并重置 `tick_count`。
 pub async fn handle_dynamic_monitoring_data_report() {
     let initial_config = wait_for_agent_config().await;
 

@@ -1,3 +1,5 @@
+//! `crontab.set_enable` RPC 实现：启用或禁用定时任务。
+
 use crate::rpc::crontab::CrontabRpcImpl;
 use crate::server_cron::set_crontab_enable_by_name;
 use jsonrpsee::core::RpcResult;
@@ -10,6 +12,17 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 设置定时任务的启用/禁用状态。
+///
+/// 1. 解析 Token 格式
+/// 2. 查询数据库确认任务存在
+/// 3. 解析 CronType 并检查写入权限
+/// 4. 调用 `set_crontab_enable_by_name` 更新状态并刷新缓存
+///
+/// - `token` - 认证 Token 字符串
+/// - `name` - 定时任务名称
+/// - `enable` - 目标启用状态
+/// - 返回 `{"success": true, "enabled": <实际启用状态>}`
 pub async fn set_enable(token: String, name: String, enable: bool) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab", name = %name, enable = enable, "processing crontab set_enable request");
@@ -17,6 +30,8 @@ pub async fn set_enable(token: String, name: String, enable: bool) -> RpcResult<
             .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
         let db = CrontabRpcImpl::get_db()?;
+
+        // 查询目标任务
         let model = crontab::Entity::find()
             .filter(crontab::Column::Name.eq(&name))
             .one(db)
@@ -29,6 +44,7 @@ pub async fn set_enable(token: String, name: String, enable: bool) -> RpcResult<
 
         debug!(target: "crontab", id = model.id, name = %name, "Crontab found for enable toggle");
 
+        // 解析 CronType 并检查写入权限
         let cron_type = super::auth::parse_cron_type(&model.cron_type, &name)?;
         super::auth::ensure_crontab_scope_permission(
             &token_or_auth,
@@ -40,6 +56,7 @@ pub async fn set_enable(token: String, name: String, enable: bool) -> RpcResult<
 
         debug!(target: "crontab", name = %name, enable = enable, "Crontab set_enable permission check passed");
 
+        // 执行启用/禁用（内部会刷新缓存）
         let result_state = set_crontab_enable_by_name(name.clone(), enable)
             .await
             .map_err(|e| NodegetError::Other(format!("Failed to set crontab enable: {e}")))?;
@@ -49,7 +66,9 @@ pub async fn set_enable(token: String, name: String, enable: bool) -> RpcResult<
 
         debug!(target: "crontab", name = %name, enabled = state, "Crontab enable state updated");
 
-        let json_str = format!("{{\"success\":true,\"enabled\":{state}}}");
+        let json_str =
+            serde_json::to_string(&serde_json::json!({"success": true, "enabled": state}))
+                .map_err(|e| NodegetError::SerializationError(e.to_string()))?;
 
         RawValue::from_string(json_str)
             .map_err(|e| NodegetError::SerializationError(e.to_string()).into())

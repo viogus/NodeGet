@@ -1,3 +1,9 @@
+//! `agent.dynamic_summary_multi_last_query` RPC 实现。
+//!
+//! 批量查询多台设备的动态摘要最新值。与 `query_dynamic_multi_last` 类似，
+//! 优先从内存 last-cache 获取，缓存未命中的部分通过 UNION ALL 查询数据库。
+//! 额外处理：对缩放列执行反缩放。
+
 use crate::monitoring_last_cache::MonitoringLastCache;
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::{DynamicSummaryQueryField, apply_descaling_to_json_object};
@@ -23,7 +29,7 @@ use uuid::Uuid;
 
 use super::query_dynamic_summary::field_to_column;
 
-/// All summary data column names for "select all" when fields is empty
+/// 所有摘要列名，用于 fields 为空时的"全选"场景。
 const ALL_SUMMARY_COLUMNS: &[&str] = &[
     "cpu_usage",
     "gpu_usage",
@@ -50,6 +56,19 @@ const ALL_SUMMARY_COLUMNS: &[&str] = &[
     "receive_speed",
 ];
 
+/// 批量查询多台设备的动态摘要最新值。
+///
+/// - `token` — 身份认证凭据
+/// - `uuids` — 设备 UUID 列表（自动去重）
+/// - `fields` — 需要的字段列表；为空时返回全部字段
+/// - 返回值 — 最新记录的 JSON 数组（缩放列已反缩放）
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `DynamicMonitoringSummary::Read` 权限
+/// 2. UUID 去重并通过缓存转换为 `uuid_id`
+/// 3. 优先从 `MonitoringLastCache` 获取缓存命中（反缩放处理）
+/// 4. 缓存未命中的部分构建 UNION ALL 语句查询 DB
+/// 5. 合并缓存与 DB 结果，序列化返回
 pub async fn dynamic_summary_multi_last_query(
     token: String,
     uuids: Vec<Uuid>,
@@ -178,6 +197,7 @@ pub async fn dynamic_summary_multi_last_query(
     }
 }
 
+/// 对缓存中取出的摘要值执行反缩放（缓存中存储的是原始缩放值）。
 fn descale_cached_summary(mut value: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = value.as_object_mut() {
         apply_descaling_to_json_object(obj);
@@ -185,6 +205,7 @@ fn descale_cached_summary(mut value: serde_json::Value) -> serde_json::Value {
     value
 }
 
+/// UUID 列表去重，保持原始顺序。
 fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     let mut seen = HashSet::with_capacity(uuids.len());
     let mut deduped = Vec::with_capacity(uuids.len());
@@ -198,6 +219,7 @@ fn dedupe_uuids(uuids: Vec<Uuid>) -> Vec<Uuid> {
     deduped
 }
 
+/// 为多台设备构建 UNION ALL 语句。
 fn build_union_last_statement(
     uuid_id_pairs: &[(Uuid, i16)],
     fields: &[DynamicSummaryQueryField],
@@ -220,6 +242,7 @@ fn build_union_last_statement(
     Ok(StatementBuilder::build(&union_query, &backend))
 }
 
+/// 为单台设备构建获取最新一条摘要记录的 SELECT 语句。
 fn build_single_last_select(
     uuid_id: i16,
     fields: &[DynamicSummaryQueryField],
@@ -292,6 +315,7 @@ fn build_single_last_select(
     wrapped.clone()
 }
 
+/// 流式执行 UNION ALL 语句查询，逐行处理（`uuid_id`→`uuid` + 反缩放）并拼接 JSON 数组。
 async fn execute_statement_query(
     db: &DatabaseConnection,
     statement: Statement,

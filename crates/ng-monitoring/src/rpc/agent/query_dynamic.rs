@@ -1,3 +1,8 @@
+//! `agent.query_dynamic` RPC 实现。
+//!
+//! 按条件查询动态监控数据，支持字段选择、UUID/时间戳/入库时间过滤、Limit/Last。
+//! 使用流式查询（stream）逐行处理，避免一次性加载全部数据到内存。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::{DynamicDataQuery, DynamicDataQueryField, QueryCondition};
 use crate::rpc::agent::AgentRpcImpl;
@@ -19,6 +24,19 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, error};
 
+/// 查询动态监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `dynamic_data_query` — 查询参数（字段 + 条件）
+/// - 返回值 — 匹配记录的 JSON 数组
+///
+/// 内部步骤：
+/// 1. 解析 Token 并按字段粒度验证 `DynamicMonitoring::Read` 权限
+/// 2. 构建 `SeaORM` 查询（`select_only` + 字段映射 + 条件过滤）
+/// 3. UUID 条件通过缓存转换为 `uuid_id`
+/// 4. 应用排序和 Limit（默认 10000，上限 10000）
+/// 5. 流式执行查询，逐行转换 `uuid_id`→`uuid`、重命名字段
+/// 6. 手动拼接 JSON 数组字符串，返回 `RawValue`
 pub async fn query_dynamic(
     token: String,
     dynamic_data_query: DynamicDataQuery,
@@ -214,6 +232,14 @@ pub async fn query_dynamic(
     }
 }
 
+/// 流式执行动态监控数据查询，逐行处理并拼接 JSON 数组。
+///
+/// - `db` — 数据库连接
+/// - `query` — `SeaORM` `Selector`
+/// - `field_mappings` — 列名→JSON 键名映射
+/// - `capacity_hint` — 预估结果行数，用于预分配缓冲区
+/// - `uuid_cache` — UUID 缓存，用于 `uuid_id`→`uuid` 转换
+/// - 返回值 — JSON 数组的 `RawValue`
 async fn execute_query(
     db: &DatabaseConnection,
     query: Selector<SelectModel<serde_json::Value>>,

@@ -1,3 +1,9 @@
+//! `agent` RPC 命名空间实现。
+//!
+//! 提供 Agent 监控数据的上报（report）、查询（query）、删除（delete）操作，
+//! 涵盖三类监控数据：`static`、`dynamic`、`dynamic_summary`。
+//! 所有方法均通过 `rpc_exec!` 宏统一日志和错误处理。
+
 use crate::data_structure::{
     DynamicMonitoringData, DynamicMonitoringSummaryData, StaticMonitoringData,
 };
@@ -28,8 +34,10 @@ mod report_dynamic;
 mod report_dynamic_summary;
 mod report_static;
 
+/// `agent` RPC trait 定义，使用 `#[rpc]` 宏自动生成 server 端骨架。
 #[rpc(server, namespace = "agent")]
 pub trait Rpc {
+    /// Agent 上报静态监控数据
     #[method(name = "report_static")]
     async fn report_static(
         &self,
@@ -37,6 +45,7 @@ pub trait Rpc {
         static_monitoring_data: StaticMonitoringData,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// Agent 上报动态监控数据
     #[method(name = "report_dynamic")]
     async fn report_dynamic(
         &self,
@@ -44,6 +53,7 @@ pub trait Rpc {
         dynamic_monitoring_data: DynamicMonitoringData,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 查询静态监控数据
     #[method(name = "query_static")]
     async fn query_static(
         &self,
@@ -51,6 +61,7 @@ pub trait Rpc {
         static_data_query: StaticDataQuery,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 查询动态监控数据
     #[method(name = "query_dynamic")]
     async fn query_dynamic(
         &self,
@@ -58,6 +69,7 @@ pub trait Rpc {
         dynamic_data_query: DynamicDataQuery,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 批量查询多台设备的静态最新值
     #[method(name = "static_data_multi_last_query")]
     async fn static_data_multi_last_query(
         &self,
@@ -66,6 +78,7 @@ pub trait Rpc {
         fields: Vec<StaticDataQueryField>,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 批量查询多台设备的动态最新值
     #[method(name = "dynamic_data_multi_last_query")]
     async fn dynamic_data_multi_last_query(
         &self,
@@ -74,6 +87,7 @@ pub trait Rpc {
         fields: Vec<DynamicDataQueryField>,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 删除静态监控数据
     #[method(name = "delete_static")]
     async fn delete_static(
         &self,
@@ -81,6 +95,7 @@ pub trait Rpc {
         conditions: Vec<QueryCondition>,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 删除动态监控数据
     #[method(name = "delete_dynamic")]
     async fn delete_dynamic(
         &self,
@@ -88,6 +103,7 @@ pub trait Rpc {
         conditions: Vec<QueryCondition>,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// Agent 上报动态摘要监控数据
     #[method(name = "report_dynamic_summary")]
     async fn report_dynamic_summary(
         &self,
@@ -95,6 +111,7 @@ pub trait Rpc {
         data: DynamicMonitoringSummaryData,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 查询动态摘要监控数据
     #[method(name = "query_dynamic_summary")]
     async fn query_dynamic_summary(
         &self,
@@ -102,6 +119,7 @@ pub trait Rpc {
         query: DynamicSummaryQuery,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 批量查询多台设备的动态摘要最新值
     #[method(name = "dynamic_summary_multi_last_query")]
     async fn dynamic_summary_multi_last_query(
         &self,
@@ -110,6 +128,7 @@ pub trait Rpc {
         fields: Vec<DynamicSummaryQueryField>,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 删除动态摘要监控数据
     #[method(name = "delete_dynamic_summary")]
     async fn delete_dynamic_summary(
         &self,
@@ -118,12 +137,18 @@ pub trait Rpc {
     ) -> RpcResult<Box<RawValue>>;
 }
 
+/// `agent` RPC 实现，委托给各子模块的具体函数。
 pub struct AgentRpcImpl;
 
 impl RpcHelper for AgentRpcImpl {}
 
 #[async_trait]
 impl RpcServer for AgentRpcImpl {
+    /// 上报静态监控数据，委托给 `report_static` 模块。
+    ///
+    /// 1. 提取 Token 身份信息
+    /// 2. 创建 tracing span
+    /// 3. 通过 `rpc_exec!` 调用 `report_static::report_static`
     async fn report_static(
         &self,
         token: String,

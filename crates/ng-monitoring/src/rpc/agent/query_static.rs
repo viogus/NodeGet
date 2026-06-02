@@ -1,3 +1,9 @@
+//! `agent.query_static` RPC 实现。
+//!
+//! 按条件查询静态监控数据，支持字段选择（cpu/system/gpu）、UUID/时间戳/入库时间过滤、Limit/Last。
+//! 使用流式查询逐行处理，静态数据默认 `capacity_hint` 较小（100），
+//! 因为静态数据量通常远小于动态数据。
+
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::query::{QueryCondition, StaticDataQuery, StaticDataQueryField};
 use crate::rpc::agent::AgentRpcImpl;
@@ -19,6 +25,19 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, error};
 
+/// 查询静态监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `static_data_query` — 查询参数（字段 + 条件）
+/// - 返回值 — 匹配记录的 JSON 数组
+///
+/// 内部步骤：
+/// 1. 解析 Token 并按字段粒度验证 `StaticMonitoring::Read` 权限
+/// 2. 构建 `SeaORM` 查询
+/// 3. UUID 条件通过缓存转换为 `uuid_id`
+/// 4. 应用排序和 Limit
+/// 5. 流式执行查询，逐行转换 `uuid_id`→`uuid`、重命名字段
+/// 6. 手动拼接 JSON 数组字符串，返回 `RawValue`
 pub async fn query_static(
     token: String,
     static_data_query: StaticDataQuery,
@@ -203,6 +222,7 @@ pub async fn query_static(
     }
 }
 
+/// 流式执行静态监控数据查询，逐行处理并拼接 JSON 数组。
 async fn execute_query(
     db: &DatabaseConnection,
     query: Selector<SelectModel<serde_json::Value>>,

@@ -6,15 +6,14 @@
 
 ## 方法列表
 
-| 方法名                                 | 描述                  | 权限要求          |
-|-------------------------------------|---------------------|---------------|
-| [create](#create)                   | 创建新的本地数据库           | `Db::Create`  |
-| [read](#read)                       | 获取数据库元信息            | `Db::Read`    |
-| [update](#update)                   | 重命名数据库              | `Db::Update`  |
-| [delete](#delete)                   | 删除数据库并清理文件          | `Db::Delete`  |
-| [list](#list)                       | 列出所有数据库             | `Db::List`    |
-| [exec_sql](#exec-sql)               | 执行原始 SQL（允许参数和复合语句） | `Db::ExecSql` |
-| [exec_templating](#exec-templating) | 参数化 SQL 执行，参数必须为数组  | `Db::ExecSql` |
+| 方法名                   | 描述              | 权限要求          |
+|-----------------------|-----------------|---------------|
+| [create](#create)     | 创建新的本地数据库       | `Db::Create`  |
+| [read](#read)         | 获取数据库元信息        | `Db::Read`    |
+| [update](#update)     | 重命名数据库          | `Db::Update`  |
+| [delete](#delete)     | 删除数据库并清理文件      | `Db::Delete`  |
+| [list](#list)         | 列出所有数据库         | `Db::List`    |
+| [exec_sql](#exec-sql) | 执行 SQL（支持参数化查询） | `Db::ExecSql` |
 
 ## 数据库存储
 
@@ -273,15 +272,15 @@ pub enum Db {
 
 **字段说明:**
 
-| 字段                | 类型          | 说明                     |
-|-------------------|-------------|------------------------|
-| `id`              | i64         | db_registry 表中的主键 ID   |
-| `name`            | String      | 数据库名称                  |
-| `file_path`       | String      | SQLite 文件在磁盘上的路径（相对于工作目录） |
-| `db_connections`  | `Option<i32>` | 当前活跃连接数                |
-| `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时 |
-| `created_at`      | i64         | 创建时间戳（毫秒）              |
-| `is_active`       | bool        | 是否正在连接池中：创建后为 true，`get_conn()` 连接成功后为 true，超过 `max_lifetime_ms` 未被访问变为 false，为 false 时下次调用会自动重建启动连接池 |
+| 字段                | 类型            | 说明                                                                                                    |
+|-------------------|---------------|-------------------------------------------------------------------------------------------------------|
+| `id`              | i64           | db_registry 表中的主键 ID                                                                                  |
+| `name`            | String        | 数据库名称                                                                                                 |
+| `file_path`       | String        | SQLite 文件在磁盘上的路径（相对于工作目录）                                                                             |
+| `db_connections`  | `Option<i32>` | 当前活跃连接数                                                                                               |
+| `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时                                                                                |
+| `created_at`      | i64           | 创建时间戳（毫秒）                                                                                             |
+| `is_active`       | bool          | 是否正在连接池中：创建后为 true，`get_conn()` 连接成功后为 true，超过 `max_lifetime_ms` 未被访问变为 false，为 false 时下次调用会自动重建启动连接池 |
 
 ---
 
@@ -357,11 +356,11 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行，其余语句（IN
 
 **参数说明:**
 
-| 参数    | 类型              | 说明                            |
-|-------|-----------------|-------------------------------|
-| token | String          | Token 字符串                     |
-| name  | String          | 目标数据库名称                       |
-| sql   | String          | SQL 语句（支持 `$1, $2` 占位符）       |
+| 参数     | 类型               | 说明                            |
+|--------|------------------|-------------------------------|
+| token  | String           | Token 字符串                     |
+| name   | String           | 目标数据库名称                       |
+| sql    | String           | SQL 语句（支持 `$1, $2` 占位符）       |
 | params | `array` / `null` | 参数数组，对应 `$1, $2`...。可传 `null` |
 
 **JSON 参数类型映射到 SeaORM Value:**
@@ -383,36 +382,3 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行，其余语句（IN
 | 102 | Permission Denied                  |
 | 103 | Database error (数据库未注册 / SQL 执行失败) |
 | 108 | Invalid input (参数格式错误)             |
-
----
-
-## Exec Templating
-
-参数化 SQL 执行。与 `exec_sql` 功能相同，支持 `params` 为数组或 `null`（null 视为空数组）。
-
-这是推荐的接口，用于确保所有用户输入都通过参数化查询传入，防止 SQL 注入。
-
-**请求:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "db_exec_templating",
-  "params": {
-    "token": "TOKEN",
-    "name": "my_database",
-    "sql": "SELECT * FROM users WHERE name = $1",
-    "params": ["Alice"]
-  },
-  "id": 1
-}
-```
-
-**响应格式** 与 `exec_sql` 完全一致。
-
-**错误码:**
-
-| 代码  | 说明                      |
-|-----|-------------------------|
-| 108 | params 格式错误（必须为数组或null） |
-| 其他  | 与 exec_sql 相同           |

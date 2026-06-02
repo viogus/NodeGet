@@ -1,5 +1,7 @@
+//! `db.delete` RPC 实现 — 删除用户数据库
+
 use crate::entity::db_registry;
-use crate::rpc::db::auth::check_db_permission;
+use crate::rpc::db::auth::{check_db_permission, validate_db_name};
 use crate::rpc::{to_rpc_error, token_identity};
 use crate::{db_registry::DbRegistryManager, get_db};
 use jsonrpsee::core::RpcResult;
@@ -9,11 +11,23 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 删除指定用户数据库
+///
+/// - `token` — 认证 Token
+/// - `name` — 待删除的数据库名称
+/// - 返回值：`{"success": true}` 响应
+///
+/// 内部步骤：
+/// 1. 检查 `Db::Delete` 权限
+/// 2. 校验数据库名称合法性
+/// 3. 确认数据库存在于 `db_registry`
+/// 4. 通过 `remove_conn` 移除连接池条目、删除注册表行和磁盘文件
 pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
     let (tk, un) = token_identity(&token);
 
     let process_logic = async {
         check_db_permission(&token, &name, DbPermission::Delete).await?;
+        validate_db_name(&name)?;
 
         let db = get_db().ok_or_else(|| {
             NodegetError::DatabaseError("Main database not initialized".to_owned())
@@ -26,7 +40,7 @@ pub async fn delete(token: String, name: String) -> RpcResult<Box<RawValue>> {
 
         model.ok_or_else(|| NodegetError::NotFound(format!("Database '{name}' not found")))?;
 
-        // remove_conn handles: pool removal, registry deletion, file cleanup (.db, -wal, -shm)
+        // remove_conn 内部处理：移除连接池条目、删除注册表行、清理 .db/-wal/-shm 文件
         let mgr = DbRegistryManager::global();
         mgr.remove_conn(&name)
             .await

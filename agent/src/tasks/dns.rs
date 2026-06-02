@@ -1,3 +1,8 @@
+//! DNS 查询任务模块。
+//!
+//! 使用 `hickory-resolver` 执行多种记录类型的 DNS 查询，
+//! 支持自定义 DNS 服务器或回退到系统配置。
+
 use hickory_resolver::TokioAsyncResolver;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
 use hickory_resolver::proto::rr::{RData, RecordType};
@@ -8,6 +13,11 @@ use ng_task::{DnsRecordResult, DnsRecordType, DnsTask};
 use std::net::SocketAddr;
 use std::time::Instant;
 
+/// 执行 DNS 查询任务。
+///
+/// - `task` - DNS 查询任务参数，包含域名、记录类型列表和可选的 DNS 服务器
+///
+/// 返回查询结果向量；所有记录类型查询均无结果时返回错误。
 pub async fn query_dns(task: &DnsTask) -> Result<Vec<DnsRecordResult>, NodegetError> {
     let resolver = build_resolver(task.dns_server.as_deref()).await?;
     let mut results = Vec::new();
@@ -45,6 +55,11 @@ pub async fn query_dns(task: &DnsTask) -> Result<Vec<DnsRecordResult>, NodegetEr
     Ok(results)
 }
 
+/// 构建 DNS 解析器。
+///
+/// - `dns_server` - 可选的自定义 DNS 服务器地址
+///
+/// 指定服务器时使用 UDP 协议直连；未指定时读取系统 DNS 配置。
 async fn build_resolver(dns_server: Option<&str>) -> Result<TokioAsyncResolver, NodegetError> {
     if let Some(server_str) = dns_server {
         let addr: SocketAddr = server_str.parse().map_err(|e| {
@@ -60,6 +75,13 @@ async fn build_resolver(dns_server: Option<&str>) -> Result<TokioAsyncResolver, 
     }
 }
 
+/// 查询单一记录类型的 DNS 记录。
+///
+/// - `resolver` - DNS 解析器
+/// - `domain` - 查询域名
+/// - `record_type` - 记录类型
+///
+/// 返回匹配的 `(记录类型, 数据字符串)` 向量；查询失败时返回错误。
 async fn query_single_type(
     resolver: &TokioAsyncResolver,
     domain: &str,

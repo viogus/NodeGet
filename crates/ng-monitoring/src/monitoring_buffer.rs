@@ -1,3 +1,14 @@
+//! 监控数据批量写入缓冲区。
+//!
+//! 使用 mpsc channel + 后台 tokio task 实现异步批量写入。
+//! Agent 上报的监控数据先送入 `channel`，`flush_loop` 按 tick 或数据量阈值
+//! 触发 `insert_many` 批量写入数据库，避免逐条 INSERT 造成的性能瓶颈。
+//!
+//! 核心组件：
+//! - `MonitoringBuffers` — 全局单例，持有三个 `BufferSender`（static/dynamic/summary）
+//! - `BufferSender<T>` — 线程安全的 mpsc Sender 封装，满时丢弃并告警
+//! - `flush_loop` — 后台定时 flush 循环，channel 关闭时执行最后一次 flush
+
 use ng_config::config::server::MonitoringBufferConfig;
 use ng_db::entity::{dynamic_monitoring, dynamic_monitoring_summary, static_monitoring};
 use sea_orm::EntityTrait;
@@ -8,28 +19,46 @@ use tracing::{debug, error, trace, warn};
 
 // ── 默认值 ──────────────────────────────────────────────────────────
 
+/// 默认 flush 间隔（毫秒）
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
+/// 默认单次批量写入最大行数
 const DEFAULT_MAX_BATCH_SIZE: usize = 1000;
+/// 默认 channel 容量
 const DEFAULT_CHANNEL_CAPACITY: usize = 10000;
 
 // ── 全局单例 ────────────────────────────────────────────────────────
 
+/// 全局 `MonitoringBuffers` 单例。
 static BUFFERS: OnceLock<MonitoringBuffers> = OnceLock::new();
 
+/// 持有三类监控数据的 `BufferSender`。
 pub struct MonitoringBuffers {
+    /// 静态监控数据缓冲区
     pub static_mon: BufferSender<static_monitoring::ActiveModel>,
+    /// 动态监控数据缓冲区
     pub dynamic_mon: BufferSender<dynamic_monitoring::ActiveModel>,
+    /// 动态摘要监控数据缓冲区
     pub dynamic_summary: BufferSender<dynamic_monitoring_summary::ActiveModel>,
 }
 
-/// 获取全局 buffer 实例
+/// 获取全局 buffer 实例，未初始化时 panic。
+///
+/// # Panics
+///
+/// 若全局 `MonitoringBuffers` 未初始化（即未调用 `init()`）则 panic。
 pub fn get() -> &'static MonitoringBuffers {
     BUFFERS
         .get()
         .expect("MonitoringBuffers not initialized — call monitoring_buffer::init() first")
 }
 
-/// 初始化全局 buffer 并启动后台 flush task
+/// 初始化全局 buffer 并启动三个后台 flush task。
+///
+/// - `config` — 可选的缓冲区配置，未提供时使用默认值
+/// - 1. 从配置中读取 flush 间隔、批量大小等参数
+/// - 2. 创建三个 mpsc channel（static/dynamic/summary）
+/// - 3. 设置全局单例（重复调用时跳过）
+/// - 4. 为每个 channel 启动独立的 `flush_loop` tokio task
 pub fn init(config: Option<&MonitoringBufferConfig>) {
     let flush_interval_ms = config
         .and_then(|c| c.flush_interval_ms)
@@ -98,10 +127,10 @@ pub fn init(config: Option<&MonitoringBufferConfig>) {
     );
 }
 
-/// 刷新所有缓冲区并等待完成（用于 graceful shutdown）
+/// 刷新所有缓冲区并等待完成（用于 graceful shutdown）。
 ///
-/// Drop 掉所有 sender 使 channel `关闭，flush_loop` 的 `rx.recv()` 返回 `None`，
-/// 触发最后一次 flush 后退出。等待足够时间让 flush 完成。
+/// Drop 掉所有 `sender` 使 `channel` 关闭，`flush_loop` 的 `rx.recv()` 返回 `None`，
+/// 触发最后一次 flush 后退出。等待 2 秒让 flush 完成。
 pub async fn flush_and_shutdown() {
     let Some(buffers) = BUFFERS.get() else {
         return;
@@ -117,12 +146,16 @@ pub async fn flush_and_shutdown() {
 
 // ── BufferSender ────────────────────────────────────────────────────
 
+/// mpsc Sender 的线程安全封装，支持优雅关闭。
 pub struct BufferSender<T> {
+    /// 内部 Sender 用 Mutex 包裹以实现 Sync，Option 用于 close 时 drop
     tx: Mutex<Option<mpsc::Sender<T>>>,
 }
 
 impl<T> BufferSender<T> {
-    /// 将一条 `ActiveModel` 送入缓冲区（非阻塞，满则丢弃并告警）
+    /// 将一条 `ActiveModel` 送入缓冲区。
+    ///
+    /// 非阻塞，channel 满或已关闭时丢弃并告警。
     pub fn send(&self, item: T) {
         let guard = self
             .tx
@@ -135,19 +168,30 @@ impl<T> BufferSender<T> {
         }
     }
 
-    /// 关闭 sender（drop 内部的 Sender）
+    /// 关闭 sender（drop 内部的 Sender，使 channel 关闭）。
     fn close(&self) {
         let mut guard = self
             .tx
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         debug!(target: "monitoring", "Closing buffer sender");
-        guard.take(); // drop the sender, closing the channel
+        guard.take(); // drop Sender，关闭 channel
     }
 }
 
 // ── flush loop ──────────────────────────────────────────────────────
 
+/// 后台 flush 循环，定时或按数据量阈值批量写入数据库。
+///
+/// - `table_name` — 表名，用于日志
+/// - `rx` — mpsc 接收端
+/// - `flush_interval` — 定时 flush 间隔
+/// - `max_batch_size` — 单次批量写入最大行数
+///
+/// 内部步骤：
+/// 1. 等待 tick 或有新数据到达
+/// 2. drain 所有立即可用的消息
+/// 3. channel 关闭时 flush 剩余数据后退出
 async fn flush_loop<E, A>(
     table_name: &'static str,
     mut rx: mpsc::Receiver<A>,
@@ -201,6 +245,10 @@ async fn flush_loop<E, A>(
     }
 }
 
+/// 执行一次批量 INSERT，将缓冲区中的数据写入数据库。
+///
+/// - `table_name` — 表名，用于日志
+/// - `buf` — 待写入的 `ActiveModel` 缓冲区，写入后清空
 async fn do_flush<E, A>(table_name: &str, buf: &mut Vec<A>)
 where
     E: EntityTrait,

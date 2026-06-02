@@ -1,3 +1,17 @@
+//! 服务器日志系统
+//!
+//! 基于 tracing + tracing-subscriber 实现，提供四个输出层：
+//! 1. 控制台层：自定义格式化器 [`NodeGetFormat`]，支持 ANSI 颜色、target 重映射
+//! 2. JSON 文件层（可选）：输出单行 JSON，由 `config.json_log_file` 启用
+//! 3. 内存环形缓冲区层：存储最近 N 条日志，供 `nodeget-server.log` RPC 查询
+//! 4. 实时流订阅层：通过 [`StreamLogManager`] 广播给 RPC 订阅者
+//!
+//! 核心设计：
+//! - 虚拟 target `db` 自动展开为 `sea_orm`/`sea_orm_migration`/`sqlx` 三个真实 target
+//! - 反向映射：`sea_orm*`/`sqlx*` 的日志在输出时统一重映射为 `db`
+//! - `StreamLogManager` 使用 `std::sync::RwLock`（非 tokio），因为 `on_event` 是同步回调
+//! - 写锁期间禁止调用 tracing，避免与读锁死锁（`std::sync::RwLock` 不可重入）
+
 use std::collections::{HashMap, VecDeque};
 use std::fmt as stdfmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,19 +33,19 @@ use tracing_subscriber::{
 };
 use uuid::Uuid;
 
-/// Default capacity for the in-memory log ring buffer.
+/// 内存日志环形缓冲区默认容量
 const DEFAULT_MEMORY_LOG_CAPACITY: usize = 500;
 
-/// Global handle to the in-memory log buffer (initialised once in [`init`]).
+/// 全局内存日志缓冲区（在 [`init`] 中初始化）
 static MEMORY_LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<serde_json::Value>>>> = OnceLock::new();
 
-/// Maximum capacity for the memory log buffer (initialised once in [`init`]).
+/// 内存日志缓冲区最大容量（在 [`init`] 中初始化）
 static MEMORY_LOG_CAPACITY: OnceLock<usize> = OnceLock::new();
 
-/// Returns a snapshot of all log entries currently held in the memory buffer.
+/// 获取内存日志缓冲区的快照
 ///
-/// Each entry is a JSON object with fields: `timestamp`, `level`, `target`,
-/// `message`, `fields`, `spans`.
+/// 返回当前缓冲区中所有日志条目的克隆列表。
+/// 每条日志为 JSON 对象，包含 `timestamp`、`level`、`target`、`message`、`fields`、`spans` 字段。
 pub fn get_memory_logs() -> Vec<serde_json::Value> {
     MEMORY_LOG_BUFFER
         .get()
@@ -63,7 +77,7 @@ pub fn init(config: Option<&LoggingConfig>) {
         .and_then(|c| c.log_filter.as_deref())
         .unwrap_or("info");
 
-    // RUST_LOG env var overrides config
+    // RUST_LOG 环境变量优先级高于配置文件
     let console_raw = std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.to_string());
     let console_expanded = expand_virtual_targets(&console_raw);
     let console_filter = EnvFilter::new(&console_expanded);
@@ -75,7 +89,7 @@ pub fn init(config: Option<&LoggingConfig>) {
         .event_format(NodeGetFormat::new())
         .with_filter(console_filter);
 
-    // ── JSON file layer (optional) ──────────────────────────────────
+    // ── JSON 文件层（可选）──────────────────────────────────
     let json_layer = config
         .and_then(|c| c.json_log_file.as_deref())
         .and_then(|path| {
@@ -109,13 +123,13 @@ pub fn init(config: Option<&LoggingConfig>) {
             Some(layer)
         });
 
-    // ── Memory ring-buffer layer ────────────────────────────────────
+    // ── 内存环形缓冲区层 ────────────────────────────────────
     let capacity = config
         .and_then(|c| c.memory_log_capacity)
         .unwrap_or(DEFAULT_MEMORY_LOG_CAPACITY);
     let _ = MEMORY_LOG_CAPACITY.set(capacity);
 
-    // capacity == 0 means the memory log feature is disabled
+    // capacity == 0 表示禁用内存日志
     let memory_layer = if capacity > 0 {
         let buffer: Arc<Mutex<VecDeque<serde_json::Value>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(capacity)));
@@ -132,7 +146,7 @@ pub fn init(config: Option<&LoggingConfig>) {
         None
     };
 
-    // ── Stream log layer (real-time subscription) ─────────────────
+    // ── 实时流订阅层 ─────────────────────────────────────────
     let stream_manager = get_stream_log_manager().clone();
     let stream_layer = StreamLogLayer {
         manager: Arc::clone(&stream_manager),
@@ -141,7 +155,7 @@ pub fn init(config: Option<&LoggingConfig>) {
         manager: stream_manager,
     });
 
-    // ── Assemble subscriber ─────────────────────────────────────────
+    // ── 组装 subscriber ─────────────────────────────────────
     tracing_subscriber::registry()
         .with(console_layer)
         .with(json_layer)
@@ -151,13 +165,12 @@ pub fn init(config: Option<&LoggingConfig>) {
 }
 
 // ===========================================================================
-//  In-memory ring-buffer layer
+//  内存环形缓冲区 Layer
 // ===========================================================================
 
-/// A [`Layer`] that serialises each event to JSON and
-/// stores it in a bounded ring buffer ([`VecDeque`]).
+/// 将事件序列化为 JSON 并存入有界环形缓冲区（[`VecDeque`]）的 tracing Layer
 ///
-/// When the buffer reaches capacity the oldest entry is evicted.
+/// 缓冲区满时淘汰最旧条目。
 struct MemoryLogLayer {
     buffer: Arc<Mutex<VecDeque<serde_json::Value>>>,
 }
@@ -169,14 +182,14 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let meta = event.metadata();
 
-        // Collect structured fields
+        // 收集结构化字段
         let mut visitor = JsonFieldVisitor::default();
         event.record(&mut visitor);
 
         let message = visitor.message.take().unwrap_or_default();
 
-        // Collect span context — strip ANSI because `FormattedFields<DefaultFields>`
-        // is stored by the console layer which has `with_ansi(true)`.
+        // 收集 span 上下文——剥离 ANSI，因为控制台层 `with_ansi(true)`
+        // 导致 `FormattedFields<DefaultFields>` 中包含 ANSI 转义码
         let spans: Vec<serde_json::Value> = ctx
             .event_scope(event)
             .into_iter()
@@ -206,8 +219,8 @@ where
             "spans": spans,
         });
 
-        // Use unwrap_or_else(into_inner) to recover from Mutex poisoning
-        // instead of silently dropping the log entry.
+        // 使用 unwrap_or_else(into_inner) 从 Mutex 中毒中恢复，
+        // 而非静默丢弃日志条目
         let mut guard = self
             .buffer
             .lock()
@@ -216,8 +229,7 @@ where
             .get()
             .copied()
             .unwrap_or(DEFAULT_MEMORY_LOG_CAPACITY);
-        // cap is guaranteed > 0 (checked in init), but defend against
-        // unexpected edge cases by requiring cap > 0.
+        // cap 在 init 中保证 > 0，此处防御性检查
         if cap > 0 {
             while guard.len() >= cap {
                 guard.pop_front();
@@ -228,12 +240,18 @@ where
 }
 
 // ---------------------------------------------------------------------------
-//  Field visitor – collects event fields into a JSON map
+//  字段访问器——将事件字段收集为 JSON Map
 // ---------------------------------------------------------------------------
 
+/// tracing `Visit` 实现，将事件字段收集为 JSON Map
+///
+/// - message：特殊处理，提取到顶层 `message` 字段
+/// - fields：其余字段存入 `fields` JSON 对象
 #[derive(Default)]
 struct JsonFieldVisitor {
+    /// 事件的 `message` 字段值
     message: Option<String>,
+    /// 除 message 外的所有字段
     fields: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -281,18 +299,16 @@ impl Visit for JsonFieldVisitor {
 }
 
 // ===========================================================================
-//  Virtual target expansion
+//  虚拟 target 展开
 // ===========================================================================
 
-/// Expands virtual target aliases in an `EnvFilter`-compatible string.
+/// 展开 `EnvFilter` 字符串中的虚拟 target 别名
 ///
-/// Currently supported aliases:
+/// 当前支持的别名：
 /// - `db=<level>` → `db=<level>,sea_orm=<level>,sea_orm_migration=<level>,sqlx=<level>`
 ///
-/// The literal `db` directive is preserved so that our own code using
-/// `target: "db"` is also matched by the filter.
-///
-/// Directives that are not aliases are passed through unchanged.
+/// 保留字面 `db` 指令，使得使用 `target: "db"` 的自有代码也能被过滤器匹配。
+/// 非别名指令原样透传。
 fn expand_virtual_targets(filter: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -303,7 +319,7 @@ fn expand_virtual_targets(filter: &str) -> String {
         }
 
         if let Some(level) = directive.strip_prefix("db=") {
-            // Keep literal "db=<level>" so our own `target: "db"` events match
+            // 保留字面 "db=<level>"，使 target: "db" 的事件也能匹配
             parts.push(format!("db={level}"));
             parts.push(format!("sea_orm={level}"));
             parts.push(format!("sea_orm_migration={level}"));
@@ -322,10 +338,10 @@ fn expand_virtual_targets(filter: &str) -> String {
 }
 
 // ===========================================================================
-//  Target remapping
+//  target 重映射
 // ===========================================================================
 
-/// Maps known database-related log targets to `"db"`.
+/// 将已知的数据库相关 log target 映射为 `"db"`
 fn remap_target(target: &str) -> &str {
     if target.starts_with("sea_orm") || target.starts_with("sqlx") {
         "db"
@@ -335,10 +351,12 @@ fn remap_target(target: &str) -> &str {
 }
 
 // ===========================================================================
-//  Custom console formatter
+//  自定义控制台格式化器
 // ===========================================================================
 
-/// Custom event format with target remapping and ANSI colours.
+/// 自定义事件格式化器：支持 target 重映射和 ANSI 颜色
+///
+/// 输出格式：`<时间戳> <级别> <target>: <字段> [span<fields>]`
 struct NodeGetFormat {
     timer: ChronoLocal,
 }
@@ -362,10 +380,10 @@ where
         mut writer: format::Writer<'_>,
         event: &Event<'_>,
     ) -> stdfmt::Result {
-        // Timestamp
+        // 时间戳
         self.timer.format_time(&mut writer)?;
 
-        // Level
+        // 级别（带颜色）
         let level = *event.metadata().level();
         if writer.has_ansi_escapes() {
             let (open, close) = level_ansi(level);
@@ -374,7 +392,7 @@ where
             write!(writer, " {level:>5} ")?;
         }
 
-        // Target (remapped)
+        // target（重映射后，灰色显示）
         let raw_target = event.metadata().target();
         let target = remap_target(raw_target);
         if writer.has_ansi_escapes() {
@@ -383,10 +401,10 @@ where
             write!(writer, "{target}: ")?;
         }
 
-        // Fields
+        // 字段
         ctx.format_fields(writer.by_ref(), event)?;
 
-        // Span context (single-line)
+        // span 上下文（单行显示）
         if let Some(scope) = ctx.event_scope() {
             let mut first = true;
             for span in scope {
@@ -418,11 +436,12 @@ where
 }
 
 // ===========================================================================
-//  JSON file format with target remapping
+//  JSON 文件格式化器（带 target 重映射）
 // ===========================================================================
 
-/// A custom JSON event format that applies [`remap_target`] before serialising,
-/// ensuring the JSON file output is consistent with console and memory layers.
+/// 自定义 JSON 事件格式化器，应用 [`remap_target`] 后序列化
+///
+/// 确保 JSON 文件输出与控制台/内存层的 target 命名一致。
 struct JsonRemapFormat;
 
 impl<S, N> FormatEvent<S, N> for JsonRemapFormat
@@ -439,13 +458,13 @@ where
         let meta = event.metadata();
         let target = remap_target(meta.target());
 
-        // Collect fields
+        // 收集字段
         let mut visitor = JsonFieldVisitor::default();
         event.record(&mut visitor);
         let message = visitor.message.take().unwrap_or_default();
 
-        // Collect span context — defensive strip_ansi in case the field
-        // formatter type `N` shares storage with an ANSI-enabled layer.
+        // 收集 span 上下文——防御性 strip_ansi，
+        // 避免字段格式化器类型 `N` 与 ANSI 启用的层共享存储时泄漏转义码
         let spans: Vec<serde_json::Value> = ctx
             .event_scope()
             .into_iter()
@@ -470,39 +489,39 @@ where
             "spans": spans,
         });
 
-        // Write a single line of JSON (no trailing comma)
+        // 输出单行 JSON（无尾逗号）
         write!(writer, "{entry}")?;
         writeln!(writer)
     }
 }
 
 // ===========================================================================
-//  Helpers
+//  辅助函数
 // ===========================================================================
 
-/// ANSI escape pair `(open, reset)` for the given tracing level.
+/// 返回给定 tracing 级别对应的 ANSI 转义码对（开启码，重置码）
 const fn level_ansi(level: tracing::Level) -> (&'static str, &'static str) {
     const RESET: &str = "\x1b[0m";
     match level {
-        tracing::Level::ERROR => ("\x1b[31m", RESET),
-        tracing::Level::WARN => ("\x1b[33m", RESET),
-        tracing::Level::INFO => ("\x1b[32m", RESET),
-        tracing::Level::DEBUG => ("\x1b[34m", RESET),
-        tracing::Level::TRACE => ("\x1b[35m", RESET),
+        tracing::Level::ERROR => ("\x1b[31m", RESET), // 红色
+        tracing::Level::WARN => ("\x1b[33m", RESET),  // 黄色
+        tracing::Level::INFO => ("\x1b[32m", RESET),  // 绿色
+        tracing::Level::DEBUG => ("\x1b[34m", RESET), // 蓝色
+        tracing::Level::TRACE => ("\x1b[35m", RESET), // 紫色
     }
 }
 
-/// Strips ANSI escape sequences (`ESC[...X`) from a string.
+/// 剥离字符串中的 ANSI 转义序列
 ///
-/// This is needed because `FormattedFields<DefaultFields>` stored by the
-/// console layer includes ANSI colour/style codes (italic, dim, reset, etc.)
-/// which must not leak into JSON file output or the memory log buffer.
+/// 需要此函数是因为控制台层的 `FormattedFields<DefaultFields>`
+/// 包含 ANSI 颜色/样式码（斜体、暗淡、重置等），
+/// 这些码不能泄漏到 JSON 文件输出或内存日志缓冲区中。
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            // Consume the '[' and all parameter bytes until a final letter
+            // 消费 '[' 及后续参数字节，直到终结字母
             if chars.next() == Some('[') {
                 for c in chars.by_ref() {
                     if c.is_ascii_alphabetic() {
@@ -518,25 +537,26 @@ fn strip_ansi(s: &str) -> String {
 }
 
 // ===========================================================================
-//  Stream log – real-time log subscription via RPC
+//  实时流日志——基于 RPC 的日志订阅
 // ===========================================================================
 
-/// Global singleton managing all active stream log subscribers.
+/// 全局单例，管理所有活跃的流日志订阅者
 static STREAM_LOG_MANAGER: OnceLock<Arc<StreamLogManager>> = OnceLock::new();
 
-/// Returns the global [`StreamLogManager`] singleton (created on first call).
+/// 返回全局 [`StreamLogManager`] 单例（首次调用时创建）
 pub fn get_stream_log_manager() -> &'static Arc<StreamLogManager> {
     STREAM_LOG_MANAGER.get_or_init(|| Arc::new(StreamLogManager::new()))
 }
 
-/// Manages all active stream log subscribers.
+/// 管理所有活跃的流日志订阅者
 ///
-/// Uses `std::sync::RwLock` because it is accessed from the synchronous
-/// `on_event` callback in the tracing layer. The `subscriber_count` atomic
-/// provides a fast path to skip lock acquisition when there are no subscribers.
+/// 使用 `std::sync::RwLock` 而非 `tokio::sync::RwLock`，
+/// 因为 `on_event` 回调是同步的。
+/// `subscriber_count` 原子计数器提供快速路径：订阅者为零时跳过锁获取。
 pub struct StreamLogManager {
+    /// 订阅者映射表（UUID → 订阅者）
     subscribers: RwLock<HashMap<Uuid, StreamLogSubscriber>>,
-    /// Fast-path optimisation: avoids acquiring the read lock when zero.
+    /// 订阅者数量（快速路径优化：为零时避免获取读锁）
     subscriber_count: AtomicUsize,
 }
 
@@ -548,11 +568,15 @@ impl StreamLogManager {
         }
     }
 
-    /// Register a new subscriber.
+    /// 注册新订阅者
     ///
-    /// **WARNING**: Do NOT emit any tracing events while calling this method –
-    /// it holds the write lock, and `on_event` acquires the read lock, which
-    /// would deadlock on non-reentrant `std::sync::RwLock`.
+    /// - id：订阅者唯一标识
+    /// - tx：日志条目发送通道
+    /// - `filter_str`：`EnvFilter` 格式的过滤器字符串
+    ///
+    /// **警告**：调用此方法期间禁止发出任何 tracing 事件——
+    /// 此方法持有写锁，而 `on_event` 获取读锁，
+    /// 在 `std::sync::RwLock`（不可重入）上会死锁。
     pub fn add_subscriber(
         &self,
         id: Uuid,
@@ -570,9 +594,9 @@ impl StreamLogManager {
         self.subscriber_count.store(guard.len(), Ordering::Release);
     }
 
-    /// Remove a subscriber by id.
+    /// 按 id 移除订阅者
     ///
-    /// **WARNING**: Same deadlock caveat as [`add_subscriber`].
+    /// **警告**：同 [`add_subscriber`] 的死锁注意事项。
     pub fn remove_subscriber(&self, id: &Uuid) {
         let mut guard = self
             .subscribers
@@ -582,39 +606,41 @@ impl StreamLogManager {
         self.subscriber_count.store(guard.len(), Ordering::Release);
     }
 
-    /// Returns `true` if there is at least one active subscriber.
+    /// 是否存在至少一个活跃订阅者
     #[inline]
     fn has_subscribers(&self) -> bool {
         self.subscriber_count.load(Ordering::Acquire) > 0
     }
 }
 
-/// A single stream log subscriber with its own filter and channel.
+/// 单个流日志订阅者，持有独立的过滤器和发送通道
 struct StreamLogSubscriber {
+    /// 日志条目发送通道
     tx: tokio::sync::mpsc::Sender<serde_json::Value>,
+    /// 订阅者专属过滤器
     filter: StreamFilter,
 }
 
 // ---------------------------------------------------------------------------
-//  StreamFilter – lightweight target+level matcher
+//  StreamFilter——轻量级 target+level 匹配器
 // ---------------------------------------------------------------------------
 
-/// A lightweight filter that matches events by target prefix and level.
+/// 轻量级过滤器，按 target 前缀和级别匹配事件
 ///
-/// Supports the same `target=level` directive format as `RUST_LOG` / `EnvFilter`,
-/// but only handles target+level matching (no span-based filtering).
+/// 支持 `RUST_LOG` / `EnvFilter` 相同的 `target=level` 指令格式，
+/// 但仅处理 target+level 匹配（无 span 过滤）。
 struct StreamFilter {
-    /// Default level when no target directive matches.
+    /// 无 target 指令匹配时的默认级别
     default_level: tracing::level_filters::LevelFilter,
-    /// Per-target level overrides, sorted by decreasing length for longest-prefix match.
+    /// 按 target 前缀的级别覆盖，按长度降序排列以实现最长前缀匹配
     targets: Vec<(String, tracing::level_filters::LevelFilter)>,
 }
 
 impl StreamFilter {
-    /// Parses an `EnvFilter`-compatible filter string into a [`StreamFilter`].
+    /// 将 `EnvFilter` 兼容的过滤器字符串解析为 [`StreamFilter`]
     ///
-    /// Accepts directives like `"info"`, `"server=debug,rpc=trace"`,
-    /// `"warn,server=info"`, etc. Unknown level strings are silently ignored.
+    /// 接受如 `"info"`、`"server=debug,rpc=trace"`、`"warn,server=info"` 等指令。
+    /// 无法识别的级别字符串被静默忽略。
     fn parse(filter_str: &str) -> Self {
         let mut default_level = tracing::level_filters::LevelFilter::OFF;
         let mut targets = Vec::new();
@@ -632,12 +658,12 @@ impl StreamFilter {
                     targets.push((target.to_string(), level));
                 }
             } else if let Some(level) = parse_level_filter(directive) {
-                // Bare level like "info" sets the default
+                // 裸级别如 "info" 设置默认值
                 default_level = level;
             }
         }
 
-        // Sort by target length descending for longest-prefix match
+        // 按 target 长度降序排列，实现最长前缀匹配
         targets.sort_by_key(|b| std::cmp::Reverse(b.0.len()));
 
         Self {
@@ -646,24 +672,24 @@ impl StreamFilter {
         }
     }
 
-    /// Returns `true` if the given metadata passes this filter.
+    /// 判断给定元数据是否通过此过滤器
     fn is_enabled(&self, meta: &Metadata<'_>) -> bool {
         let target = meta.target();
         let level = meta.level();
 
-        // Longest prefix match
+        // 最长前缀匹配
         for (prefix, filter_level) in &self.targets {
             if target.starts_with(prefix.as_str()) {
                 return level <= filter_level;
             }
         }
 
-        // Fall back to default
+        // 回退到默认级别
         level <= &self.default_level
     }
 }
 
-/// Parses a level string (case-insensitive) into a [`LevelFilter`].
+/// 将级别字符串（不区分大小写）解析为 [`LevelFilter`]
 fn parse_level_filter(s: &str) -> Option<tracing::level_filters::LevelFilter> {
     match s.to_lowercase().as_str() {
         "off" => Some(tracing::level_filters::LevelFilter::OFF),
@@ -677,18 +703,17 @@ fn parse_level_filter(s: &str) -> Option<tracing::level_filters::LevelFilter> {
 }
 
 // ---------------------------------------------------------------------------
-//  StreamLogFilter – per-layer filter (Filter<S> trait)
+//  StreamLogFilter——per-layer 过滤器（Filter<S> trait）
 // ---------------------------------------------------------------------------
 
-/// Per-layer filter for [`StreamLogLayer`].
+/// [`StreamLogLayer`] 的 per-layer 过滤器
 ///
-/// This **must** be used as a per-layer filter (via `.with_filter()`), not as a
-/// global filter. Without per-layer filtering, a `Layer` whose `enabled()`
-/// returns `false` would block **all other layers** from receiving the event
-/// due to the `Layered` subscriber's AND logic.
+/// **必须**作为 per-layer filter 使用（通过 `.with_filter()`），
+/// 而非全局过滤器。因为 `Layered` subscriber 的 AND 逻辑下，
+/// 若某 Layer 的 `enabled()` 返回 false 会阻塞**所有其他 Layer** 接收该事件。
 ///
-/// The filter checks only whether any subscribers exist (`subscriber_count > 0`).
-/// Per-subscriber filtering is done inside `StreamLogLayer::on_event`.
+/// 此过滤器仅检查是否存在订阅者（`subscriber_count > 0`），
+/// per-subscriber 过滤在 `StreamLogLayer::on_event` 内完成。
 struct StreamLogFilter {
     manager: Arc<StreamLogManager>,
 }
@@ -702,19 +727,19 @@ where
         _meta: &Metadata<'_>,
         _cx: &tracing_subscriber::layer::Context<'_, S>,
     ) -> bool {
-        // Fast path: single atomic load
+        // 快速路径：单次原子加载
         self.manager.has_subscribers()
     }
 }
 
 // ---------------------------------------------------------------------------
-//  StreamLogLayer – broadcasts events to subscribers
+//  StreamLogLayer——将事件广播给订阅者
 // ---------------------------------------------------------------------------
 
-/// A [`Layer`] that broadcasts events to all active stream log subscribers.
+/// 将事件广播给所有活跃流日志订阅者的 tracing Layer
 ///
-/// Serialises events in the same JSON format as [`MemoryLogLayer`] and uses
-/// `try_send` (non-blocking) to avoid back-pressure from slow subscribers.
+/// 使用与 [`MemoryLogLayer`] 相同的 JSON 格式序列化事件，
+/// 通过 `try_send`（非阻塞）发送，避免慢订阅者的背压。
 struct StreamLogLayer {
     manager: Arc<StreamLogManager>,
 }
@@ -724,14 +749,14 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
-        // Fast path: no subscribers
+        // 快速路径：无订阅者
         if !self.manager.has_subscribers() {
             return;
         }
 
         let meta = event.metadata();
 
-        // Acquire read lock and find which subscribers are interested
+        // 获取读锁，筛选感兴趣的订阅者
         let guard = self
             .manager
             .subscribers
@@ -742,7 +767,7 @@ where
             return;
         }
 
-        // Pre-filter: collect subscribers interested in this event
+        // 预过滤：收集对此事件感兴趣的订阅者通道
         let interested_tx: Vec<tokio::sync::mpsc::Sender<serde_json::Value>> = guard
             .values()
             .filter(|sub| sub.filter.is_enabled(meta))
@@ -755,7 +780,7 @@ where
             return;
         }
 
-        // Serialise the event (same format as MemoryLogLayer)
+        // 序列化事件（与 MemoryLogLayer 相同格式）
         let mut visitor = JsonFieldVisitor::default();
         event.record(&mut visitor);
         let message = visitor.message.take().unwrap_or_default();
@@ -789,7 +814,7 @@ where
             "spans": spans,
         });
 
-        // Broadcast to all interested subscribers (non-blocking)
+        // 非阻塞广播给所有感兴趣的订阅者
         for tx in interested_tx {
             let _ = tx.try_send(entry.clone());
         }

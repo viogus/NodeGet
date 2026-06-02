@@ -1,14 +1,14 @@
-//! ng-js-worker: JS worker record management and RPC namespaces.
+//! `ng-js-worker` —— JS Worker 记录管理与 RPC 命名空间。
 //!
-//! ## Default features (types only)
-//! - No significant standalone types (worker types are DB entities in `ng-db`)
+//! ## 默认 feature（仅类型）
+//! - 无独立类型（Worker 类型为 `ng-db` 中的数据库实体）
 //!
 //! ## `server` feature
-//! - `service` module — core JS worker service (enqueue runs, run inline calls, record results)
-//! - `js_worker` RPC namespace — create, read, update, delete, run, get_rt_pool, list_all_js_worker
-//! - `js_result` RPC namespace — query, delete
-//! - `auth` module — permission checking (via `TokenPermissionChecker` trait injection)
-//! - `rpc_module()` — build and return merged RPC module for both namespaces
+//! - `service` 模块 —— 核心 JS Worker 服务（入队执行、内联调用、记录结果）
+//! - `js_worker` RPC 命名空间 —— create、read、update、delete、run、get_rt_pool、list_all_js_worker
+//! - `js_result` RPC 命名空间 —— query、delete
+//! - `auth` 模块 —— 权限校验（通过 `TokenPermissionChecker` trait 注入）
+//! - `rpc_module()` —— 构建并返回合并的 RPC Module（含 `js-worker` 和 `js-result` 两个命名空间）
 
 #[cfg(feature = "server")]
 mod auth;
@@ -28,9 +28,9 @@ pub use service::{
 };
 
 #[cfg(feature = "server")]
-/// Build and return the merged RPC module for both `js-worker` and `js-result` namespaces.
+/// 构建并返回合并的 RPC Module，包含 `js-worker` 和 `js-result` 两个命名空间。
 ///
-/// Call this during server startup to register both namespaces at once.
+/// 在服务器启动时调用此函数以一次性注册两个命名空间。
 pub fn rpc_module() -> jsonrpsee::RpcModule<js_worker::JsWorkerRpcImpl> {
     let mut module = js_worker::rpc_module();
     let result_module = js_result::rpc_module();

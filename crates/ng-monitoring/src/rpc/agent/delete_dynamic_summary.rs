@@ -1,3 +1,8 @@
+//! `agent.delete_dynamic_summary` RPC 实现。
+//!
+//! 按条件删除动态摘要监控数据，逻辑与 `delete_dynamic` 一致，
+//! 仅操作表和权限类型不同。
+
 use crate::query::QueryCondition;
 use crate::rpc::agent::AgentRpcImpl;
 use crate::rpc::agent::delete_common::{
@@ -14,6 +19,17 @@ use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Quer
 use serde_json::value::RawValue;
 use tracing::{debug, error};
 
+/// 删除动态摘要监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `conditions` — 查询条件列表
+/// - 返回值 — `{"success": true, "deleted": N, "condition_count": M}`
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `DynamicMonitoringSummary::Delete` 权限
+/// 2. 解析条件中的 `Limit`/`Last` 标记和 `ResolvedCondition`
+/// 3. 若有 Limit/Last：先查询 ID 列表，再按 ID 批量删除
+/// 4. 否则：直接按条件构建 `delete_many` 并执行
 pub async fn delete_dynamic_summary(
     token: String,
     conditions: Vec<QueryCondition>,
@@ -168,12 +184,6 @@ pub async fn delete_dynamic_summary(
         };
 
         debug!(target: "monitoring", rows_affected = rows_affected, conditions = conditions.len(), "Dynamic monitoring summary delete completed");
-
-        if rows_affected > 0
-            && let Err(e) = crate::monitoring_uuid_cache::MonitoringUuidCache::reload().await
-        {
-            error!(target: "monitoring_uuid_cache", error = %e, "Failed to reload MonitoringUuidCache after delete_dynamic_summary");
-        }
 
         let json_str = format!(
             "{{\"success\":true,\"deleted\":{},\"condition_count\":{}}}",

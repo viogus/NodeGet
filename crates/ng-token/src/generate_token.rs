@@ -1,3 +1,8 @@
+//! 子令牌生成与存储。
+//!
+//! 根据父级（超级）令牌权限生成新的 Token，写入数据库并刷新缓存。
+//! 仅超级令牌有权限创建子令牌。
+
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Limit;
 use ng_core::permission::token_auth::TokenOrAuth;
@@ -10,18 +15,23 @@ use crate::cache::TokenCache;
 use crate::hash_string;
 use crate::super_token::check_super_token;
 
-// 根据父级令牌权限生成并存储新令牌
-//
-// # 参数
-// * `father_token_or_auth` - 父级令牌或认证信息
-// * `timestamp_from` - 令牌生效时间戳，可选参数
-// * `timestamp_to` - 令牌过期时间戳，可选参数
-// * `token_limit` - 令牌权限限制列表
-// * `username` - 用户名，可选参数
-// * `password` - 密码，可选参数
-//
-// # 返回值
-// 成功时返回 (token_key, token_secret) 元组，失败时返回错误
+/// 根据父级令牌权限生成并存储新令牌。
+///
+/// - `father_token_or_auth`：父级令牌或认证信息（必须是超级令牌）
+/// - `timestamp_from`：令牌生效时间戳（毫秒），None 表示立即生效
+/// - `timestamp_to`：令牌过期时间戳（毫秒），None 表示永不过期
+/// - `token_limit`：令牌权限限制列表
+/// - `username`：关联用户名，与 password 必须同时提供或同时为 None
+/// - `password`：关联密码，与 username 必须同时提供或同时为 None
+/// - 返回：成功时为 `(token_key, token_secret)` 元组
+/// - 错误：父级令牌非超级令牌、数据库连接未初始化、序列化失败等
+///
+/// 内部步骤：
+/// 1. 验证父级令牌是否为超级令牌
+/// 2. 校验 username/password 的成对约束
+/// 3. 生成随机 token_key（16 字符）和 token_secret（32 字符）
+/// 4. 对 secret 和 password 进行哈希，构建 ActiveModel 插入数据库
+/// 5. 刷新 TokenCache
 pub async fn generate_and_store_token(
     father_token_or_auth: &TokenOrAuth,
 
@@ -49,6 +59,7 @@ pub async fn generate_and_store_token(
         NodegetError::ConfigNotFound("Database connection not initialized".to_owned())
     })?;
 
+    // username 和 password 必须同时提供或同时为 None，避免创建半配置的认证条目
     if username.is_some() != password.is_some() {
         return Err(NodegetError::ParseError(
             "Username and Password must be both provided or both absent".to_string(),
@@ -72,7 +83,7 @@ pub async fn generate_and_store_token(
     debug!(target: "token", %token_key, "Token limit serialized, building model for DB insert");
 
     let new_token_model = token::ActiveModel {
-        id: ActiveValue::NotSet,
+        id: ActiveValue::NotSet, // 自增主键，由数据库分配
         version: Set(1),
         token_key: Set(token_key.clone()),
         token_hash: Set(token_hash),
@@ -90,7 +101,7 @@ pub async fn generate_and_store_token(
 
     debug!(target: "token", %token_key, "Token inserted into database successfully");
 
-    // Reload cache after creating new token
+    // 插入成功后刷新缓存，使新令牌立即可用于认证
     if let Err(e) = TokenCache::reload().await {
         tracing::error!(target: "token", error = %e, "Failed to reload token cache after generate_and_store_token");
     }

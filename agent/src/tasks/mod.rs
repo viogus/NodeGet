@@ -1,3 +1,11 @@
+//! 任务处理模块。
+//!
+//! 接收 Server 下发的各类任务（ICMP/TCP/HTTP Ping、命令执行、HTTP 请求、
+//! DNS 查询、IP 获取、WebShell PTY、配置读写、自更新等），执行后将结果上报。
+//! 任务权限由 Server 配置的 `allow_*` 或 `allow_task_type` 列表控制。
+//!
+//! 核心循环 [`handle_task`] 订阅各 Server 的下行消息通道，过滤出任务 RPC 并派发执行。
+
 use crate::config_access::get_agent_config;
 use crate::rpc::multi_server::{send_to, subscribe_to};
 use crate::rpc::{JsonRpcTask, wrap_json_into_rpc_with_id_1};
@@ -23,21 +31,30 @@ pub type Result<T> = anyhow::Result<T>;
 /// 会让真正卡住的任务在 agent 进程里无限堆积。
 const TASK_MAX_TIMEOUT: Duration = Duration::from_mins(10);
 
-// 任务执行模块
-mod execute;
-// IP 获取模块
-mod ip;
-// HTTP Request 任务模块
-mod http_request;
-// DNS 查询模块
+/// DNS 查询模块
 mod dns;
-// Ping 任务模块
+/// 命令执行模块
+mod execute;
+/// HTTP Request 任务模块
+mod http_request;
+/// IP 获取模块
+mod ip;
+/// Ping 任务模块
 pub mod ping;
-// PTY（伪终端）模块
+/// PTY（伪终端）模块
 mod pty;
+/// 自更新模块
 pub mod self_update;
 
-// 检查服务器是否允许执行特定任务
+/// 检查 Server 是否允许执行特定类型的任务。
+///
+/// 若 Server 配置了 `allow_task_type`（非空），以此列表为准，忽略所有单独的 `allow_*` 开关；
+/// 未指定或为空时，回退到原有的布尔开关。
+///
+/// - `server` - 服务器配置
+/// - `task_type` - 任务类型
+///
+/// 返回是否允许执行。
 fn is_task_allowed(server: &ng_config::config::agent::Server, task_type: &TaskEventType) -> bool {
     // 若指定了 allow_task_type（非空），则以此列表为准，忽略所有单独的 allow_* 开关
     if let Some(ref allowed) = server.allow_task_type
@@ -64,7 +81,14 @@ fn is_task_allowed(server: &ng_config::config::agent::Server, task_type: &TaskEv
     }
 }
 
-// 执行具体任务
+/// 执行具体任务，根据任务类型派发到对应的处理函数。
+///
+/// - `task_type` - 任务类型枚举
+/// - `task_id` - 任务 ID
+/// - `task_token` - 任务令牌
+/// - `ignore_cert` - 是否跳过 TLS 证书校验
+///
+/// 返回任务执行结果；执行失败时返回错误。
 async fn execute_task(
     task_type: &TaskEventType,
     task_id: u64,
@@ -167,15 +191,15 @@ async fn execute_task(
     }
 }
 
-// 处理来自服务器的任务请求
-//
-// 该函数订阅各个服务器的任务通道，接收并执行不同类型的任务（如 Ping、TCP Ping、HTTP Ping、WebShell、命令执行、IP 查询），
-// 然后将执行结果返回给服务器。
-//
-// 与 [`crate::rpc::handle_error_message`] 相同，所有 per-server 订阅循环
-// 以及逐任务处理都交给嵌套的 [`JoinSet`] 托管。当主循环在配置热重载
-// 时 abort 本函数的顶层 JoinHandle，`JoinSet` 被 drop 并级联 abort
-// 全部子任务，避免旧订阅与新订阅同时消费服务器消息。
+/// 处理来自 Server 的任务请求。
+///
+/// 订阅各 Server 的下行消息通道，接收并执行不同类型的任务（Ping、WebShell、
+/// 命令执行、IP 查询、DNS 查询等），然后将执行结果上报。
+///
+/// 与 [`crate::rpc::handle_error_message`] 相同，所有 per-server 订阅循环
+/// 以及逐任务处理都交给嵌套的 [`JoinSet`] 托管。当主循环在配置热重载
+/// 时 abort 本函数的顶层 `JoinHandle`，`JoinSet` 被 drop 并级联 abort
+/// 全部子任务，避免旧订阅与新订阅同时消费服务器消息。
 pub async fn handle_task() {
     time::sleep(Duration::from_secs(1)).await;
 

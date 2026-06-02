@@ -1,3 +1,8 @@
+//! Agent 配置文件结构体与解析逻辑。
+//!
+//! 定义 `AgentConfig`、`Server`（单服务器连接）、`IpProvider` 等类型，
+//! 以及默认值常量和配置读取/校验方法。
+
 use crate::config::deserialize_uuid_or_auto;
 use crate::config::replace_auto_gen_uuid;
 use serde::{Deserialize, Serialize};
@@ -6,114 +11,151 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::fs;
 
+/// 默认配置文件路径
 pub const DEFAULT_AGENT_CONFIG_PATH: &str = "config.toml";
+/// 默认动态监控数据上报间隔（毫秒），1 秒
 pub const DEFAULT_DYNAMIC_REPORT_INTERVAL_MS: u64 = 1000;
+/// 默认动态摘要上报间隔（毫秒），1 秒
 pub const DEFAULT_DYNAMIC_SUMMARY_REPORT_INTERVAL_MS: u64 = 1000;
+/// 默认静态监控数据上报间隔（毫秒），5 分钟
 pub const DEFAULT_STATIC_REPORT_INTERVAL_MS: u64 = 300_000;
+/// 默认 WebSocket 连接超时（毫秒），1 秒
 pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 1000;
+/// 默认执行命令输出最大字符数
 pub const DEFAULT_EXEC_MAX_CHARACTER: usize = 10_000;
+/// 默认 IP 地址获取服务提供商
 pub const DEFAULT_IP_PROVIDER: IpProvider = IpProvider::Cloudflare;
+/// 默认 NTP 服务器地址
 pub const DEFAULT_NTP_SERVER: &str = "pool.ntp.org";
 
-// Agent 配置结构体，定义 Agent 的运行参数
+/// Agent 配置结构体，定义 Agent 的运行参数。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentConfig {
-    // 日志级别
+    /// 日志级别
     pub log_level: Option<String>,
-    // 动态监控数据上报间隔（毫秒），默认 1000（1 秒）
+    /// 动态监控数据上报间隔（毫秒），默认 1000（1 秒）
     pub dynamic_report_interval_ms: Option<u64>,
-    // 动态监控摘要数据上报间隔（毫秒），默认 1000（1 秒）
-    // 必须是 dynamic_report_interval_ms 的因数（即 dynamic_report_interval_ms 是它的整数倍）
+    /// 动态监控摘要数据上报间隔（毫秒），默认 1000（1 秒）
+    /// 必须是 dynamic_report_interval_ms 的因数（即 dynamic_report_interval_ms 是它的整数倍）
     pub dynamic_summary_report_interval_ms: Option<u64>,
-    // 静态监控数据上报间隔（毫秒），默认 300000（5 分钟）
+    /// 静态监控数据上报间隔（毫秒），默认 300000（5 分钟）
     pub static_report_interval_ms: Option<u64>,
 
-    // Agent UUID，默认自动生成
+    /// Agent UUID，默认自动生成
     #[serde(deserialize_with = "deserialize_uuid_or_auto")]
     pub agent_uuid: uuid::Uuid,
 
-    // WebSocket 连接超时时间（毫秒）
+    /// WebSocket 连接超时时间（毫秒）
     pub connect_timeout_ms: Option<u64>,
 
-    // 执行命令输出的最大字符数限制
+    /// 执行命令输出的最大字符数限制
     pub exec_max_character: Option<usize>,
 
-    // 终端 Shell
+    /// 终端 Shell 路径
     pub terminal_shell: Option<String>,
 
-    // IP 地址获取服务提供商
+    /// IP 地址获取服务提供商
     pub ip_provider: Option<IpProvider>,
 
-    // NTP 服务器地址，默认使用 pool.ntp.org
+    /// NTP 服务器地址，默认使用 pool.ntp.org
     pub ntp_server: Option<String>,
 
-    // Disk 选择列表（按 mount_point 匹配），用于 Dynamic Summary 上报
-    // 若指定且非空，则仅统计列表中的磁盘；否则回退到默认排除逻辑
+    /// Disk 选择列表（按 mount_point 匹配），用于 Dynamic Summary 上报。
+    /// 若指定且非空，则仅统计列表中的磁盘；否则回退到默认排除逻辑。
     pub dynamic_summary_select_disk: Option<Vec<String>>,
 
-    // 网卡选择列表（按 interface_name 匹配），用于 Dynamic Summary 上报
-    // 若指定且非空，则仅统计列表中的网卡；否则回退到默认排除逻辑
+    /// 网卡选择列表（按 interface_name 匹配），用于 Dynamic Summary 上报。
+    /// 若指定且非空，则仅统计列表中的网卡；否则回退到默认排除逻辑。
     pub dynamic_summary_select_network_interface: Option<Vec<String>>,
 
-    // 服务器列表
+    /// 服务器列表，每个条目对应一个 Server 连接
     pub server: Option<Vec<Server>>,
 }
 
-// 服务器配置结构体，定义 Agent 连接的服务器信息
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// 单个服务器连接配置，定义 Agent 连接某个 Server 的信息与权限。
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Server {
-    // 服务器名称
-    pub name: String, // Only For Agent
-    // 服务器 UUID，用于连接时校验服务器身份
+    /// 服务器名称（仅 Agent 端使用，用于标识）
+    pub name: String,
+    /// 服务器 UUID，用于连接时校验服务器身份
     pub server_uuid: String,
-    // 认证令牌
+    /// 认证令牌（key:secret 格式）
     pub token: String,
-    // WebSocket 连接地址
+    /// WebSocket 连接地址
     pub ws_url: String,
 
-    // 是否允许执行任务
+    /// 是否允许执行任务
     pub allow_task: Option<bool>,
 
-    // 是否允许 ICMP Ping
+    /// 是否允许 ICMP Ping
     pub allow_icmp_ping: Option<bool>,
-    // 是否允许 TCP Ping
+    /// 是否允许 TCP Ping
     pub allow_tcp_ping: Option<bool>,
-    // 是否允许 HTTP Ping
+    /// 是否允许 HTTP Ping
     pub allow_http_ping: Option<bool>,
 
-    // 是否允许 Web Shell
+    /// 是否允许 Web Shell
     pub allow_web_shell: Option<bool>,
-    // 是否允许阅读配置
-    pub allow_read_config: Option<bool>, // Dangerous
-    // 是否允许编辑配置
-    pub allow_edit_config: Option<bool>, // Dangerous
-    // 是否允许执行命令
-    pub allow_execute: Option<bool>, // Dangerous
-    // 是否允许 HTTP 请求任务
-    pub allow_http_request: Option<bool>, // Dangerous
+    /// 是否允许阅读配置（危险操作）
+    pub allow_read_config: Option<bool>,
+    /// 是否允许编辑配置（危险操作）
+    pub allow_edit_config: Option<bool>,
+    /// 是否允许执行命令（危险操作）
+    pub allow_execute: Option<bool>,
+    /// 是否允许 HTTP 请求任务（危险操作）
+    pub allow_http_request: Option<bool>,
 
-    // 是否允许获取 IP 地址
+    /// 是否允许获取 IP 地址
     pub allow_ip: Option<bool>,
-    // 是否允许 DNS 查询
+    /// 是否允许 DNS 查询
     pub allow_dns: Option<bool>,
-    // 是否允许获取版本信息
+    /// 是否允许获取版本信息
     pub allow_version: Option<bool>,
-    // 是否允许自更新
+    /// 是否允许自更新
     pub allow_self_update: Option<bool>,
-    // 是否忽略服务端 TLS 证书校验（默认关闭）
+    /// 是否忽略服务端 TLS 证书校验（默认关闭）
     pub ignore_cert: Option<bool>,
 
-    // 允许的任务类型列表（白名单模式）
-    // 若指定，则以此列表为准，忽略所有单独的 allow_* 开关
-    // 值为 task_name() 的返回值，如 "ping" / "tcp_ping" / "http_ping" / "dns" / "execute" 等
+    /// 允许的任务类型列表（白名单模式）。
+    /// 若指定，则以此列表为准，忽略所有单独的 `allow_*` 开关。
+    /// 值为 `task_name()` 的返回值，如 `"ping"` / `"tcp_ping"` / `"http_ping"` / `"dns"` / `"execute"` 等。
     pub allow_task_type: Option<Vec<String>>,
 }
 
-// IP 地址获取服务提供商枚举
+impl std::fmt::Debug for Server {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Server")
+            .field("name", &self.name)
+            .field("server_uuid", &self.server_uuid)
+            // 脱敏处理：不暴露 Token 明文
+            .field("token", &"***REDACTED***")
+            .field("ws_url", &self.ws_url)
+            .field("allow_task", &self.allow_task)
+            .field("allow_icmp_ping", &self.allow_icmp_ping)
+            .field("allow_tcp_ping", &self.allow_tcp_ping)
+            .field("allow_http_ping", &self.allow_http_ping)
+            .field("allow_web_shell", &self.allow_web_shell)
+            .field("allow_read_config", &self.allow_read_config)
+            .field("allow_edit_config", &self.allow_edit_config)
+            .field("allow_execute", &self.allow_execute)
+            .field("allow_http_request", &self.allow_http_request)
+            .field("allow_ip", &self.allow_ip)
+            .field("allow_dns", &self.allow_dns)
+            .field("allow_version", &self.allow_version)
+            .field("allow_self_update", &self.allow_self_update)
+            .field("ignore_cert", &self.ignore_cert)
+            .field("allow_task_type", &self.allow_task_type)
+            .finish()
+    }
+}
+
+/// IP 地址获取服务提供商枚举。
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum IpProvider {
+    /// ipinfo.io 服务
     IpInfo,
+    /// Cloudflare 1.1.1.1 服务
     Cloudflare,
 }
 
@@ -124,24 +166,28 @@ impl Default for IpProvider {
 }
 
 impl AgentConfig {
+    /// 获取动态上报间隔，未配置时使用默认值（1 秒）。
     #[must_use]
     pub fn dynamic_report_interval_ms_or_default(&self) -> u64 {
         self.dynamic_report_interval_ms
             .unwrap_or(DEFAULT_DYNAMIC_REPORT_INTERVAL_MS)
     }
 
+    /// 获取动态摘要上报间隔，未配置时使用默认值（1 秒）。
     #[must_use]
     pub fn dynamic_summary_report_interval_ms_or_default(&self) -> u64 {
         self.dynamic_summary_report_interval_ms
             .unwrap_or(DEFAULT_DYNAMIC_SUMMARY_REPORT_INTERVAL_MS)
     }
 
+    /// 获取静态上报间隔，未配置时使用默认值（5 分钟）。
     #[must_use]
     pub fn static_report_interval_ms_or_default(&self) -> u64 {
         self.static_report_interval_ms
             .unwrap_or(DEFAULT_STATIC_REPORT_INTERVAL_MS)
     }
 
+    /// 获取连接超时 Duration，未配置时使用默认值（1 秒）。
     #[must_use]
     pub fn connect_timeout_duration(&self) -> Duration {
         Duration::from_millis(
@@ -150,36 +196,51 @@ impl AgentConfig {
         )
     }
 
+    /// 获取执行命令最大字符数，未配置时使用默认值（10000）。
     #[must_use]
     pub fn exec_max_character_or_default(&self) -> usize {
         self.exec_max_character
             .unwrap_or(DEFAULT_EXEC_MAX_CHARACTER)
     }
 
+    /// 获取 IP 服务提供商，未配置时使用默认值（Cloudflare）。
     #[must_use]
     pub fn ip_provider_or_default(&self) -> IpProvider {
         self.ip_provider.unwrap_or(DEFAULT_IP_PROVIDER)
     }
 
+    /// 获取 NTP 服务器地址，未配置时使用默认值（pool.ntp.org）。
     #[must_use]
     pub fn ntp_server_or_default(&self) -> &str {
         self.ntp_server.as_deref().unwrap_or(DEFAULT_NTP_SERVER)
     }
 
-    /// 从指定路径读取并解析代理配置
+    /// 从指定路径读取并解析 Agent 配置。
     ///
-    /// 若配置文件中 `agent_uuid` 为 `"auto_gen"`，则会生成随机 `UUIDv4`
+    /// 若配置文件中 `agent_uuid` 为 `"auto_gen"`，则会生成随机 UUIDv4
     /// 并直接覆盖原配置文件，后续启动不再触发自动生成。
+    ///
+    /// - `path` — 配置文件路径
+    /// - 返回解析后的 `AgentConfig`
+    ///
+    /// 内部步骤：
+    /// 1. 读取配置文件内容
+    /// 2. 检查 `agent_uuid` 是否为 `auto_gen`，若是则生成 UUID 并原子写回
+    /// 3. 解析 TOML 为 `AgentConfig`
+    /// 4. 校验 `connect_timeout_ms` 不为零
+    /// 5. 校验 server name 不重复
+    /// 6. 校验 `dynamic_report_interval_ms` 是 `dynamic_summary_report_interval_ms` 的整数倍
     ///
     /// # Errors
     ///
-    /// 当文件读取失败或TOML解析失败时返回错误
+    /// 当文件读取失败、TOML 解析失败、或校验不通过时返回错误
     pub async fn get_and_parse_config(
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // 1. 读取配置文件内容
         let content = fs::read_to_string(path.as_ref()).await?;
 
-        // 检查并替换 auto_gen
+        // 2. 检查并替换 auto_gen
         let value: toml::Value = toml::from_str(&content)?;
         let is_auto_gen = value
             .get("agent_uuid")
@@ -200,13 +261,15 @@ impl AgentConfig {
             content
         };
 
+        // 3. 解析 TOML 为 AgentConfig
         let config: Self = toml::from_str(&config_content)?;
 
+        // 4. 校验 connect_timeout_ms 不为零
         if matches!(config.connect_timeout_ms, Some(0)) {
             return Err("connect_timeout_ms must be greater than 0".into());
         }
 
-        // 校验 server name 不能重复
+        // 5. 校验 server name 不能重复
         if let Some(servers) = &config.server {
             let mut seen = HashSet::with_capacity(servers.len());
             for server in servers {
@@ -216,7 +279,7 @@ impl AgentConfig {
             }
         }
 
-        // 校验 dynamic_report_interval_ms 必须是 dynamic_summary_report_interval_ms 的整数倍
+        // 6. 校验 dynamic_report_interval_ms 必须是 dynamic_summary_report_interval_ms 的整数倍
         {
             let dynamic_interval = config.dynamic_report_interval_ms_or_default();
             let summary_interval = config.dynamic_summary_report_interval_ms_or_default();

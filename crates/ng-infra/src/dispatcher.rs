@@ -1,16 +1,13 @@
-//! RPC dispatcher trait.
+//! RPC 方法派发 trait。
 //!
-//! [`RpcDispatcher`] abstracts over the RPC framework to allow
-//! module merging without coupling to a specific implementation.
+//! [`RpcDispatcher`] 对 RPC 框架做抽象，允许模块合并而不耦合具体实现。
 
-/// Trait for RPC method dispatch.
+/// RPC 方法派发 trait。
 ///
-/// Concrete implementations (e.g. wrapping jsonrpsee's `RpcModule`)
-/// provide framework-agnostic module assembly.
+/// 具体实现（如包装 jsonrpsee 的 `RpcModule`）提供框架无关的模块组装能力。
 pub trait RpcDispatcher: Send + Sync + Sized {
-    /// Merge another dispatcher into this one.
+    /// 将另一个 Dispatcher 合并到当前实例。
     ///
-    /// After merging, all methods from `other` become available
-    /// through `self`.
+    /// 合并后，`other` 中的所有方法可通过 `self` 访问。
     fn merge(&mut self, other: Self) -> anyhow::Result<()>;
 }

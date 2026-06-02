@@ -7,6 +7,16 @@
     clippy::doc_markdown
 )]
 
+//! ng-config：NodeGet 配置管理 crate。
+//!
+//! 提供 Agent 和 Server 的配置文件解析、命令行参数解析、全局配置单例，
+//! 以及 Server 端配置热重载 RPC（`read_config` / `edit_config`）。
+//!
+//! ## 模块组成
+//! - `config` — 配置文件结构体与解析逻辑（Agent / Server）
+//! - `args_parse` — 命令行参数定义与解析
+//! - `server_rpc` — Server 端配置读写 RPC（仅 `server` feature）
+
 // 配置管理模块，处理 Agent 和 Server 的配置
 pub mod config;
 // 命令行参数解析模块
@@ -28,29 +38,29 @@ static SERVER_CONFIG: OnceLock<RwLock<ServerConfig>> = OnceLock::new();
 static SERVER_CONFIG_PATH: OnceLock<String> = OnceLock::new();
 static RELOAD_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
-/// 获取全局 SERVER_CONFIG 的只读引用
+/// 获取全局 SERVER_CONFIG 的只读引用。
 ///
-/// 返回 `None` 表示尚未初始化
+/// 返回 `None` 表示尚未初始化。
 #[must_use]
 pub fn get_server_config() -> Option<&'static RwLock<ServerConfig>> {
     SERVER_CONFIG.get()
 }
 
-/// 获取全局 SERVER_CONFIG_PATH
+/// 获取全局 SERVER_CONFIG_PATH。
 #[must_use]
 pub fn get_server_config_path() -> Option<&'static str> {
     SERVER_CONFIG_PATH.get().map(String::as_str)
 }
 
-/// 获取全局 RELOAD_NOTIFY
+/// 获取全局 RELOAD_NOTIFY。
 #[must_use]
 pub fn get_reload_notify() -> Option<&'static tokio::sync::Notify> {
     RELOAD_NOTIFY.get()
 }
 
-/// 设置全局 SERVER_CONFIG
+/// 设置全局 SERVER_CONFIG。
 ///
-/// - 若已初始化：写入新值并返回 `Ok(())`
+/// - 若已初始化：通过 RwLock 写入新值并返回 `Ok(())`
 /// - 若未初始化：首次设置并返回 `Ok(())`
 /// - 若并发首次设置失败：返回 `Err`
 ///
@@ -72,7 +82,7 @@ pub fn set_server_config(config: ServerConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 设置全局 SERVER_CONFIG_PATH
+/// 设置全局 SERVER_CONFIG_PATH。
 ///
 /// # Errors
 ///
@@ -83,7 +93,7 @@ pub fn set_server_config_path(path: String) -> Result<(), String> {
         .map_err(|_| "SERVER_CONFIG_PATH already set".to_owned())
 }
 
-/// 初始化 RELOAD_NOTIFY（若尚未初始化）
+/// 初始化 RELOAD_NOTIFY（若尚未初始化则创建，已存在则无操作）。
 pub fn init_reload_notify() {
     RELOAD_NOTIFY.get_or_init(tokio::sync::Notify::new);
 }

@@ -1,3 +1,12 @@
+//! `agent.report_static` RPC 实现。
+//!
+//! Agent 上报静态监控数据。包含两级去重机制：
+//! 1. **快速路径** — 内存 `StaticHashCache` 比较数据哈希
+//! 2. **慢速路径** — 数据库查询哈希是否已存在（覆盖缓存初始化前的历史数据）
+//!
+//! 去重通过后，数据送入 `MonitoringBuffer` 批量写入，同时更新
+//! `MonitoringLastCache` 和 `StaticHashCache`。
+
 use crate::data_structure::StaticMonitoringData;
 use crate::monitoring_buffer;
 use crate::monitoring_last_cache::MonitoringLastCache;
@@ -16,6 +25,20 @@ use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::value::RawValue;
 use tracing::{debug, error};
 
+/// Agent 上报静态监控数据。
+///
+/// - `token` — 身份认证凭据
+/// - `static_monitoring_data` — 静态监控数据
+/// - 返回值 — `{"status": "buffered"}` 或 `{"status": "skipped", "reason": "duplicate_hash"}`
+///
+/// 内部步骤：
+/// 1. 解析 Token 并验证 `StaticMonitoring::Write` 权限（`Scope`: `AgentUuid`）
+/// 2. 通过 `MonitoringUuidCache::get_or_insert` 查找或创建 UUID→ID 映射
+/// 3. 更新 `MonitoringLastCache` 内存缓存
+/// 4. **快速去重**：检查 `StaticHashCache` 是否已有相同哈希
+/// 5. **慢速去重**：查询数据库确认哈希是否已存在
+/// 6. 通过去重后，构建 `ActiveModel` 送入 `MonitoringBuffer`
+/// 7. 更新 `StaticHashCache` 哈希缓存
 pub async fn report_static(
     token: String,
     static_monitoring_data: StaticMonitoringData,

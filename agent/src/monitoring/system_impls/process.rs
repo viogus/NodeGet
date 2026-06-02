@@ -1,3 +1,15 @@
+//! 进程数统计模块。
+//!
+//! 提供跨平台的进程计数功能：
+//! - Windows：通过 `EnumProcesses` API 枚举
+//! - Linux：遍历 `/proc` 目录，通过 `cmdline` 区分用户进程与内核线程
+//! - 其他平台：返回 0 占位
+
+/// 统计当前系统进程数（Windows 平台）。
+///
+/// 使用 `EnumProcesses` API 枚举进程 ID，按 MSDN 文档在返回结果饱和时加倍缓冲区重试。
+///
+/// 返回进程数；API 调用失败或缓冲区溢出 u32 时返回 0。
 #[cfg(target_os = "windows")]
 pub fn count_processes() -> u32 {
     use windows_sys::Win32::Foundation::FALSE;
@@ -41,15 +53,17 @@ pub fn count_processes() -> u32 {
     }
 }
 
+/// 统计当前系统进程数（Linux 平台）。
+///
+/// 遍历 `/proc` 目录中名为数字 PID 的条目，通过读取 `/proc/<pid>/cmdline`
+/// 区分用户进程与内核线程（内核线程的 `cmdline` 为空文件）。
+/// 这与 `ps` / `procps` 使用相同启发式方法，开销低于解析 `/proc/<pid>/status`。
+///
+/// 返回用户进程数；`/proc` 不可读时返回 0。
 #[cfg(target_os = "linux")]
 pub fn count_processes() -> u32 {
     use std::fs;
 
-    // Count entries in /proc whose name is a numeric PID, excluding kernel
-    // threads. `/proc/<pid>/cmdline` is always an empty file for kernel
-    // threads (kthreadd / ksoftirqd / ...) and non-empty for real user-space
-    // processes. This is the same heuristic `ps` / `procps` use and is
-    // cheaper than parsing `/proc/<pid>/status`.
     let Ok(entries) = fs::read_dir("/proc") else {
         return 0;
     };
@@ -64,8 +78,8 @@ pub fn count_processes() -> u32 {
             continue;
         }
 
-        // Reading cmdline races with process exit; a missing file or
-        // read error just means "not a running user process right now".
+        // 读取 cmdline 与进程退出存在竞争；文件缺失或读取错误
+        // 仅意味着"当前不是运行中的用户进程"，跳过即可。
         match fs::read(format!("/proc/{name}/cmdline")) {
             Ok(bytes) if !bytes.is_empty() => count += 1,
             _ => {}
@@ -74,6 +88,9 @@ pub fn count_processes() -> u32 {
     count
 }
 
+/// 统计当前系统进程数（其他平台）。
+///
+/// 目前尚未支持 macOS 等平台，返回 0 占位。
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub const fn count_processes() -> u32 {
     0 // TODO: MacOS Support

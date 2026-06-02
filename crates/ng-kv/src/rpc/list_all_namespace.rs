@@ -1,3 +1,5 @@
+//! `kv_list_all_namespace` RPC 方法：列出所有 KV 命名空间（按权限过滤）
+
 use crate::auth::{KvNamespaceListPermission, resolve_kv_list_namespace_permission};
 use crate::db::list_all_namespaces;
 use jsonrpsee::core::RpcResult;
@@ -5,6 +7,17 @@ use ng_core::error::{NodegetError, anyhow_to_nodeget_error};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 列出所有 KV 命名空间，按 Token 权限过滤可见范围
+///
+/// - `token` — 身份令牌
+///
+/// 返回命名空间名称数组。SuperToken 或 `Scope::Global` 用户可见全部命名空间；
+/// 其他用户仅可见其 `Scope::KvNamespace` 中授权的命名空间。
+///
+/// 内部步骤：
+/// 1. 解析 Token 的命名空间列表权限（`All` 或 `Scoped`）
+/// 2. 调用 `list_all_namespaces` 查询全部命名空间
+/// 3. 按权限过滤后序列化返回
 pub async fn list_all_namespace(token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "kv", "Processing list_all_namespace request");

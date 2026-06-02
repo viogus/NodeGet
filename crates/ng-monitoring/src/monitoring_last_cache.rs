@@ -1,3 +1,9 @@
+//! 监控数据最新值缓存。
+//!
+//! 维护三类监控数据（`static`/`dynamic`/`dynamic_summary`）每台设备的最新一条记录，
+//! 用于 multi-last 查询的快速路径，避免每次都回表查询数据库。
+//! 内部使用 `RwLock<HashMap>` 实现读写分离，锁中毒时自动恢复。
+
 use crate::data_structure::{
     DynamicMonitoringData, DynamicMonitoringSummaryData, StaticMonitoringData,
 };
@@ -8,15 +14,21 @@ use std::sync::RwLock;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
+/// 全局 `MonitoringLastCache` 单例。
 static CACHE: OnceLock<MonitoringLastCache> = OnceLock::new();
 
+/// 监控数据最新值缓存，按 UUID 维度存储每类数据的最新一条 JSON 记录。
 pub struct MonitoringLastCache {
+    /// 静态监控最新值缓存
     static_cache: RwLock<HashMap<Uuid, serde_json::Value>>,
+    /// 动态监控最新值缓存
     dynamic_cache: RwLock<HashMap<Uuid, serde_json::Value>>,
+    /// 动态摘要最新值缓存
     dynamic_summary_cache: RwLock<HashMap<Uuid, serde_json::Value>>,
 }
 
 impl MonitoringLastCache {
+    /// 初始化全局单例。
     pub fn init() {
         CACHE.get_or_init(|| Self {
             static_cache: RwLock::new(HashMap::with_capacity(32)),
@@ -25,37 +37,48 @@ impl MonitoringLastCache {
         });
     }
 
+    /// 获取全局单例引用，未初始化时 panic。
+    ///
+    /// # Panics
+    ///
+    /// 若全局 `MonitoringLastCache` 未初始化（即未调用 `init()`）则 panic。
     pub fn global() -> &'static Self {
         CACHE
             .get()
             .expect("MonitoringLastCache not initialized — call MonitoringLastCache::init() first")
     }
 
+    /// 直接用预构建的 JSON 值更新静态最新缓存。
     pub fn update_static_prebuilt(&self, uuid: Uuid, value: serde_json::Value) {
         recover_write(&self.static_cache).insert(uuid, value);
         debug!(target: "monitoring", %uuid, "Static last-cache updated");
     }
 
+    /// 直接用预构建的 JSON 值更新动态最新缓存。
     pub fn update_dynamic_prebuilt(&self, uuid: Uuid, value: serde_json::Value) {
         recover_write(&self.dynamic_cache).insert(uuid, value);
         debug!(target: "monitoring", %uuid, "Dynamic last-cache updated");
     }
 
+    /// 直接用预构建的 JSON 值更新动态摘要最新缓存。
     pub fn update_dynamic_summary_prebuilt(&self, uuid: Uuid, value: serde_json::Value) {
         recover_write(&self.dynamic_summary_cache).insert(uuid, value);
         debug!(target: "monitoring", %uuid, "Dynamic-summary last-cache updated");
     }
 
+    /// 从原始数据构建 JSON 值并更新静态最新缓存。
     pub fn update_static(&self, uuid: Uuid, timestamp: i64, data: &StaticMonitoringData) {
         let value = build_static_value(uuid, timestamp, data);
         self.update_static_prebuilt(uuid, value);
     }
 
+    /// 从原始数据构建 JSON 值并更新动态最新缓存。
     pub fn update_dynamic(&self, uuid: Uuid, timestamp: i64, data: &DynamicMonitoringData) {
         let value = build_dynamic_value(uuid, timestamp, data);
         self.update_dynamic_prebuilt(uuid, value);
     }
 
+    /// 从原始数据构建 JSON 值并更新动态摘要最新缓存。
     pub fn update_dynamic_summary(
         &self,
         uuid: Uuid,
@@ -66,6 +89,11 @@ impl MonitoringLastCache {
         self.update_dynamic_summary_prebuilt(uuid, value);
     }
 
+    /// 获取指定 UUID 的静态最新值，仅返回请求的字段。
+    ///
+    /// - `uuid` — 设备 UUID
+    /// - `fields` — 需要的字段列表，始终包含 uuid 和 timestamp
+    /// - 返回值 — 筛选后的 JSON Object，缓存未命中时返回 `None`
     pub fn get_static_last(
         &self,
         uuid: &Uuid,
@@ -87,6 +115,11 @@ impl MonitoringLastCache {
         Some(serde_json::Value::Object(filtered))
     }
 
+    /// 获取指定 UUID 的动态最新值，仅返回请求的字段。
+    ///
+    /// - `uuid` — 设备 UUID
+    /// - `fields` — 需要的字段列表，始终包含 uuid 和 timestamp
+    /// - 返回值 — 筛选后的 JSON Object，缓存未命中时返回 `None`
     pub fn get_dynamic_last(
         &self,
         uuid: &Uuid,
@@ -108,6 +141,11 @@ impl MonitoringLastCache {
         Some(serde_json::Value::Object(filtered))
     }
 
+    /// 获取指定 UUID 的动态摘要最新值。
+    ///
+    /// - `uuid` — 设备 UUID
+    /// - `fields` — 需要的字段列表；为空时返回完整记录
+    /// - 返回值 — 筛选后的 JSON Object，缓存未命中时返回 `None`
     pub fn get_dynamic_summary_last(
         &self,
         uuid: &Uuid,
@@ -137,6 +175,7 @@ impl MonitoringLastCache {
     }
 }
 
+/// 从 `RwLock` 获取读锁，锁中毒时自动恢复（取走内部数据继续使用）。
 fn recover_read<K, V>(
     lock: &RwLock<HashMap<K, V>>,
 ) -> std::sync::RwLockReadGuard<'_, HashMap<K, V>> {
@@ -146,6 +185,7 @@ fn recover_read<K, V>(
     })
 }
 
+/// 从 `RwLock` 获取写锁，锁中毒时自动恢复。
 fn recover_write<K, V>(
     lock: &RwLock<HashMap<K, V>>,
 ) -> std::sync::RwLockWriteGuard<'_, HashMap<K, V>> {
@@ -155,6 +195,12 @@ fn recover_write<K, V>(
     })
 }
 
+/// 从静态监控数据构建用于缓存的 JSON 值。
+///
+/// - `uuid` — 设备 UUID
+/// - `timestamp` — 时间戳（毫秒）
+/// - `data` — 静态监控数据引用
+/// - 返回值 — 包含 uuid、timestamp、cpu、system、gpu 的 JSON Object
 #[must_use]
 pub fn build_static_value(
     uuid: Uuid,
@@ -182,6 +228,12 @@ pub fn build_static_value(
     serde_json::Value::Object(obj)
 }
 
+/// 从动态监控数据构建用于缓存的 JSON 值。
+///
+/// - `uuid` — 设备 UUID
+/// - `timestamp` — 时间戳（毫秒）
+/// - `data` — 动态监控数据引用
+/// - 返回值 — 包含 uuid、timestamp、cpu、ram、load、system、disk、network、gpu 的 JSON Object
 #[must_use]
 pub fn build_dynamic_value(
     uuid: Uuid,
@@ -221,6 +273,12 @@ pub fn build_dynamic_value(
     serde_json::Value::Object(obj)
 }
 
+/// 从动态摘要监控数据构建用于缓存的 JSON 值。
+///
+/// - `uuid` — 设备 UUID
+/// - `timestamp` — 时间戳（毫秒）
+/// - `data` — 动态摘要监控数据引用
+/// - 返回值 — 包含所有摘要字段的 JSON Object（注意：缩放值保持原始存储格式，反缩放在查询时执行）
 pub fn build_dynamic_summary_value(
     uuid: Uuid,
     timestamp: i64,

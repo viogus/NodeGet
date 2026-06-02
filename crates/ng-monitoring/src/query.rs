@@ -1,103 +1,108 @@
+//! 监控数据查询 DSL 与响应类型定义。
+//!
+//! 定义了三类监控数据（`static`/`dynamic`/`dynamic_summary`）的查询条件、
+//! 查询字段枚举、查询结构体和响应结构体。还包含缩放列的反缩放工具函数。
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // Re-export query field types from ng-core
 pub use ng_core::monitoring::query::{DynamicDataQueryField, StaticDataQueryField};
 
-// 查询条件枚举，定义各种查询过滤条件
+/// 查询条件枚举，定义各种查询过滤条件。
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryCondition {
-    // 按 UUID 过滤
+    /// 按 UUID 过滤
     Uuid(uuid::Uuid),
-    // 按时间戳范围过滤（开始时间，结束时间）
-    TimestampFromTo(i64, i64), // start, end
-    // 按时间戳起始点过滤
-    TimestampFrom(i64), // start,
-    // 按时间戳结束点过滤
-    TimestampTo(i64), // end
+    /// 按时间戳范围过滤（开始时间，结束时间），单位：毫秒
+    TimestampFromTo(i64, i64),
+    /// 按时间戳起始点过滤，单位：毫秒
+    TimestampFrom(i64),
+    /// 按时间戳结束点过滤，单位：毫秒
+    TimestampTo(i64),
 
-    // 按入库时间范围过滤（开始时间，结束时间）
-    StorageTimeFromTo(i64, i64), // start, end
-    // 按入库时间起始点过滤
-    StorageTimeFrom(i64), // start
-    // 按入库时间结束点过滤
-    StorageTimeTo(i64), // end
+    /// 按入库时间范围过滤（开始时间，结束时间），单位：毫秒
+    StorageTimeFromTo(i64, i64),
+    /// 按入库时间起始点过滤，单位：毫秒
+    StorageTimeFrom(i64),
+    /// 按入库时间结束点过滤，单位：毫秒
+    StorageTimeTo(i64),
 
-    // 限制返回结果数量
-    Limit(u64), // limit
+    /// 限制返回结果数量
+    Limit(u64),
 
-    // 获取最后一条记录
+    /// 获取最后一条记录
     Last,
 }
 
-// 静态监控数据查询结构体
+/// 静态监控数据查询结构体。
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticDataQuery {
-    // 要查询的字段列表
+    /// 要查询的字段列表
     pub fields: Vec<StaticDataQueryField>,
-    // 查询条件列表
+    /// 查询条件列表
     pub condition: Vec<QueryCondition>,
 }
 
-// 动态监控数据查询结构体
+/// 动态监控数据查询结构体。
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DynamicDataQuery {
-    // 要查询的字段列表
+    /// 要查询的字段列表
     pub fields: Vec<DynamicDataQueryField>,
-    // 查询条件列表
+    /// 查询条件列表
     pub condition: Vec<QueryCondition>,
 }
 
-// 静态监控数据响应项结构体
+/// 静态监控数据响应项。
 #[derive(Serialize)]
 pub struct StaticResponseItem {
-    // 设备 UUID
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
-    // 时间戳
+    /// 时间戳（毫秒）
     pub timestamp: i64,
-    // CPU 数据，可选
+    /// CPU 数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<Value>,
-    // 系统数据，可选
+    /// 系统数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<Value>,
-    // GPU 数据，可选
+    /// GPU 数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<Value>,
 }
 
-// 动态监控数据响应项结构体
+/// 动态监控数据响应项。
 #[derive(Serialize)]
 pub struct DynamicResponseItem {
-    // 设备 UUID
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
-    // 时间戳
+    /// 时间戳（毫秒）
     pub timestamp: i64,
-    // CPU 数据，可选
+    /// CPU 数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<Value>,
-    // 内存数据，可选
+    /// 内存数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ram: Option<Value>,
-    // 负载数据，可选
+    /// 负载数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load: Option<Value>,
-    // 系统数据，可选
+    /// 系统数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<Value>,
-    // 磁盘数据，可选
+    /// 磁盘数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk: Option<Value>,
-    // 网络数据，可选
+    /// 网络数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<Value>,
-    // GPU 数据，可选
+    /// GPU 数据，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<Value>,
 }
 
-// 动态监控摘要数据查询字段枚举
+/// 动态监控摘要数据查询字段枚举。
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum DynamicSummaryQueryField {
@@ -127,7 +132,7 @@ pub enum DynamicSummaryQueryField {
 }
 
 impl DynamicSummaryQueryField {
-    /// 获取字段对应的数据库列名
+    /// 获取字段对应的数据库列名。
     #[must_use]
     pub const fn column_name(&self) -> &'static str {
         match self {
@@ -157,13 +162,13 @@ impl DynamicSummaryQueryField {
         }
     }
 
-    /// 获取字段的 JSON 键名（与列名相同，因为是扁平列）
+    /// 获取字段的 JSON 键名（与列名相同，因为是扁平列）。
     #[must_use]
     pub const fn json_key(&self) -> &'static str {
         self.column_name()
     }
 
-    /// 该字段是否在数据库中以 *10 缩放存储（读取时需要 /10.0 还原）
+    /// 该字段是否在数据库中以 *10 缩放存储（读取时需要 /10.0 还原）。
     ///
     /// 来源与 [`SCALED_SUMMARY_COLUMNS`] 保持一致，新增缩放字段时只需修改常量。
     #[must_use]
@@ -172,85 +177,111 @@ impl DynamicSummaryQueryField {
     }
 }
 
-// 动态监控摘要数据查询结构体
+/// 动态监控摘要数据查询结构体。
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DynamicSummaryQuery {
+    /// 要查询的字段列表
     pub fields: Vec<DynamicSummaryQueryField>,
+    /// 查询条件列表
     pub condition: Vec<QueryCondition>,
 }
 
-// 动态监控摘要数据响应项结构体
+/// 动态监控摘要数据响应项。
 #[derive(Serialize)]
 pub struct DynamicSummaryResponseItem {
+    /// 设备 UUID
     pub uuid: uuid::Uuid,
+    /// 时间戳（毫秒）
     pub timestamp: i64,
+    /// CPU 使用率，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_usage: Option<Value>,
+    /// GPU 使用率，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_usage: Option<Value>,
+    /// 已用交换空间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub used_swap: Option<Value>,
+    /// 总交换空间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_swap: Option<Value>,
+    /// 已用内存，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub used_memory: Option<Value>,
+    /// 总内存，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_memory: Option<Value>,
+    /// 可用内存，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_memory: Option<Value>,
+    /// 1 分钟平均负载，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_one: Option<Value>,
+    /// 5 分钟平均负载，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_five: Option<Value>,
+    /// 15 分钟平均负载，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_fifteen: Option<Value>,
+    /// 系统运行时间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uptime: Option<Value>,
+    /// 系统启动时间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_time: Option<Value>,
+    /// 进程数量，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_count: Option<Value>,
+    /// 磁盘总空间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_space: Option<Value>,
+    /// 磁盘可用空间，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_space: Option<Value>,
+    /// 磁盘读取速度，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_speed: Option<Value>,
+    /// 磁盘写入速度，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_speed: Option<Value>,
+    /// TCP 连接数，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tcp_connections: Option<Value>,
+    /// UDP 连接数，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udp_connections: Option<Value>,
+    /// 网络总接收量，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_received: Option<Value>,
+    /// 网络总发送量，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_transmitted: Option<Value>,
+    /// 网络发送速度，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transmit_speed: Option<Value>,
+    /// 网络接收速度，可选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_speed: Option<Value>,
 }
 
-/// Single source of truth for the list of `dynamic_monitoring_summary` columns
-/// that are stored as `*10`-scaled `i16` integers and must be divided by
-/// `10.0` on read.
+/// `dynamic_monitoring_summary` 表中以 *10 缩放存储的列名列表（单一事实来源）。
 ///
-/// All descaling helpers and `DynamicSummaryQueryField::is_scaled` derive from
-/// this constant, so adding a new scaled column only requires one edit.
+/// 这些列以 i16 存储，读取时需除以 10.0 还原。
+/// 所有反缩放逻辑和 `DynamicSummaryQueryField::is_scaled` 均由此常量驱动，
+/// 新增缩放列只需修改此一处。
 pub const SCALED_SUMMARY_COLUMNS: &[&str] = &["cpu_usage", "load_one", "load_five", "load_fifteen"];
 
-/// Apply `/10.0` descaling to known scaled columns in `obj`, in place.
+/// 对 JSON Object 中的已知缩放列执行 `/10.0` 反缩放，原地修改。
 ///
-/// This is the canonical post-processing step used by every `dynamic_summary`
-/// read path (DB stream, in-memory last-cache, `SQLite`, `PostgreSQL`).
-/// Running it on an already-descaled object would double-divide, so call
-/// sites must ensure it runs exactly once per row.
+/// 这是所有 `dynamic_summary` 读取路径（DB 流、内存 last-cache、SQLite、PostgreSQL）
+/// 的标准后处理步骤。对已反缩放的对象重复调用会导致二次除法，
+/// 调用方必须确保每行仅执行一次。
 ///
-/// Integer values are divided as `f64`; existing `f64` values are also
-/// handled (for forwards compatibility with backends that already apply the
-/// division in SQL). `NaN` / `±Infinity` values that cannot be represented by
-/// `serde_json::Number` are left untouched rather than silently dropped.
+/// - 整数值作为 `f64` 除法处理
+/// - 已有的 `f64` 值也被处理（兼容后端已在 SQL 中完成除法的情况）
+/// - `NaN` / `±Infinity` 等无法由 `serde_json::Number` 表示的值保持不变
+///
+/// - `obj` — 待反缩放的 JSON Map，原地修改
 pub fn apply_descaling_to_json_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
     for key in SCALED_SUMMARY_COLUMNS {
         if let Some(val) = obj.get_mut(*key)

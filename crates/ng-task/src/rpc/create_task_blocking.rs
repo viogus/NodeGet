@@ -1,3 +1,5 @@
+//! `task_create_task_blocking` RPC 方法：创建任务并阻塞等待 Agent 返回结果
+
 use crate::rpc::TaskManager;
 use crate::types::{TaskEvent, TaskEventType};
 use jsonrpsee::core::RpcResult;
@@ -13,12 +15,29 @@ use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
-/// 创建任务并阻塞等待 agent 返回结果
+/// 创建任务并阻塞等待 Agent 返回结果
 ///
 /// 与 `create_task` 的区别：
 /// - `create_task` 创建任务后立即返回 `{"id": task_id}`
-/// - `create_task_blocking` 创建任务后等待 agent 上传结果，然后返回完整的任务结果
-/// - `如果超时（timeout_ms），返回错误`
+/// - `create_task_blocking` 创建任务后等待 Agent 上传结果，然后返回完整的任务结果
+/// - 如果超时（timeout_ms），返回错误
+///
+/// - `manager` — 任务广播管理器
+/// - `token` — 身份令牌，需同时拥有 `Task::Create` 和 `Task::Read` 权限
+/// - `target_uuid` — 目标 Agent UUID
+/// - `task_type` — 任务类型及其参数
+/// - `timeout_ms` — 等待超时时间（毫秒），上限 300 秒
+///
+/// 返回 Agent 上传的完整 `TaskEventResponse`。
+///
+/// 内部步骤：
+/// 1. 校验任务类型参数
+/// 2. 解析 Token 并检查 `Task::Create` + `Task::Read` 权限
+/// 3. 生成随机 task_token，插入数据库记录
+/// 4. 确保 Agent UUID 在 monitoring_uuid 表中注册
+/// 5. 在 `send_event` 之前注册 blocking waiter（避免竞态）
+/// 6. 通过 `TaskManager::send_event` 推送给 Agent
+/// 7. 等待 oneshot channel 结果或超时
 pub async fn create_task_blocking(
     manager: &Arc<TaskManager>,
     token: String,
@@ -27,7 +46,7 @@ pub async fn create_task_blocking(
     timeout_ms: u64,
 ) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
-        // 内联 create_task 逻辑，以便在 send_event 之前注册 waiter，避免竞态
+        // 内联 create_task 逻辑，以便在 send_event 之前注册 waiter，避免 Agent 极快返回时错过通知
 
         super::create_task::validate_task_type(&task_type)?;
 
@@ -54,7 +73,7 @@ pub async fn create_task_blocking(
             return Err(NodegetError::PermissionDenied(format!(
                 "Permission Denied: Missing Task Create or Read ({task_name}) permission for this Agent"
             ))
-            .into());
+                .into());
         }
 
         let db = crate::rpc::TaskRpcImpl::get_db()?;

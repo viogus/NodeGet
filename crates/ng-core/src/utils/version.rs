@@ -1,26 +1,49 @@
+//! 版本信息结构体
+//!
+//! 通过 `vergen` 在编译期注入 Git、Rustc、构建时间等元信息，
+//! 供 `version` RPC 方法和自更新逻辑使用。
+
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// 编译期收集的完整版本信息
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NodeGetVersion {
-    pub binary_type: &'static str,
-    pub cargo_version: &'static str,
+    /// 二进制类型：Server / Agent / Unknown
+    pub binary_type: String,
+    /// Cargo 包版本（语义化版本号）
+    pub cargo_version: String,
 
-    pub git_branch: &'static str,
-    pub git_commit_sha: &'static str,
-    pub git_commit_date: &'static str,
-    pub git_commit_message: &'static str,
+    /// Git 分支名
+    pub git_branch: String,
+    /// Git 提交 SHA（完整）
+    pub git_commit_sha: String,
+    /// Git 提交时间戳
+    pub git_commit_date: String,
+    /// Git 提交消息（首行）
+    pub git_commit_message: String,
 
-    pub build_time: &'static str,
-    pub cargo_target_triple: &'static str,
+    /// 构建时间戳
+    pub build_time: String,
+    /// 目标平台三元组（如 x86_64-unknown-linux-musl）
+    pub cargo_target_triple: String,
 
-    pub rustc_channel: &'static str,
-    pub rustc_version: &'static str,
-    pub rustc_commit_date: &'static str,
-    pub rustc_commit_hash: &'static str,
-    pub rustc_llvm_version: &'static str,
+    /// Rustc 发布通道（stable / nightly / beta）
+    pub rustc_channel: String,
+    /// Rustc 语义化版本号
+    pub rustc_version: String,
+    /// Rustc 提交日期
+    pub rustc_commit_date: String,
+    /// Rustc 提交哈希
+    pub rustc_commit_hash: String,
+    /// Rustc 使用的 LLVM 版本
+    pub rustc_llvm_version: String,
 }
 
 impl NodeGetVersion {
+    /// 获取编译期注入的版本信息实例。
+    ///
+    /// 1. 根据 feature gate 判断二进制类型
+    /// 2. 读取所有 `env!` 宏注入的 vergen 环境变量
     #[must_use]
     pub fn get() -> Self {
         Self {
@@ -32,61 +55,21 @@ impl NodeGetVersion {
                 } else {
                     "Unknown"
                 }
-            },
-            cargo_version: env!("CARGO_PKG_VERSION"),
-            git_branch: env!("VERGEN_GIT_BRANCH"),
-            git_commit_sha: env!("VERGEN_GIT_SHA"),
-            git_commit_date: env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
-            git_commit_message: env!("VERGEN_GIT_COMMIT_MESSAGE"),
-            build_time: env!("VERGEN_BUILD_TIMESTAMP"),
-            cargo_target_triple: env!("VERGEN_CARGO_TARGET_TRIPLE"),
-            rustc_channel: env!("VERGEN_RUSTC_CHANNEL"),
-            rustc_version: env!("VERGEN_RUSTC_SEMVER"),
-            rustc_commit_date: env!("VERGEN_RUSTC_COMMIT_DATE"),
-            rustc_commit_hash: env!("VERGEN_RUSTC_COMMIT_HASH"),
-            rustc_llvm_version: env!("VERGEN_RUSTC_LLVM_VERSION"),
+            }
+            .to_string(),
+            cargo_version: env!("CARGO_PKG_VERSION").to_string(),
+            git_branch: env!("VERGEN_GIT_BRANCH").to_string(),
+            git_commit_sha: env!("VERGEN_GIT_SHA").to_string(),
+            git_commit_date: env!("VERGEN_GIT_COMMIT_TIMESTAMP").to_string(),
+            git_commit_message: env!("VERGEN_GIT_COMMIT_MESSAGE").to_string(),
+            build_time: env!("VERGEN_BUILD_TIMESTAMP").to_string(),
+            cargo_target_triple: env!("VERGEN_CARGO_TARGET_TRIPLE").to_string(),
+            rustc_channel: env!("VERGEN_RUSTC_CHANNEL").to_string(),
+            rustc_version: env!("VERGEN_RUSTC_SEMVER").to_string(),
+            rustc_commit_date: env!("VERGEN_RUSTC_COMMIT_DATE").to_string(),
+            rustc_commit_hash: env!("VERGEN_RUSTC_COMMIT_HASH").to_string(),
+            rustc_llvm_version: env!("VERGEN_RUSTC_LLVM_VERSION").to_string(),
         }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for NodeGetVersion {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct Helper {
-            binary_type: String,
-            cargo_version: String,
-            git_branch: String,
-            git_commit_sha: String,
-            git_commit_date: String,
-            git_commit_message: String,
-            build_time: String,
-            cargo_target_triple: String,
-            rustc_channel: String,
-            rustc_version: String,
-            rustc_commit_date: String,
-            rustc_commit_hash: String,
-            rustc_llvm_version: String,
-        }
-
-        let h = Helper::deserialize(deserializer)?;
-        Ok(Self {
-            binary_type: Box::leak(h.binary_type.into_boxed_str()),
-            cargo_version: Box::leak(h.cargo_version.into_boxed_str()),
-            git_branch: Box::leak(h.git_branch.into_boxed_str()),
-            git_commit_sha: Box::leak(h.git_commit_sha.into_boxed_str()),
-            git_commit_date: Box::leak(h.git_commit_date.into_boxed_str()),
-            git_commit_message: Box::leak(h.git_commit_message.into_boxed_str()),
-            build_time: Box::leak(h.build_time.into_boxed_str()),
-            cargo_target_triple: Box::leak(h.cargo_target_triple.into_boxed_str()),
-            rustc_channel: Box::leak(h.rustc_channel.into_boxed_str()),
-            rustc_version: Box::leak(h.rustc_version.into_boxed_str()),
-            rustc_commit_date: Box::leak(h.rustc_commit_date.into_boxed_str()),
-            rustc_commit_hash: Box::leak(h.rustc_commit_hash.into_boxed_str()),
-            rustc_llvm_version: Box::leak(h.rustc_llvm_version.into_boxed_str()),
-        })
     }
 }
 

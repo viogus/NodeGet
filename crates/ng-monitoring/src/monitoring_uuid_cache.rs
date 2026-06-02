@@ -1,3 +1,10 @@
+//! 监控 UUID 双向缓存。
+//!
+//! 维护 `monitoring_uuid` 表的内存映射，支持 UUID↔ID 双向查找。
+//! 实现 `DbBackedCache` trait，通过 `make_global_cache!` 宏生成全局单例。
+//! 支持软删除（`soft_delete`）：软删除的 UUID 仍保留在缓存中，但 `list_all()` 等方法会过滤；
+//! `get_or_insert()` 会自动复活（resurrect）软删除条目。
+
 use ng_core::error::NodegetError;
 use ng_db::entity::monitoring_uuid;
 use ng_infra::server::{DbBackedCache, load_from_db};
@@ -8,15 +15,20 @@ use std::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
 
+/// 缓存内部数据结构，持有两个方向的映射。
 struct MonitoringUuidCacheInner {
+    /// UUID → (ID, `soft_delete`) 映射
     by_uuid: HashMap<Uuid, (i16, bool)>,
+    /// ID → (UUID, `soft_delete`) 映射
     by_id: HashMap<i16, (Uuid, bool)>,
 }
 
+/// 监控 UUID 双向缓存，支持软删除标记。
 pub struct MonitoringUuidCache {
     inner: RwLock<MonitoringUuidCacheInner>,
 }
 
+/// 从 `RwLock` 获取读锁，锁中毒时自动恢复。
 fn recover_read(
     lock: &RwLock<MonitoringUuidCacheInner>,
 ) -> std::sync::RwLockReadGuard<'_, MonitoringUuidCacheInner> {
@@ -26,6 +38,7 @@ fn recover_read(
     })
 }
 
+/// 从 `RwLock` 获取写锁，锁中毒时自动恢复。
 fn recover_write(
     lock: &RwLock<MonitoringUuidCacheInner>,
 ) -> std::sync::RwLockWriteGuard<'_, MonitoringUuidCacheInner> {
@@ -35,15 +48,18 @@ fn recover_write(
     })
 }
 
+// 通过 make_global_cache! 宏生成 init() / global() / reload() 全局单例方法
 ng_infra::make_global_cache!(MonitoringUuidCache, MONITORING_UUID_CACHE_GLOBAL);
 
 impl DbBackedCache for MonitoringUuidCache {
     type Model = monitoring_uuid::Model;
 
+    /// 缓存名称，用于日志标识。
     fn cache_name() -> &'static str {
         "monitoring_uuid"
     }
 
+    /// 从数据库模型列表构建缓存实例。
     fn build_cache(models: Vec<Self::Model>) -> Self {
         let mut by_uuid = HashMap::with_capacity(models.len());
         let mut by_id = HashMap::with_capacity(models.len());
@@ -57,6 +73,11 @@ impl DbBackedCache for MonitoringUuidCache {
         }
     }
 
+    /// 从新的模型列表原地替换缓存内容（用于热重载）。
+    ///
+    /// 1. 构建新的 `by_uuid` / `by_id` 映射
+    /// 2. 获取写锁，原子替换内部 `HashMap`
+    /// 3. drop 旧映射释放内存
     #[allow(clippy::unused_async)]
     async fn reload_from_models(&self, models: Vec<Self::Model>) {
         let mut by_uuid = HashMap::with_capacity(models.len());
@@ -66,18 +87,24 @@ impl DbBackedCache for MonitoringUuidCache {
             by_uuid.insert(model.uuid, (id, model.soft_delete));
             by_id.insert(id, (model.uuid, model.soft_delete));
         }
-        let mut guard = recover_write(&self.inner);
-        guard.by_uuid = by_uuid;
-        guard.by_id = by_id;
-        drop(guard);
+        let old_maps = {
+            let mut guard = recover_write(&self.inner);
+            let old_by_uuid = std::mem::replace(&mut guard.by_uuid, by_uuid);
+            let old_by_id = std::mem::replace(&mut guard.by_id, by_id);
+            drop(guard);
+            (old_by_uuid, old_by_id)
+        };
+        drop(old_maps);
     }
 
+    /// 从数据库全量加载 `monitoring_uuid` 表。
     fn load_all() -> impl Future<Output = anyhow::Result<Vec<Self::Model>>> + Send {
         load_from_db::<monitoring_uuid::Entity>()
     }
 }
 
 impl MonitoringUuidCache {
+    /// 根据 UUID 查找对应的数字 ID。
     pub fn get_id(&self, uuid: &Uuid) -> Option<i16> {
         recover_read(&self.inner)
             .by_uuid
@@ -85,6 +112,7 @@ impl MonitoringUuidCache {
             .map(|(id, _)| *id)
     }
 
+    /// 根据 ID 查找对应的 UUID。
     pub fn get_uuid(&self, id: i16) -> Option<Uuid> {
         recover_read(&self.inner)
             .by_id
@@ -92,6 +120,7 @@ impl MonitoringUuidCache {
             .map(|(uuid, _)| *uuid)
     }
 
+    /// 判断 UUID 是否处于活跃状态（存在且未被软删除）。
     pub fn is_active(&self, uuid: &Uuid) -> bool {
         recover_read(&self.inner)
             .by_uuid
@@ -99,10 +128,12 @@ impl MonitoringUuidCache {
             .is_some_and(|(_, soft_delete)| !soft_delete)
     }
 
+    /// 判断 UUID 是否存在于缓存中（含软删除条目）。
     pub fn exists(&self, uuid: &Uuid) -> bool {
         recover_read(&self.inner).by_uuid.contains_key(uuid)
     }
 
+    /// 列出所有非软删除的 UUID，按字典序排序。
     pub fn list_all(&self) -> Vec<Uuid> {
         let guard = recover_read(&self.inner);
         let mut uuids: Vec<Uuid> = guard
@@ -116,6 +147,7 @@ impl MonitoringUuidCache {
         uuids
     }
 
+    /// 列出所有 UUID 及其软删除状态，按 UUID 排序。
     pub fn list_all_with_agent_mode(&self) -> Vec<(Uuid, bool)> {
         let guard = recover_read(&self.inner);
         let mut result: Vec<(Uuid, bool)> = guard
@@ -128,6 +160,19 @@ impl MonitoringUuidCache {
         result
     }
 
+    /// 查找或插入 UUID，返回对应的数字 ID。
+    ///
+    /// 1. 先查内存缓存，若 UUID 活跃则直接返回 ID
+    /// 2. 缓存未命中则查询数据库
+    /// 3. 若数据库中存在且被软删除，则复活（设置 `soft_delete=false`）
+    /// 4. 若数据库中不存在，则插入新记录
+    /// 5. 更新内存缓存后返回 ID
+    ///
+    /// # Errors
+    ///
+    /// - 数据库连接未初始化时返回 `NodegetError::DatabaseError`
+    /// - 查询或插入数据库失败时返回 `NodegetError::DatabaseError`
+    /// - 复活软删除条目时更新失败返回 `NodegetError::DatabaseError`
     pub async fn get_or_insert(&self, uuid: Uuid) -> Result<i16, NodegetError> {
         {
             let guard = recover_read(&self.inner);
@@ -186,6 +231,16 @@ impl MonitoringUuidCache {
         Ok(id)
     }
 
+    /// 软删除指定 UUID。
+    ///
+    /// - 返回 `true` — 成功标记为软删除
+    /// - 返回 `false` — UUID 不存在
+    /// - 已软删除的 UUID 再次调用仍返回 `true`
+    ///
+    /// # Errors
+    ///
+    /// - 数据库连接未初始化时返回 `NodegetError::DatabaseError`
+    /// - 查询或更新数据库失败时返回 `NodegetError::DatabaseError`
     pub async fn soft_delete(&self, uuid: Uuid) -> Result<bool, NodegetError> {
         let db = ng_db::get_db().ok_or_else(|| {
             NodegetError::DatabaseError("Database connection not initialized".to_owned())

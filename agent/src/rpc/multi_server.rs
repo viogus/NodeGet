@@ -1,3 +1,15 @@
+//! 多服务器 WebSocket 连接管理模块。
+//!
+//! 维护与每个配置 Server 的 WebSocket 长连接，包括：
+//! - 连接建立与指数退避重试（[`connect_with_retry`]）
+//! - Server UUID 校验（[`verify_server_uuid`]）
+//! - 双向消息转发：上行（Agent→Server）与下行（Server→Agent）
+//! - 任务注册与定时重注册
+//! - TLS 证书校验可选跳过（[`build_connector`]）
+//!
+//! 全局连接池 [`CONNECTION_POOL`] 通过 `OnceCell + RwLock<HashMap>` 实现，
+//! 支持热重载时整体替换。
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,35 +33,39 @@ use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 /// Agent 结果类型
 pub type Result<T> = std::result::Result<T, NodegetError>;
 
-// 服务器连接句柄，包含上行和下行消息通道
+/// 服务器连接句柄，包含上行和下行消息通道。
 pub struct ServerHandle {
-    uplink_tx: broadcast::Sender<Message>, // 上行消息发送器（客户端到服务器）
-    downlink_tx: broadcast::Sender<Message>, // 下行消息发送器（服务器到客户端）
+    /// 上行消息发送器（Agent→Server）
+    uplink_tx: broadcast::Sender<Message>,
+    /// 下行消息发送器（Server→Agent）
+    downlink_tx: broadcast::Sender<Message>,
 }
 
-// 全局连接池，存储与各个服务器的连接句柄
+/// 全局连接池，存储与各个 Server 的连接句柄，以服务器名称为键。
 static CONNECTION_POOL: OnceCell<RwLock<HashMap<String, Arc<ServerHandle>>>> =
     OnceCell::const_new();
 
-// 初始化与多个服务器的连接
-//
-// 为每个配置的服务器创建连接管理器任务和相应的消息通道
-//
-// # 调用契约
-//
-// 本函数并不会 `abort` 任何已有的 `connection_manager` 任务。重复调用
-// （例如 hot-reload 路径）**必须**由调用方先对上一次 `init_connections`
-// 返回的 `JoinHandle` 执行 `abort`，否则新旧 manager 会并存一小段时间：
-// 旧的 `ServerHandle` 在 `*guard = map` 时被 drop，`uplink_tx` 的 Sender
-// 随之 drop，`uplink_rx.recv()` 最终返回 `Closed` 让老 manager 退出，
-// 但在此之前老 manager 仍可能重新连接并向服务器上报数据。
-//
-// `agent/src/main.rs` 当前实现满足此契约（每轮 reload 先调
-// `abort_handles` 再调 `init_connections`），但新的调用方必须遵守同样
-// 的顺序。
-//
-// # 参数
-// * `servers` - 服务器配置向量
+/// 初始化与多个 Server 的连接。
+///
+/// 为每个配置的 Server 创建连接管理器任务和相应的消息通道。
+///
+/// # 调用契约
+///
+/// 本函数并不会 `abort` 任何已有的 `connection_manager` 任务。重复调用
+/// （例如 hot-reload 路径）**必须**由调用方先对上一次 `init_connections`
+/// 返回的 `JoinHandle` 执行 `abort`，否则新旧 manager 会并存一小段时间：
+/// 旧的 `ServerHandle` 在 `*guard = map` 时被 drop，`uplink_tx` 的 Sender
+/// 随之 drop，`uplink_rx.recv()` 最终返回 `Closed` 让老 manager 退出，
+/// 但在此之前老 manager 仍可能重新连接并向服务器上报数据。
+///
+/// `agent/src/main.rs` 当前实现满足此契约（每轮 reload 先调
+/// `abort_handles` 再调 `init_connections`），但新的调用方必须遵守同样
+/// 的顺序。
+///
+/// - `servers` - 服务器配置向量
+/// - `connect_timeout` - 每次 WebSocket 建连尝试的超时时间
+///
+/// 返回各连接管理器任务的 `JoinHandle` 向量。
 pub async fn init_connections(
     servers: Vec<Server>,
     connect_timeout: Duration,
@@ -96,14 +112,14 @@ pub async fn init_connections(
     handles
 }
 
-// 连接生命周期维护
-//
-// 管理与单个服务器的 WebSocket 连接，包括连接建立、任务注册、消息转发和自动重连
-//
-// # 参数
-// * `server` - 服务器配置
-// * `uplink_rx` - 上行消息接收器
-// * `downlink_tx` - 下行消息发送器
+/// 连接生命周期维护。
+///
+/// 管理与单个 Server 的 WebSocket 连接，包括连接建立、UUID 校验、任务注册、消息转发和自动重连。
+///
+/// - `server` - 服务器配置
+/// - `uplink_rx` - 上行消息接收器（Agent→Server 方向）
+/// - `downlink_tx` - 下行消息发送器（Server→Agent 方向）
+/// - `connect_timeout` - 每次 WebSocket 建连尝试的超时时间
 async fn connection_manager(
     server: Server,
     mut uplink_rx: broadcast::Receiver<Message>,
@@ -392,21 +408,20 @@ async fn verify_server_uuid(
     }
 }
 
-// 带重试机制的 WebSocket 连接
-//
-// 尝试连接到指定的 WebSocket URL，如果失败则进行指数退避重试，无固定重试上限。
-//
-// # 退避策略
-// `wait = clamp(base * 2^(retry-1), base, cap)`，再叠加 ±20% 的随机抖动，
-// 以避免多 agent / 多 server 在服务端恢复瞬间集体重连造成雪崩。
-//
-// # 参数
-// * `name` - 服务器名称（用于日志）
-// * `url` - WebSocket URL
-// * `connect_timeout` - 每次 WebSocket 建连尝试的超时时间
-//
-// # 返回值
-// 建连成功后返回 WebSocket 流；调用方退出任务（如 `JoinHandle::abort` 取消）会终止循环。
+/// 带指数退避重试的 WebSocket 连接。
+///
+/// 尝试连接到指定的 WebSocket URL，失败则进行指数退避重试，无固定重试上限。
+///
+/// # 退避策略
+/// `wait = clamp(base * 2^(retry-1), base, cap)`，再叠加 ±20% 的随机抖动，
+/// 以避免多 agent / 多 server 在服务端恢复瞬间集体重连造成雪崩。
+///
+/// - `name` - 服务器名称（用于日志）
+/// - `url` - WebSocket URL
+/// - `connect_timeout` - 每次 WebSocket 建连尝试的超时时间
+/// - `ignore_cert` - 是否跳过 TLS 证书校验
+///
+/// 建连成功后返回 WebSocket 流；调用方退出任务（如 `JoinHandle::abort` 取消）会终止循环。
 async fn connect_with_retry(
     name: &str,
     url: &str,
@@ -462,8 +477,8 @@ async fn connect_with_retry(
     }
 }
 
-// 危险配置：忽略服务端 TLS 证书校验。
-// 仅在用户显式配置 `ignore_cert = true` 时使用。
+/// 危险配置：忽略服务端 TLS 证书校验。
+/// 仅在用户显式配置 `ignore_cert = true` 时使用。
 #[derive(Debug)]
 struct NoCertificateVerification;
 
@@ -520,16 +535,14 @@ pub fn build_connector(ignore_cert: bool) -> Option<Connector> {
     Some(Connector::Rustls(Arc::new(config)))
 }
 
-// 发送消息到指定服务器
-//
-// 将消息通过上行通道发送到指定服务器的 WebSocket 连接
-//
-// # 参数
-// * `server_name` - 服务器名称
-// * `msg` - 要发送的消息
-//
-// # 返回值
-// 成功时返回 Ok(())，失败时返回错误信息
+/// 发送消息到指定 Server。
+///
+/// 将消息通过上行通道发送到指定 Server 的 WebSocket 连接。
+///
+/// - `server_name` - 服务器名称
+/// - `msg` - 要发送的 WebSocket 消息
+///
+/// 成功时返回 `Ok(())`；连接池未初始化或服务器不存在时返回错误。
 pub async fn send_to(server_name: &str, msg: Message) -> Result<()> {
     let pool = CONNECTION_POOL
         .get()
@@ -553,29 +566,27 @@ pub async fn send_to(server_name: &str, msg: Message) -> Result<()> {
     )
 }
 
-// 订阅来自指定服务器的消息
-//
-// 获取指定服务器下行消息通道的接收器，用于接收来自服务器的消息
-//
-// # 订阅时序与 broadcast 语义
-//
-// 返回的 `broadcast::Receiver` **只会看到订阅之后**由 manager 投递到
-// `downlink_tx` 的消息。调用方不应依赖历史消息；常见陷阱：
-//
-// - 若 `connection_manager` 尚未成功连上 server，`downlink_tx` 还没有
-//   任何消息，接收方可能长时间 idle，需要自行加超时处理；
-// - 若 manager 已经 broadcast 了超过 channel 容量（32）条消息但订阅方
-//   尚未订阅，订阅方 `recv()` 会先看到 `RecvError::Lagged(n)`。调用方
-//   必须容忍此错误（通常是 `warn!` + `continue`），不要因此退出循环。
-//
-// 如果需要"订阅即拿到最新快照"的语义，考虑改用
-// `tokio::sync::watch` 存最新状态，并把 broadcast 仅用于增量差分。
-//
-// # 参数
-// * `server_name` - 服务器名称
-//
-// # 返回值
-// 成功时返回消息接收器，失败时返回错误信息
+/// 订阅来自指定 Server 的下行消息。
+///
+/// 获取指定 Server 下行消息通道的接收器，用于接收来自 Server 的消息。
+///
+/// # 订阅时序与 broadcast 语义
+///
+/// 返回的 `broadcast::Receiver` **只会看到订阅之后**由 manager 投递到
+/// `downlink_tx` 的消息。调用方不应依赖历史消息；常见陷阱：
+///
+/// - 若 `connection_manager` 尚未成功连上 server，`downlink_tx` 还没有
+///   任何消息，接收方可能长时间 idle，需要自行加超时处理；
+/// - 若 manager 已经 broadcast 了超过 channel 容量（32）条消息但订阅方
+///   尚未订阅，订阅方 `recv()` 会先看到 `RecvError::Lagged(n)`。调用方
+///   必须容忍此错误（通常是 `warn!` + `continue`），不要因此退出循环。
+///
+/// 如果需要"订阅即拿到最新快照"的语义，考虑改用
+/// `tokio::sync::watch` 存最新状态，并把 broadcast 仅用于增量差分。
+///
+/// - `server_name` - 服务器名称
+///
+/// 成功时返回消息接收器；连接池未初始化或服务器不存在时返回错误。
 pub async fn subscribe_to(server_name: &str) -> Result<broadcast::Receiver<Message>> {
     let pool = CONNECTION_POOL
         .get()

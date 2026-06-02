@@ -6,29 +6,29 @@
     clippy::similar_names
 )]
 
-//! `ng-js-runtime` -- `QuickJS` runtime pool and bytecode compilation.
+//! `ng-js-runtime` —— `QuickJS` 运行时池与字节码编译。
 //!
-//! ## Default feature (types only)
-//! - [`JsCodeInput`] -- JS code input struct
-//! - [`RunType`] -- enum for different run modes
-//! - [`CompileMode`] -- bytecode vs source compilation mode
-//! - [`RuntimePoolInfo`], [`RuntimePoolWorkerInfo`] -- runtime pool status types
+//! ## 默认 feature（仅类型）
+//! - [`JsCodeInput`] —— JS 代码输入（源码或字节码）
+//! - [`RunType`] —— 运行模式枚举（Call/Cron/Route/InlineCall）
+//! - [`CompileMode`] —— 编译模式（字节码 vs 源码）
+//! - [`RuntimePoolInfo`]、[`RuntimePoolWorkerInfo`] —— 运行时池状态类型
 //!
 //! ## `server` feature
-//! - [`compile_js_module_to_bytecode()`] -- compile JS to bytecode
-//! - [`runtime_pool`] module -- OS thread pool of `QuickJS` instances
-//! - [`server_runtime`] module -- server-level runtime operations (`spawn_on_server_runtime`)
-//! - [`nodeget`] module -- `nodeget()` API injection into JS context
-//! - [`inline_call`] module -- inline JS execution
-//! - [`js_worker_service`] module -- `JsWorkerService` trait for dependency injection
-//! - [`RuntimeLimits`] -- runtime resource limits
-//! - [`js_runner`] / [`js_runner_source_mode`] -- one-shot JS execution
+//! - [`compile_js_module_to_bytecode()`] —— 将 JS 模块编译为字节码
+//! - [`runtime_pool`] 模块 —— `QuickJS` 实例的 OS 线程池
+//! - [`server_runtime`] 模块 —— 服务器级运行时操作（`spawn_on_server_runtime`）
+//! - [`nodeget`] 模块 —— 向 JS 上下文注入 `nodeget()` API
+//! - [`inline_call`] 模块 —— 内联 JS 执行
+//! - [`js_worker_service`] 模块 —— `JsWorkerService` trait（依赖注入点）
+//! - [`RuntimeLimits`] —— 运行时资源限制
+//! - [`js_runner`] / [`js_runner_source_mode`] —— 一次性 JS 执行
 
 mod types;
 
 pub use types::*;
 
-// ── Server-only modules ─────────────────────────────────────────────
+// ── 仅 server feature 启用的模块 ───────────────────────────────────
 
 #[cfg(feature = "server")]
 pub mod inline_call;
@@ -43,7 +43,7 @@ pub mod server_runtime;
 #[cfg(feature = "server")]
 mod spawn_on_server_runtime;
 
-// ── Server-only re-exports ──────────────────────────────────────────
+// ── 仅 server feature 启用的重导出 ────────────────────────────────
 
 #[cfg(feature = "server")]
 pub use server_runtime::{

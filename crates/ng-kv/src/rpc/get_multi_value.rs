@@ -1,3 +1,5 @@
+//! `kv_get_multi_value` RPC 方法：批量读取多个 namespace/key 的值，支持后缀通配符
+
 use crate::auth::check_kv_read_permission_with_pattern;
 use crate::db::get_kv_store_optional;
 use crate::rpc::KvValueItem;
@@ -9,6 +11,11 @@ use serde_json::value::RawValue;
 use std::collections::HashMap;
 use tracing::debug;
 
+/// 从通配符 key pattern 中提取前缀部分
+///
+/// - `metadata_*` → `Some("metadata_")`
+/// - `abc` → `None`（非通配符）
+/// - `*` → `Some("")`（匹配所有 key）
 fn wildcard_prefix(key_pattern: &str) -> Option<&str> {
     if !key_pattern.contains('*') {
         return None;
@@ -17,6 +24,19 @@ fn wildcard_prefix(key_pattern: &str) -> Option<&str> {
     key_pattern.strip_suffix('*')
 }
 
+/// 批量读取多个 namespace/key 的值
+///
+/// - `token` — 身份令牌，需拥有每个 namespace/key 的读权限
+/// - `namespace_key` — 待查询的 namespace+key 列表，key 支持后缀通配符（如 `metadata_*`）
+///
+/// 返回 `Vec<KvValueItem>`，精确 key 不存在时 value 为 null。
+/// 输出顺序与请求顺序一致，通配符命中的项按 key 字典序排列。
+///
+/// 内部步骤：
+/// 1. 逐项校验读权限，任一项无权限则整体拒绝
+/// 2. 按 namespace 缓存 KVStore，避免同一命名空间重复读取
+/// 3. 处理通配符：提取前缀后在 KVStore 中过滤匹配 key
+/// 4. 序列化结果为 RawValue 返回
 pub async fn get_multi_value(
     token: String,
     namespace_key: Vec<NamespaceKeyItem>,

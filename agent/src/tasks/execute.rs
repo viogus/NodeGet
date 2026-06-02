@@ -1,3 +1,9 @@
+//! 命令执行任务模块。
+//!
+//! 直接执行 `cmd + args`，不提供字符串拼接 shell 的接口。
+//! 超时后先 SIGTERM 整个进程组（回收孙子进程），再 SIGKILL 兜底。
+//! 输出过长时做头尾双端截断，保证用户同时看到开头与结尾信息。
+
 use crate::config_access::get_agent_config;
 use log::error;
 use ng_core::error::NodegetError;
@@ -7,24 +13,26 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-// 命令执行超时时间，设定为 60 秒
+/// 命令执行超时时间，1 分钟。
 const EXECUTE_TIMEOUT: Duration = Duration::from_mins(1);
-// 超时后等待进程响应 SIGTERM 的时间；超过则 SIGKILL
+/// 超时后等待进程响应 SIGTERM 的时间；超过则 SIGKILL。
 #[cfg(unix)]
 const GRACE_AFTER_SIGTERM: Duration = Duration::from_secs(2);
 
 /// 命令执行结果类型
 pub type Result<T> = std::result::Result<T, NodegetError>;
 
-// 执行指定的命令
-//
-// 该函数直接执行 cmd + args，不提供字符串拼接 shell 的接口。
-//
-// # 参数
-// * `task` - 结构化命令参数
-//
-// # 返回值
-// 成功时返回命令输出字符串，失败时返回错误信息
+/// 执行指定的命令。
+///
+/// - `task` - 结构化命令参数（cmd + args）
+///
+/// 1. 校验命令非空
+/// 2. 创建子进程并设置独立进程组（Unix）
+/// 3. 并发读取 stdout/stderr 并等待进程退出
+/// 4. 合并输出，超长时做头尾双端 UTF-8 截断
+/// 5. 超时时先 SIGTERM 进程组，等待 GRACE 后 SIGKILL
+///
+/// 成功时返回命令输出字符串；失败或超时时返回错误。
 pub async fn execute_command(task: ExecuteTask) -> Result<String> {
     let config = get_agent_config()?;
     // 注意：字段名叫 "character" 但后续 `result.len() > max_chars` 等比较都以 UTF-8

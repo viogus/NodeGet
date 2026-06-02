@@ -1,3 +1,9 @@
+//! `crontab` RPC 命名空间实现：定时任务的 CRUD 与启用/禁用操作。
+//!
+//! 使用 jsonrpsee `#[rpc]` 宏定义 trait，`CrontabRpcImpl` 实现各方法，
+//! 每个方法通过 `rpc_exec!` 宏统一日志与错误处理，
+//! 具体业务逻辑委托到子模块（create、edit、delete、get、set_enable）。
+
 use crate::CronType;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::core::async_trait;
@@ -14,8 +20,11 @@ mod edit;
 mod get;
 mod set_enable;
 
+/// `crontab` RPC trait 定义，使用 jsonrpsee `#[rpc]` 宏自动生成 Server 端调度代码。
+/// 命名空间为 `crontab`，分隔符为 `_`（自定义 jsonrpsee fork）。
 #[rpc(server, namespace = "crontab")]
 pub trait Rpc {
+    /// 创建定时任务
     #[method(name = "create")]
     async fn create(
         &self,
@@ -25,6 +34,7 @@ pub trait Rpc {
         cron_type: CronType,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 编辑定时任务
     #[method(name = "edit")]
     async fn edit(
         &self,
@@ -34,12 +44,15 @@ pub trait Rpc {
         cron_type: CronType,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 获取定时任务列表
     #[method(name = "get")]
     async fn get(&self, token: String) -> RpcResult<Box<RawValue>>;
 
+    /// 删除定时任务
     #[method(name = "delete")]
     async fn delete(&self, token: String, name: String) -> RpcResult<Box<RawValue>>;
 
+    /// 设置定时任务启用/禁用状态
     #[method(name = "set_enable")]
     async fn set_enable(
         &self,
@@ -49,6 +62,7 @@ pub trait Rpc {
     ) -> RpcResult<Box<RawValue>>;
 }
 
+/// `crontab` RPC 实现结构体，空载体（所有状态通过全局单例获取）。
 pub struct CrontabRpcImpl;
 
 impl RpcHelper for CrontabRpcImpl {}
@@ -114,7 +128,7 @@ impl RpcServer for CrontabRpcImpl {
     }
 }
 
-/// Build and return the `crontab` RPC module.
+/// 构建并返回 `crontab` RPC 模块。
 pub fn rpc_module() -> jsonrpsee::RpcModule<CrontabRpcImpl> {
     CrontabRpcImpl.into_rpc()
 }

@@ -1,21 +1,19 @@
-//! Server-only infrastructure.
+//! Server 端基础设施模块。
 //!
-//! This module is only available with the `server` feature.
-//! It contains traits and macros that depend on `jsonrpsee`, `sea-orm`,
-//! or `serde_json`.
+//! 仅在 `server` feature 下可用，包含依赖 jsonrpsee、sea-orm、serde_json 的 trait 和宏。
 //!
-//! ## Contents
+//! ## 内容
 //!
-//! | Item | Source | Notes |
-//! |------|--------|-------|
-//! | `AuthChecker` + `set_auth_checker` / `get_auth_checker` | New | Global auth injection |
-//! | `load_from_db` | Migrated from `server/src/cache/mod.rs` | Uses `ng_db::get_db()` |
-//! | `DbBackedCache` trait | Migrated from `server/src/cache/mod.rs` | Path adjusted |
-//! | `make_global_cache!` macro | Migrated from `server/src/cache/mod.rs` | `$crate::server::DbBackedCache` |
-//! | `token_identity` | Migrated from `server/src/rpc/mod.rs` | Pure string logic |
-//! | `TruncatedRaw` | Migrated from `server/src/rpc/mod.rs` | Uses `serde_json::RawValue` |
-//! | `rpc_exec!` macro | Migrated from `server/src/rpc/mod.rs` | `$crate::server::TruncatedRaw` |
-//! | `RpcHelper` trait | Migrated from `server/src/rpc/mod.rs` | Uses `ng_db::get_db()` |
+//! | 条目 | 来源 | 说明 |
+//! |------|------|------|
+//! | `AuthChecker` + `set_auth_checker` / `get_auth_checker` | 新增 | 全局认证注入 |
+//! | `load_from_db` | 迁移自 `server/src/cache/mod.rs` | 使用 `ng_db::get_db()` |
+//! | `DbBackedCache` trait | 迁移自 `server/src/cache/mod.rs` | 路径已调整 |
+//! | `make_global_cache!` 宏 | 迁移自 `server/src/cache/mod.rs` | `$crate::server::DbBackedCache` |
+//! | `token_identity` | 迁移自 `server/src/rpc/mod.rs` | 纯字符串逻辑 |
+//! | `TruncatedRaw` | 迁移自 `server/src/rpc/mod.rs` | 使用 `serde_json::RawValue` |
+//! | `rpc_exec!` 宏 | 迁移自 `server/src/rpc/mod.rs` | `$crate::server::TruncatedRaw` |
+//! | `RpcHelper` trait | 迁移自 `server/src/rpc/mod.rs` | 使用 `ng_db::get_db()` |
 
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::Token;
@@ -27,29 +25,32 @@ use std::fmt;
 use std::future::Future;
 use std::sync::OnceLock;
 
-// ── AuthChecker trait + global injection ──────────────────────────────
+// ── AuthChecker trait + 全局注入 ──────────────────────────────────────
 
-/// Trait for authentication checking.
+/// 认证检查 trait。
 ///
-/// Implementations verify raw token strings (`key:secret` or `username|password`)
-/// and return the corresponding [`Token`] metadata.
+/// 实现类验证原始 Token 字符串（`key:secret` 或 `username|password`），
+/// 并返回对应的 [`Token`] 元数据。
 pub trait AuthChecker: Send + Sync {
-    /// Authenticate a raw token string and return the token metadata.
+    /// 认证原始 Token 字符串，返回 Token 元数据。
     fn check(&self, raw_token: &str) -> anyhow::Result<Token>;
 }
 
+/// 全局 AuthChecker 单例（OnceLock 保证仅初始化一次）
 static AUTH_CHECKER: OnceLock<Box<dyn AuthChecker>> = OnceLock::new();
 
-/// Set the global auth checker.
+/// 设置全局 AuthChecker。
 ///
-/// Must be called once during server startup.
+/// 必须在 Server 启动阶段调用一次。
 pub fn set_auth_checker(checker: Box<dyn AuthChecker>) {
     let _ = AUTH_CHECKER.set(checker);
 }
 
-/// Get the global auth checker.
+/// 获取全局 AuthChecker。
 ///
-/// Panics if not initialized -- call [`set_auth_checker`] first.
+/// # Panics
+///
+/// 若未初始化则 panic——必须先调用 [`set_auth_checker`]。
 pub fn get_auth_checker() -> &'static dyn AuthChecker {
     AUTH_CHECKER
         .get()
@@ -57,17 +58,27 @@ pub fn get_auth_checker() -> &'static dyn AuthChecker {
         .as_ref()
 }
 
-// ── Helper: 一行从 Entity 全量加载 Models ────────────────────────────
+// ── 辅助函数：一行从 Entity 全量加载 Models ────────────────────────────
 
-/// 供 `DbBackedCache::load_all()` 一行调用。
+/// 从主数据库全量加载指定 Entity 的所有 Model 记录。
+///
+/// 供 `DbBackedCache::load_all()` 一行调用，内部步骤：
+/// 1. 获取全局 DB 连接
+/// 2. 执行 `E::find().all()` 查询
+///
+/// # Errors
+///
+/// 当数据库连接未初始化或查询失败时返回错误
 pub async fn load_from_db<E>() -> anyhow::Result<Vec<E::Model>>
 where
     E: EntityTrait + Send + Sync,
     E::Model: ModelTrait + Clone + Send + Sync + 'static,
 {
+    // 1. 获取全局 DB 连接
     let db = ng_db::get_db().ok_or_else(|| {
         NodegetError::ConfigNotFound("Database connection not initialized".to_owned())
     })?;
+    // 2. 执行全量查询
     E::find()
         .all(db)
         .await
@@ -76,9 +87,9 @@ where
 
 // ── DbBackedCache trait ───────────────────────────────────────────────
 
-/// DB 全量加载缓存 trait.
+/// DB 全量加载缓存 trait。
 ///
-/// 实现 trait 后配合 `make_global_cache!()` 消除重复的
+/// 实现 trait 后配合 `make_global_cache!()` 宏可消除重复的
 /// `OnceLock + init/reload/global` 模板代码。
 ///
 /// `reload_from_models` 使用 `&self`（内部可变性），
@@ -88,31 +99,32 @@ pub trait DbBackedCache: Sized + Send + Sync {
     /// 数据库 Model 类型
     type Model: ModelTrait + Clone + Send + Sync + 'static;
 
-    /// 缓存名称（用于日志）
+    /// 缓存名称（用于日志标识）
     fn cache_name() -> &'static str;
 
-    /// 从 DB Model 列表构建**全新**的缓存实例。
-    /// 用于首次 `init()` 和重复加载。
+    /// 从 DB Model 列表构建全新的缓存实例。
+    ///
+    /// 用于首次 `init()` 和重新加载时构建。
     fn build_cache(models: Vec<Self::Model>) -> Self;
 
     /// 用新的 Model 列表替换缓存的内部状态（使用内部可变性）。
     ///
-    /// 每个缓存必须提供自己的实现，通过内部锁安全地替换数据。
+    /// 每个缓存必须自行实现，通过内部锁（如 RwLock）安全地替换数据。
     async fn reload_from_models(&self, models: Vec<Self::Model>);
 
-    /// 从主 DB 加载全部记录。通常一行即可: `load_from_db::<MyEntity>()`
+    /// 从主 DB 加载全部记录，通常一行即可：`load_from_db::<MyEntity>()`
     fn load_all() -> impl Future<Output = anyhow::Result<Vec<Self::Model>>> + Send;
 }
 
-// ── Macro: 生成 OnceLock 单例 + init/global/reload ────────────────────
+// ── 宏：生成 OnceLock 单例 + init/global/reload ────────────────────
 
-/// 为 `DbBackedCache` 实现类型生成全局单例和 `init() / global() / reload()`.
+/// 为 `DbBackedCache` 实现类型生成全局单例和 `init() / global() / reload()`。
 ///
 /// ```ignore
 /// make_global_cache!(TokenCache, TOKEN_CACHE_GLOBAL);
 /// ```
 ///
-/// 生成:
+/// 生成内容：
 /// - `static TOKEN_CACHE_GLOBAL: OnceLock<TokenCache>`
 /// - `impl TokenCache { init, global, reload }`
 #[macro_export]
@@ -122,13 +134,18 @@ macro_rules! make_global_cache {
 
         impl $ty {
             /// 从 DB 全量加载并注册全局缓存。
-            /// 如果已初始化则 reload（防止并发 init 冲突）。
+            ///
+            /// 若已初始化则改为 reload（防止并发 init 冲突），内部步骤：
+            /// 1. 调用 `load_all()` 加载全部 Model
+            /// 2. 调用 `build_cache()` 构建缓存实例
+            /// 3. 尝试 `set()` 写入 OnceLock；若已被占用则改为 reload
             pub async fn init() -> anyhow::Result<()> {
                 let __models =
                     <$ty as $crate::server::DbBackedCache>::load_all().await?;
                 let __count = __models.len();
                 let __instance =
                     <$ty as $crate::server::DbBackedCache>::build_cache(__models);
+                // 并发 init 时 OnceLock 已被占用，回退到 reload
                 if $global.set(__instance).is_err() {
                     tracing::warn!(
                         target: "cache",
@@ -146,7 +163,11 @@ macro_rules! make_global_cache {
                 Ok(())
             }
 
-            /// 全局实例，panic 如果未 init.
+            /// 获取全局实例。
+            ///
+            /// # Panics
+            ///
+            /// 若未调用 `init()` 则 panic。
             pub fn global() -> &'static Self {
                 $global.get().expect(concat!(
                     stringify!($ty),
@@ -156,8 +177,14 @@ macro_rules! make_global_cache {
                 ))
             }
 
-            /// 从 DB 重新加载。未初始化时无操作。
+            /// 从 DB 重新加载缓存数据。
+            ///
+            /// 若全局实例尚未初始化则无操作，内部步骤：
+            /// 1. 获取全局实例引用
+            /// 2. 调用 `load_all()` 重新加载全部 Model
+            /// 3. 调用 `reload_from_models()` 替换内部状态
             pub async fn reload() -> anyhow::Result<()> {
+                // 未初始化时跳过，避免空 reload
                 let Some(__inst) = $global.get() else {
                     return Ok(());
                 };
@@ -177,18 +204,19 @@ macro_rules! make_global_cache {
     };
 }
 
-// ── RPC tracing utilities ───────────────────────────────────────────
+// ── RPC 日志工具 ───────────────────────────────────────────────────
 
-/// Lightweight extraction of `(token_key, username)` from a raw token string.
+/// 从原始 Token 字符串中提取 `(token_key, username)`。
 ///
-/// - Token mode (`key:secret`): returns `(key, "")`
-/// - Auth mode (`username|password`): returns `("", username)`
-/// - Fallback: returns `("???", "")`
+/// - Token 模式（`key:secret`）：返回 `(key, "")`
+/// - Auth 模式（`username|password`）：返回 `("", username)`
+/// - 无法识别时：返回 `("???", "")`
 ///
-/// Zero-allocation: returns borrowed slices into the original string.
+/// 零分配：返回借用的字符串切片，指向原始字符串内部。
 pub fn token_identity(token: &str) -> (&str, &str) {
     token.find(':').map_or_else(
         || {
+            // 未找到冒号，尝试管道符分隔（Auth 模式）
             token
                 .find('|')
                 .map_or(("???", ""), |pipe| ("", &token[..pipe]))
@@ -197,7 +225,7 @@ pub fn token_identity(token: &str) -> (&str, &str) {
     )
 }
 
-/// A wrapper around `&RawValue` that truncates its `Display` output to 1024 bytes.
+/// `&RawValue` 的截断 Display 包装，输出超过 1024 字节时截断并附加长度提示。
 pub struct TruncatedRaw<'a>(pub &'a RawValue);
 
 impl fmt::Display for TruncatedRaw<'_> {
@@ -205,8 +233,10 @@ impl fmt::Display for TruncatedRaw<'_> {
         const MAX: usize = 1024;
         let s = self.0.get();
         if s.len() <= MAX {
+            // 未超限，原样输出
             f.write_str(s)
         } else {
+            // 超限时截断到字符边界，附加总字节数提示
             let end = s.floor_char_boundary(MAX);
             f.write_str(&s[..end])?;
             write!(f, "[...{} bytes total]", s.len())
@@ -214,20 +244,18 @@ impl fmt::Display for TruncatedRaw<'_> {
     }
 }
 
-/// Common log pattern for RPC methods returning `RpcResult<Box<RawValue>>`.
+/// RPC 方法返回 `RpcResult<Box<RawValue>>` 的统一日志宏。
 ///
-/// Usage: `rpc_exec!(some_inner_call(args).await)`
+/// 用法：`rpc_exec!(some_inner_call(args).await)`
 ///
-/// Emits:
-/// - `debug response=<truncated> "request completed"` on success
-/// - `error error=<e> "request failed"` on failure
+/// 输出行为：
+/// - 成功：`debug response=<truncated> "request completed"`
+/// - 失败：`error error=<e> "request failed"`
 ///
-/// Note: the timing middleware already logs per-request timing at the
-/// configured level, so the macro only logs the outcome.
+/// 注意：计时中间件已按配置级别记录请求耗时，本宏仅记录结果。
 ///
-/// Uses `target: "rpc"` intentionally -- this is cross-cutting RPC
-/// infrastructure logging, distinct from domain-specific targets
-/// (kv, token, `js_worker`, etc.).
+/// 使用 `target: "rpc"` 作为跨领域 RPC 基础设施日志，
+/// 区别于领域特定 target（kv、token、js_worker 等）。
 #[macro_export]
 macro_rules! rpc_exec {
     ($expr:expr) => {{
@@ -248,23 +276,28 @@ macro_rules! rpc_exec {
     }};
 }
 
-/// Common RPC helper trait providing DB access and serialization utilities.
+/// RPC 公共辅助 trait，提供 DB 访问与序列化工具方法。
 ///
-/// Implement with an empty impl to bring methods into scope:
+/// 使用空 impl 引入方法：
 /// ```ignore
 /// impl RpcHelper for MyRpcImpl {}
 /// ```
 pub trait RpcHelper {
-    /// Serialize a value and wrap it in `sea_orm::Set` for active model fields.
+    /// 将值序列化为 JSON 并包装为 `sea_orm::Set`，用于 ActiveModel 字段赋值。
+    ///
+    /// - `val` — 待序列化的值
+    /// - 返回 `ActiveValue<Value>`，失败时返回序列化错误
     fn try_set_json<T: Serialize>(val: T) -> anyhow::Result<ActiveValue<Value>> {
         to_value(val).map(Set).map_err(|e| {
             NodegetError::SerializationError(format!("Serialization error: {e}")).into()
         })
     }
 
-    /// Get the global database connection.
+    /// 获取全局数据库连接。
     ///
-    /// Returns an error if the DB has not been initialized.
+    /// # Errors
+    ///
+    /// 当 DB 未初始化时返回错误。
     fn get_db() -> anyhow::Result<&'static DatabaseConnection> {
         ng_db::get_db()
             .ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()).into())

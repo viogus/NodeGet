@@ -1,3 +1,5 @@
+//! `task_upload_task_result` RPC 方法：Agent 上传任务执行结果
+
 use crate::rpc::TaskManager;
 use crate::types::{TaskEventResponse, TaskEventType};
 use jsonrpsee::core::RpcResult;
@@ -14,6 +16,25 @@ use serde_json::value::RawValue;
 use std::sync::Arc;
 use tracing::{debug, error};
 
+/// Agent 上传任务执行结果
+///
+/// - `manager` — 任务广播管理器，用于通知 blocking waiter
+/// - `token` — 身份令牌，需拥有对应任务类型的 `Task::Write` 权限
+/// - `task_response` — 任务执行响应，包含 task_id、agent_uuid、task_token 等校验字段
+///
+/// 返回 `{"id": task_id}`。重复上传、校验失败均返回错误。
+///
+/// 权限检查分两阶段：
+/// 1. 预检：检查 Token 是否对目标 Agent 持有任意 `Task::Write` 权限（防时序攻击）
+/// 2. 精确检查：根据数据库中记录的 task_type 确认具体 Write 权限
+///
+/// 内部步骤：
+/// 1. 预检权限（SuperToken 直接放行，否则检查 token_limit 中有无 Task::Write）
+/// 2. 查询数据库记录，校验 task_id + agent_uuid + task_token 三元组
+/// 3. 检查任务是否已上传结果（防重复上传）
+/// 4. 从记录中解析 task_event_type，获取 task_name 进行精确权限检查
+/// 5. 更新数据库记录：写入 timestamp、success、error_message、task_event_result
+/// 6. 通知 blocking waiter（如有）
 pub async fn upload_task_result(
     manager: &Arc<TaskManager>,
     token: String,

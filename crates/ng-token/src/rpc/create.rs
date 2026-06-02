@@ -1,3 +1,7 @@
+//! `token_create` RPC 方法实现。
+//!
+//! 创建子令牌，需提供父级超级令牌凭据。
+
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::permission::create::TokenCreationRequest;
@@ -7,6 +11,17 @@ use tracing::debug;
 
 use crate::generate_token::generate_and_store_token;
 
+/// 创建子令牌，需提供父级超级令牌凭据。
+///
+/// - `father_token`：父级令牌凭据（`key:secret` 或 `username|password` 格式），必须是超级令牌
+/// - `token_creation`：创建请求参数（时间范围、权限列表、可选 username/password）
+/// - 返回：成功时为 `{"key":"<token_key>","secret":"<token_secret>"}`
+/// - 错误：凭据解析失败、父级令牌非超级令牌、数据库错误
+///
+/// 内部步骤：
+/// 1. 解析父级凭据为 TokenOrAuth
+/// 2. 委托 `generate_and_store_token` 执行实际创建与存储
+/// 3. 序列化结果为 RawValue 返回
 pub async fn create(
     father_token: String,
     token_creation: TokenCreationRequest,
@@ -29,12 +44,17 @@ pub async fn create(
 
         debug!(target: "token", token_key = %key, "Token created successfully");
 
-        let json_str = format!("{{\"key\":\"{key}\",\"secret\":\"{secret}\"}}");
+        let json_str = serde_json::to_string(&serde_json::json!({
+            "key": key,
+            "secret": secret
+        }))
+        .map_err(|e| NodegetError::SerializationError(format!("{e}")))?;
 
         RawValue::from_string(json_str)
-            .map_err(|e| NodegetError::SerializationError(format!("{e}")).into())
+            .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
     };
 
+    // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject
     match process_logic.await {
         Ok(result) => Ok(result),
         Err(e) => {

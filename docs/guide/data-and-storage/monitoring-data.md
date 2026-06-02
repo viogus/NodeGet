@@ -21,7 +21,9 @@
 而 `全量动态监控数据` 则不同，因为不同设备的磁盘分布和网络设备分布各有不同，很难扁平化为固定的表结构，因此其采用了 JSON
 数据储存。
 
-具体来说，`全量动态监控数据` 在 PostgreSQL 上使用 `JSONB` 类型储存，在 SQLite 上则以 `TEXT` 列储存 JSON 字符串（SQLite 无原生 JSONB 类型）。PostgreSQL 的 `JSONB` 储存效率与压缩效能优于 SQLite 的纯文本 JSON 储存。虽然如此，利用 SQL 数据库储存 JSON 仍然是一种性价比较低的操作，储存效率远低于 `动态监控数据摘要`
+具体来说，`全量动态监控数据` 在 PostgreSQL 上使用 `JSONB` 类型储存，在 SQLite 上则以 `TEXT` 列储存 JSON 字符串（SQLite 无原生
+JSONB 类型）。PostgreSQL 的 `JSONB` 储存效率与压缩效能优于 SQLite 的纯文本 JSON 储存。虽然如此，利用 SQL 数据库储存 JSON
+仍然是一种性价比较低的操作，储存效率远低于 `动态监控数据摘要`
 ，仅适合储存短期内的数据以供实时分析。
 
 为了能权衡磁盘占用与信息全面程度的关系，允许用户通过 Agent 的配置文件和 Kv 里的特殊变量来决定以下内容：
@@ -32,4 +34,5 @@
 
 ## 数据清理
 
-NodeGet 通过 Js Worker 的 `onCron` 定时任务实现数据清理逻辑（参见[定时任务](/guide/features/cron)）。清理策略通过 [特殊 Kv 变量](/api/kv/special) 中的 `database_limit_*` 键来配置。
+NodeGet 通过 Js Worker 的 `onCron` 定时任务实现数据清理逻辑（参见[定时任务](/guide/features/cron)
+）。清理策略通过 [特殊 Kv 变量](/api/kv/special) 中的 `database_limit_*` 键来配置。

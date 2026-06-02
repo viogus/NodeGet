@@ -1,20 +1,34 @@
+//! RPC 请求计时中间件
+//!
+//! 横切关注点：测量每个 RPC 调用/批量请求/通知的耗时，
+//! 以可配置的 tracing 级别输出到 `target: "rpc"`。
+//! 所有 tracing 输出统一使用 `target: "rpc"` 而非模块级 target，
+//! 因为该中间件是框架级横切关注点，与具体业务模块无关。
+
 use jsonrpsee::server::middleware::rpc::{Batch, Notification, Request, RpcServiceT};
 use std::future::Future;
 use std::time::Instant;
 use tracing::Level;
 
-/// RPC request timing middleware.
+/// RPC 计时中间件
 ///
-/// All tracing in this module intentionally uses `target: "rpc"` rather than a
-/// module-specific target, because the middleware is a cross-cutting RPC
-/// framework concern — it measures every RPC call/batch/notification regardless
-/// of which business module handles it.
+/// 包裹内部 RPC 服务，在每个请求完成时记录耗时（微秒）。
+///
+/// - service：被包裹的内部 RPC 服务
+/// - level：tracing 输出级别，由 serve 启动时配置
 #[derive(Clone)]
 pub struct RpcTimingMiddleware<S> {
     pub service: S,
     pub level: Level,
 }
 
+/// 按指定 tracing 级别输出 RPC 耗时日志
+///
+/// - level：输出级别
+/// - method：RPC 方法名
+/// - kind：请求类型（"call" / "batch" / "notification"）
+/// - `elapsed_us`：耗时（微秒）
+/// - extra：附加信息（请求 ID、批量大小等）
 fn log_with_level(level: Level, method: &str, kind: &str, elapsed_us: u128, extra: &str) {
     match level {
         Level::ERROR => {
@@ -43,6 +57,7 @@ where
     type NotificationResponse = S::NotificationResponse;
     type BatchResponse = S::BatchResponse;
 
+    /// 处理单个 RPC 调用，记录方法名、请求 ID 和耗时
     fn call<'a>(
         &self,
         request: Request<'a>,
@@ -67,6 +82,7 @@ where
         }
     }
 
+    /// 处理批量 RPC 请求，记录所有方法名、批量大小和耗时
     fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
         let batch_size = batch.len();
         let mut method_names = Vec::with_capacity(batch_size);
@@ -100,6 +116,7 @@ where
         }
     }
 
+    /// 处理 RPC 通知（无响应的调用），记录方法名和耗时
     fn notification<'a>(
         &self,
         n: Notification<'a>,

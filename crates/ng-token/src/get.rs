@@ -1,3 +1,13 @@
+//! Token 查询与权限校验。
+//!
+//! 核心职责：
+//! - `get_token`：根据凭据认证并返回 Token 信息
+//! - `get_token_by_key_or_username`：无认证查询（仅超级令牌可用）
+//! - `check_token_limit`：检查 Token 是否具备指定 Scope + Permission
+//! - `parse_token_limit_with_compat`：兼容性解析 token_limit JSON
+//!
+//! 权限匹配支持后缀通配符（如 `tcp*` 匹配 `tcp_ping`）。
+
 use ng_core::error::NodegetError;
 use ng_core::permission::data_structure::{
     CrontabResult, JsResult, Kv, Limit, Permission, Scope, Task, Token,
@@ -12,8 +22,22 @@ use crate::cache::TokenCache;
 use crate::hash_to_bytes;
 use crate::super_token::check_super_token;
 
+/// 认证失败时的统一错误消息，避免泄露 key/username 是否存在等敏感信息。
 const AUTH_FAILED_MESSAGE: &str = "Invalid credentials";
 
+/// 根据凭据认证并返回 Token 信息。
+///
+/// 支持 `key:secret` 和 `username|password` 两种认证方式，
+/// 所有哈希比较均使用常量时间（`ct_eq`），防止时序攻击。
+///
+/// - `token_or_auth`：认证凭据
+/// - 返回：认证成功后的 Token 结构体
+/// - 错误：凭据无效或未找到对应记录
+///
+/// 内部步骤：
+/// 1. 根据 Token/Auth 分支在缓存中查找对应条目
+/// 2. 常量时间比较哈希值验证凭据
+/// 3. 从 CachedToken 构建返回用的 Token 结构体（不含哈希）
 pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
     let cache = TokenCache::global();
 
@@ -66,6 +90,18 @@ pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
     })
 }
 
+/// 按 token_key 或 username 查找 Token（无需认证）。
+///
+/// 此函数用于超级令牌管理模式下的 Token 查询，
+/// 不验证 secret/password，仅返回 Token 元信息。
+///
+/// - `identifier`：token_key 或 username
+/// - 返回：匹配的 Token 结构体
+/// - 错误：未找到对应记录
+///
+/// 内部步骤：
+/// 1. 优先按 token_key 在缓存中查找
+/// 2. 若未找到，回退按 username 查找
 pub async fn get_token_by_key_or_username(identifier: &str) -> anyhow::Result<Token> {
     let cache = TokenCache::global();
 
@@ -91,6 +127,13 @@ pub async fn get_token_by_key_or_username(identifier: &str) -> anyhow::Result<To
     })
 }
 
+/// 从 token_limit JSON 中移除无法识别的 Permission 变体。
+///
+/// 用于向前兼容：当数据库中存储了新版本才有的 Permission 类型时，
+/// 旧版本可以先丢弃未知权限再解析，而非直接报错。
+///
+/// - `token_limit_value`：原始 JSON Value
+/// - 返回：过滤后的 JSON Value
 fn drop_unknown_permissions(mut token_limit_value: Value) -> Value {
     let Some(limits) = token_limit_value.as_array_mut() else {
         return token_limit_value;
@@ -101,12 +144,21 @@ fn drop_unknown_permissions(mut token_limit_value: Value) -> Value {
             continue;
         };
 
+        // 仅保留能成功反序列化为 Permission 的条目
         perms.retain(|perm| serde_json::from_value::<Permission>(perm.clone()).is_ok());
     }
 
     token_limit_value
 }
 
+/// 兼容性解析 token_limit JSON 为 Limit 列表。
+///
+/// 先尝试直接解析；若失败（可能包含未知 Permission 变体），
+/// 调用 `drop_unknown_permissions` 过滤后再重试。
+///
+/// - `token_limit_value`：token_limit 字段的 JSON Value
+/// - 返回：解析成功的 Limit 列表
+/// - 错误：两次解析均失败
 pub fn parse_token_limit_with_compat(token_limit_value: Value) -> anyhow::Result<Vec<Limit>> {
     match serde_json::from_value::<Vec<Limit>>(token_limit_value.clone()) {
         Ok(v) => Ok(v),
@@ -123,23 +175,28 @@ pub fn parse_token_limit_with_compat(token_limit_value: Value) -> anyhow::Result
     }
 }
 
-/// 通配符匹配函数 - 仅支持后缀通配符 `*`
+/// 通配符匹配函数——仅支持后缀通配符 `*`。
 ///
-/// # 说明
 /// - `pattern` 以 `*` 结尾时，匹配以 `*` 前内容开头的任意字符串
 /// - `pattern` 不以 `*` 结尾时，进行精确匹配
 ///
-/// # 示例
-/// - `wildcard_matches_pattern("abc", "ab*")` -> true
-/// - `wildcard_matches_pattern("abc", "abc")` -> true
-/// - `wildcard_matches_pattern("abc", "a*")` -> true
-/// - `wildcard_matches_pattern("abc", "xyz")` -> false
+/// - `value`：待匹配的值（如具体的 key、namespace 等）
+/// - `pattern`：模式串（如 `tcp*`、`*`、`exact_name`）
+/// - 返回：是否匹配
 fn wildcard_matches_pattern(value: &str, pattern: &str) -> bool {
     pattern
         .strip_suffix('*')
         .map_or_else(|| value == pattern, |prefix| value.starts_with(prefix))
 }
 
+/// 判断已授权的 Permission 是否覆盖所需的 Permission。
+///
+/// 精确匹配优先；对于含字符串参数的变体（Kv、CrontabResult、JsResult、Task），
+/// 支持后缀通配符匹配。不同操作类型（如 Read vs Write）不互通。
+///
+/// - `granted`：Token 持有的权限
+/// - `required`：请求所需的权限
+/// - 返回：granted 是否满足 required
 fn permission_matches(granted: &Permission, required: &Permission) -> bool {
     if granted == required {
         return true;
@@ -177,6 +234,16 @@ fn permission_matches(granted: &Permission, required: &Permission) -> bool {
     }
 }
 
+/// 判断限制中的 Scope 是否覆盖请求所需的 Scope。
+///
+/// 匹配规则：
+/// - `Global` 覆盖所有 Scope
+/// - 同类型 Scope 内，JsWorker/StaticBucket/Db 支持通配符，AgentUuid/KvNamespace 需精确匹配
+/// - 不同类型 Scope 之间不互通
+///
+/// - `limit_scope`：Token 限制中的 Scope
+/// - `req_scope`：请求所需的 Scope
+/// - 返回：limit_scope 是否覆盖 req_scope
 fn scope_matches(limit_scope: &Scope, req_scope: &Scope) -> bool {
     match (limit_scope, req_scope) {
         (Scope::Global, _) => true,
@@ -225,6 +292,22 @@ fn scope_matches(limit_scope: &Scope, req_scope: &Scope) -> bool {
     }
 }
 
+/// 检查 Token 是否具备指定的 Scope + Permission 组合。
+///
+/// 超级令牌直接放行；普通令牌需逐一检查每个请求的 Scope/Permission
+/// 是否被 Token 的 Limit 列表覆盖，同时验证时间有效性。
+///
+/// - `token_or_auth`：认证凭据
+/// - `scopes`：请求所需的 Scope 列表
+/// - `permissions`：请求所需的 Permission 列表
+/// - 返回：`true` 表示权限充足，`false` 表示不足
+/// - 错误：认证失败
+///
+/// 内部步骤：
+/// 1. 超级令牌直接返回 true
+/// 2. 获取 Token 信息，检查时间有效性（timestamp_from / timestamp_to）
+/// 3. 对每个 (req_scope, req_perm) 组合，在 Token 的 Limit 列表中查找覆盖
+/// 4. 任一组合未被覆盖则返回 false
 pub async fn check_token_limit(
     token_or_auth: &TokenOrAuth,
     scopes: Vec<Scope>,

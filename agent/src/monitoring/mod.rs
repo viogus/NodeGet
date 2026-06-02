@@ -1,3 +1,10 @@
+//! 监控数据采集模块。
+//!
+//! 维护全局系统信息（CPU、内存、磁盘、网络、GPU）的缓存单例，
+//! 并提供带时间间隔追踪的刷新函数，供上报循环按需调用。
+//! 子模块 `gpu`、`system_impls`、`network_connections` 分别负责各领域的采集实现，
+//! `impls` 模块将它们组合为 [`StaticMonitoringData`] / [`DynamicMonitoringData`]。
+
 use nvml_wrapper::Nvml;
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, Networks, System};
@@ -12,15 +19,13 @@ pub mod impls;
 mod network_connections;
 // 系统实现模块
 mod system_impls;
-// 系统监控相关功能
 
-// 全局系统信息实例，用于获取和刷新系统信息
+/// 全局系统信息实例（sysinfo `System`），用于获取和刷新 CPU/内存信息。
 static GLOBAL_SYSTEM: OnceCell<Mutex<System>> = OnceCell::const_new();
 
-// 获取全局系统信息实例，如果不存在则初始化
-//
-// # 返回值
-// 返回指向全局系统信息实例的静态引用
+/// 获取全局系统信息实例，如果不存在则初始化。
+///
+/// 返回指向全局系统信息实例的静态引用。
 async fn get_global_system() -> &'static Mutex<System> {
     GLOBAL_SYSTEM
         .get_or_init(|| async {
@@ -32,9 +37,7 @@ async fn get_global_system() -> &'static Mutex<System> {
         .await
 }
 
-// 刷新全局系统信息，包括CPU和内存信息
-//
-// 该函数获取全局系统实例并刷新CPU使用率、频率以及内存信息
+/// 刷新全局系统信息，包括 CPU 使用率、频率以及内存信息。
 async fn refresh_global_system() {
     let system_mutex = get_global_system().await;
     {
@@ -44,18 +47,15 @@ async fn refresh_global_system() {
     }
 }
 
-// 磁盘监控相关功能
-
-// 全局磁盘信息实例，用于获取和刷新磁盘信息
+/// 全局磁盘信息实例（sysinfo `Disks`），用于获取和刷新磁盘信息。
 static GLOBAL_DISK: OnceCell<Mutex<Disks>> = OnceCell::const_new();
 
-// 磁盘刷新时间追踪器，用于计算两次刷新之间的时间间隔
+/// 磁盘刷新时间追踪器，用于计算两次刷新之间的时间间隔，供速率计算使用。
 static DISK_TIME_TRACKER: OnceCell<Mutex<Instant>> = OnceCell::const_new();
 
-// 获取全局磁盘信息实例，如果不存在则初始化
-//
-// # 返回值
-// 返回指向全局磁盘信息实例的静态引用
+/// 获取全局磁盘信息实例，如果不存在则初始化。
+///
+/// 返回指向全局磁盘信息实例的静态引用。
 async fn get_global_disk() -> &'static Mutex<Disks> {
     GLOBAL_DISK
         .get_or_init(|| async {
@@ -66,12 +66,13 @@ async fn get_global_disk() -> &'static Mutex<Disks> {
         .await
 }
 
-// 刷新全局磁盘信息并返回刷新间隔
-//
-// 该函数刷新磁盘IO使用情况和存储信息，并计算与上次刷新的时间间隔
-//
-// # 返回值
-// 返回两次刷新之间的持续时间
+/// 刷新全局磁盘信息并返回刷新间隔。
+///
+/// 1. 首次初始化时将 tracker 回拨 1 秒，避免首轮 `now - last_time` 接近 0
+/// 2. 刷新磁盘 IO 使用率和存储信息
+/// 3. 计算与上次刷新的时间间隔
+///
+/// 返回两次刷新之间的持续时间，供速率计算使用。
 async fn refresh_global_disk() -> Duration {
     // 首次初始化时把 tracker 回调一秒，避免首轮 `now - last_time` 接近 0，
     // 进而让下游速率计算（bytes / interval_secs）拿到可用于推导的分母。
@@ -106,18 +107,15 @@ async fn refresh_global_disk() -> Duration {
     }
 }
 
-// 网络监控相关功能
-
-// 全局网络信息实例，用于获取和刷新网络接口信息
+/// 全局网络信息实例（sysinfo `Networks`），用于获取和刷新网络接口信息。
 static GLOBAL_NETWORK: OnceCell<Mutex<Networks>> = OnceCell::const_new();
 
-// 网络刷新时间追踪器，用于计算两次刷新之间的时间间隔
+/// 网络刷新时间追踪器，用于计算两次刷新之间的时间间隔，供速率计算使用。
 static NETWORK_TIME_TRACKER: OnceCell<Mutex<Instant>> = OnceCell::const_new();
 
-// 获取全局网络信息实例，如果不存在则初始化
-//
-// # 返回值
-// 返回指向全局网络信息实例的静态引用
+/// 获取全局网络信息实例，如果不存在则初始化。
+///
+/// 返回指向全局网络信息实例的静态引用。
 async fn get_global_network() -> &'static Mutex<Networks> {
     GLOBAL_NETWORK
         .get_or_init(|| async {
@@ -128,12 +126,13 @@ async fn get_global_network() -> &'static Mutex<Networks> {
         .await
 }
 
-// 刷新全局网络信息并返回刷新间隔
-//
-// 该函数刷新网络接口信息，并计算与上次刷新的时间间隔
-//
-// # 返回值
-// 返回两次刷新之间的持续时间
+/// 刷新全局网络信息并返回刷新间隔。
+///
+/// 1. 首次初始化时将 tracker 回拨 1 秒，确保首轮 interval 不为零
+/// 2. 刷新网络接口统计信息
+/// 3. 计算与上次刷新的时间间隔
+///
+/// 返回两次刷新之间的持续时间，供速率计算使用。
 async fn refresh_global_network() -> Duration {
     // 与 `refresh_global_disk` 对齐：首次初始化回拨 1s，确保首轮 interval 不为零。
     let time_tracker = NETWORK_TIME_TRACKER
@@ -159,15 +158,13 @@ async fn refresh_global_network() -> Duration {
     }
 }
 
-// GPU 监控相关功能
-
-// 全局GPU信息实例，用于获取和初始化NVML（NVIDIA Management Library）
+/// 全局 GPU 信息实例（NVML），用于获取和初始化 NVIDIA Management Library。
+/// 无 NVIDIA 驱动时为 `None`。
 static GLOBAL_GPU: OnceCell<Mutex<Option<Nvml>>> = OnceCell::const_new();
 
-// 获取全局GPU信息实例，如果不存在则尝试初始化NVML
-//
-// # 返回值
-// 返回指向全局GPU信息实例（可能包含NVML对象或为None）的静态引用
+/// 获取全局 GPU 信息实例，如果不存在则尝试初始化 NVML。
+///
+/// 返回指向全局 GPU 信息实例的静态引用；NVML 不可用时内部值为 `None`。
 async fn get_global_gpu() -> &'static Mutex<Option<Nvml>> {
     GLOBAL_GPU
         .get_or_init(|| async {

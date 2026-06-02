@@ -166,7 +166,7 @@
 }
 ```
 
-## List All Agent UUID  ⛔ 已废弃
+## List All Agent UUID ⛔ 已废弃
 
 > **注意**: 该功能已被 `agent-uuid_list_all` 完全替代。请使用 [agent-uuid 命名空间](../agent_uuid/crud.md)。
 >

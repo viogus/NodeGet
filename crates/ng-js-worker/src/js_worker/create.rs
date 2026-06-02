@@ -1,3 +1,7 @@
+//! `js-worker_create` RPC —— 创建新的 JS Worker。
+//!
+//! 验证权限、解码脚本、编译字节码、检查唯一性后入库。
+
 use crate::js_worker::auth::check_js_worker_permission;
 use crate::js_worker::route_name::normalize_route_name;
 use base64::Engine;
@@ -14,6 +18,25 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, trace};
 
+/// 创建新的 JS Worker。
+///
+/// - `token` —— 认证 Token
+/// - `name` —— Worker 名称（唯一标识）
+/// - `description` —— 描述
+/// - `js_script_base64` —— JS 脚本的 Base64 编码
+/// - `route_name` —— HTTP 路由名称（可选）
+/// - `runtime_clean_time` —— 空闲清理时间阈值（ms，可选）
+/// - `env` —— 环境变量（可选）
+/// - `max_run_time` —— 执行时长上限（ms，可选）
+/// - `max_stack_size` —— 栈大小上限（bytes，可选）
+/// - `max_heap_size` —— 堆大小上限（bytes，可选）
+///
+/// 内部步骤：
+/// 1. 校验 name 非空、js_script_base64 非空且合法
+/// 2. 检查 Create 权限
+/// 3. 检查 name 和 route_name 唯一性
+/// 4. 编译 JS 为字节码
+/// 5. 插入 `js_worker` 表
 pub async fn create(
     token: String,
     name: String,

@@ -1,3 +1,5 @@
+//! `crontab-result.query` RPC 实现：按条件查询定时任务执行结果。
+
 use crate::query::{CrontabResultDataQuery, CrontabResultQueryCondition};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::{NodegetError, anyhow_to_nodeget_error};
@@ -5,22 +7,34 @@ use ng_db::entity::crontab_result;
 use ng_db::get_db;
 use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use tracing::debug;
 
+/// 按条件查询定时任务执行结果。
+///
+/// 1. 构建 SeaORM 查询，应用各过滤条件
+/// 2. 从条件中收集 CronName，逐个检查读权限
+/// 3. 默认按 run_time 降序排序
+/// 4. 未显式指定 Limit/Last 时施加 1000 条默认上限，防止无界查询
+/// 5. 执行查询并序列化结果
+///
+/// - `token` - 认证 Token 字符串
+/// - `query` - 查询条件
+/// - 返回 `Vec<crontab_result::Model>` 的 JSON 序列化
 pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "crontab_result", condition_count = query.condition.len(), "processing crontab_result query request");
         let db =
             get_db().ok_or_else(|| NodegetError::DatabaseError("DB not initialized".to_owned()))?;
 
-        // 构建查询
+        // 构建 SeaORM 查询
         let mut select = crontab_result::Entity::find();
 
-        // 标记是否已经检查了权限
-        let mut permission_checked = false;
+        // 收集所有 CronName 条件，用于后续权限检查
+        let mut cron_names: HashSet<&str> = HashSet::new();
         let mut has_cron_name_filter = false;
 
-        // 处理查询条件
+        // 处理查询条件，应用到 SeaORM 查询
         for condition in &query.condition {
             match condition {
                 CrontabResultQueryCondition::Id(id) => {
@@ -30,12 +44,7 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
                     select = select.filter(crontab_result::Column::CronId.eq(*cron_id));
                 }
                 CrontabResultQueryCondition::CronName(cron_name) => {
-                    // 检查读权限
-                    if !permission_checked {
-                        super::auth::check_crontab_result_read_permission(&token, cron_name)
-                            .await?;
-                        permission_checked = true;
-                    }
+                    cron_names.insert(cron_name);
                     has_cron_name_filter = true;
                     select = select.filter(crontab_result::Column::CronName.eq(cron_name.clone()));
                 }
@@ -70,14 +79,19 @@ pub async fn query(token: String, query: CrontabResultDataQuery) -> RpcResult<Bo
             }
         }
 
-        // 如果没有指定 cron_name 过滤，需要检查全局权限
-        if !has_cron_name_filter && !permission_checked {
+        // 权限检查：每个 distinct CronName 都需要读权限
+        if has_cron_name_filter {
+            for cron_name in &cron_names {
+                super::auth::check_crontab_result_read_permission(&token, cron_name).await?;
+            }
+        } else {
+            // 没有 CronName 过滤时需要全局读权限
             super::auth::check_crontab_result_read_permission(&token, "*").await?;
         }
 
         debug!(target: "crontab_result", condition_count = query.condition.len(), has_cron_name_filter, "crontab_result query permission check passed");
 
-        // 默认按 run_time 降序排序（如果没有指定 Last）
+        // 默认按 run_time 降序排序（Last 条件已自带排序，此处跳过）
         if !query
             .condition
             .iter()

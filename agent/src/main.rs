@@ -1,3 +1,10 @@
+//! `NodeGet` Agent 入口模块。
+//!
+//! 负责启动 agent 进程、解析命令行参数与配置文件、初始化日志和 NTP 时间校准，
+//! 并驱动与多服务器的 WebSocket 连接及监控数据上报循环。
+//! 配置热重载通过 [`RELOAD_NOTIFY`] 信号触发，主循环 abort 所有运行时任务后
+//! 重新读取配置并重建连接。
+
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::cast_sign_loss,
@@ -34,11 +41,20 @@ mod ntp;
 mod rpc;
 mod tasks;
 
+/// 命令行参数全局单例，启动时设置一次，之后只读。[`AGENT_ARGS`]
 static AGENT_ARGS: OnceLock<AgentArgs> = OnceLock::new();
+/// 全局配置 `RwLock` 单例，支持热重载时写入新配置。
 static AGENT_CONFIG: OnceLock<RwLock<AgentConfig>> = OnceLock::new();
+/// 配置热重载通知信号；`EditConfig` 任务写入配置文件后 notify，主循环收到后 abort 并重建。
 pub(crate) static RELOAD_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
+/// NTP 初始化完成标记，防止热重载时覆盖已有偏移导致时间跳变。
 static NTP_INIT_DONE: OnceLock<bool> = OnceLock::new();
 
+/// 从配置中解析日志级别。
+///
+/// - `config` - Agent 配置引用
+///
+/// 返回解析后的 [`Level`]；配置缺失或格式非法时返回错误。
 fn parse_log_level(config: &AgentConfig) -> anyhow::Result<Level> {
     let log_level = config
         .log_level
@@ -50,6 +66,11 @@ fn parse_log_level(config: &AgentConfig) -> anyhow::Result<Level> {
         .map_err(Into::into)
 }
 
+/// 更新全局配置单例。
+///
+/// - `config` - 新的 Agent 配置
+///
+/// 若 `AGENT_CONFIG` 已初始化则写入替换，否则首次设置。RwLock 毒化时返回错误。
 fn update_global_config(config: AgentConfig) -> anyhow::Result<()> {
     if let Some(lock) = AGENT_CONFIG.get() {
         let mut guard = lock.write().map_err(|e| {
@@ -64,12 +85,24 @@ fn update_global_config(config: AgentConfig) -> anyhow::Result<()> {
         .map_err(|_| NodegetError::Other("Failed to set AGENT_CONFIG".to_owned()).into())
 }
 
+/// Abort 所有给定的 `JoinHandle`（用于热重载前清理运行时任务）。
+///
+/// - `handles` - 可变的 `JoinHandle` 向量，调用后会被清空
 fn abort_handles(handles: &mut Vec<JoinHandle<()>>) {
     for handle in handles.drain(..) {
         handle.abort();
     }
 }
 
+/// Agent 进程入口。
+///
+/// 1. 安装 rustls crypto provider（容忍重复安装）
+/// 2. 解析命令行参数，处理 `--version` 后退出
+/// 3. 加载配置文件并初始化日志
+/// 4. 首次启动时查询 NTP 偏移
+/// 5. 建立与各服务器的 WebSocket 连接
+/// 6. 启动静态/动态监控数据上报及错误消息/任务处理循环
+/// 7. 监听 Ctrl+C 或热重载信号，前者退出、后者 abort 任务后重新进入循环
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // rustls crypto provider 只能安装一次；`tasks/ip.rs` 懒加载路径也会尝试安装并用

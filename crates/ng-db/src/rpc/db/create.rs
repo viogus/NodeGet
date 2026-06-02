@@ -1,3 +1,5 @@
+//! `db.create` RPC 实现 — 创建用户数据库
+
 use crate::entity::db_registry;
 use crate::rpc::db::auth::{check_db_permission, validate_db_name};
 use crate::rpc::{to_rpc_error, token_identity};
@@ -9,6 +11,17 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 创建新的用户数据库
+///
+/// - `token` — 认证 Token
+/// - `name` — 新数据库名称
+/// - 返回值：包含 `name` 和 `file_path` 的成功响应
+///
+/// 内部步骤：
+/// 1. 检查 `Db::Create` 权限
+/// 2. 校验数据库名称合法性
+/// 3. 检查名称是否已存在于 `db_registry`
+/// 4. 通过 `DbRegistryManager` 创建 `SQLite` 文件并注册
 pub async fn create(token: String, name: String) -> RpcResult<Box<RawValue>> {
     let (tk, un) = token_identity(&token);
 
@@ -20,7 +33,7 @@ pub async fn create(token: String, name: String) -> RpcResult<Box<RawValue>> {
             NodegetError::DatabaseError("Main database not initialized".to_owned())
         })?;
 
-        // Check if db name already exists in registry
+        // 检查数据库名称是否已存在于注册表
         let existing = db_registry::Entity::find()
             .filter(db_registry::Column::Name.eq(&name))
             .one(db)
@@ -32,7 +45,7 @@ pub async fn create(token: String, name: String) -> RpcResult<Box<RawValue>> {
             );
         }
 
-        // Initialize the SQLite file and create registry entry via DbRegistryManager
+        // 通过 DbRegistryManager 创建 SQLite 文件并注册到 db_registry 表
         let mgr = DbRegistryManager::global();
         let _conn = mgr.create_conn(&name, None).await?;
 

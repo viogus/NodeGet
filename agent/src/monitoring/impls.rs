@@ -1,3 +1,9 @@
+//! 监控数据组合与采集 trait 实现。
+//!
+//! 定义 [`Monitor`] trait 作为监控数据采集的统一接口，
+//! 并为 [`StaticMonitoringData`] 和 [`DynamicMonitoringData`] 提供 trait 实现。
+//! 同时包含磁盘和网络速率采集的辅助结构体 [`DataFromDisk`] / [`DataFromNetwork`]。
+
 use crate::monitoring::gpu::{DynamicDataFromGpu, StaticDataFromGpu};
 use crate::monitoring::network_connections::calc_connections;
 use crate::monitoring::system_impls::{DynamicDataFromSystem, StaticDataFromSystem};
@@ -10,18 +16,19 @@ use ng_monitoring::data_structure::{
 };
 use sysinfo::DiskKind;
 
-// 监控数据获取 trait，定义了刷新和获取监控数据的方法
+/// 监控数据获取 trait，定义了刷新并获取监控数据的异步接口。
 pub trait Monitor {
-    // 异步刷新并获取监控数据
-    //
-    // # 返回值
-    // 返回实现了此 trait 的类型的实例
+    /// 异步刷新并获取监控数据。
+    ///
+    /// 返回实现了此 trait 的类型的实例。
     async fn refresh_and_get() -> Self;
 }
 
-// review_agent.md 低优：`get_local_timestamp_ms().unwrap_or(0)` 把失败时间戳化为 1970，会被
-// server 误认为是一条真实的"很旧"数据。不改协议类型（`time: u64`）的前提下，至少把失败路径
-// 的日志升级为 error，方便事后排查时能在日志里找到这类"上报带 0 时间戳"的事件。
+/// 获取本地时间戳（毫秒），失败时记录 error 日志并回退为 0。
+///
+/// `get_local_timestamp_ms().unwrap_or(0)` 把失败时间戳化为 1970，
+/// 会被 server 误认为真实的"很旧"数据。不改协议类型（`time: u64`）的前提下，
+/// 至少把失败路径的日志升级为 error，方便事后排查。
 fn timestamp_ms_with_error_log() -> u64 {
     match get_local_timestamp_ms() {
         Ok(ts) => ts,
@@ -34,15 +41,15 @@ fn timestamp_ms_with_error_log() -> u64 {
     }
 }
 
-// 静态监控数据的 Monitor trait 实现
-
+/// 静态监控数据的 [`Monitor`] trait 实现。
 impl Monitor for StaticMonitoringData {
-    // 异步刷新并获取静态监控数据
-    //
-    // 该函数并发获取系统和GPU的静态数据，然后构造静态监控数据结构
-    //
-    // # 返回值
-    // 返回包含代理 UUID、时间戳以及 CPU、系统和 GPU 静态数据的静态监控数据结构
+    /// 异步刷新并获取静态监控数据。
+    ///
+    /// 1. 并发获取系统和 GPU 的静态数据
+    /// 2. 计算 `data_hash`
+    /// 3. 构造静态监控数据结构
+    ///
+    /// 返回包含代理 UUID、时间戳以及 CPU、系统和 GPU 静态数据的结构体。
     async fn refresh_and_get() -> Self {
         let (system_data, gpu_data) =
             tokio::join!(StaticDataFromSystem::get(), StaticDataFromGpu::get());
@@ -65,16 +72,14 @@ impl Monitor for StaticMonitoringData {
     }
 }
 
-// 动态监控数据的 Monitor trait 实现
-
+/// 动态监控数据的 [`Monitor`] trait 实现。
 impl Monitor for DynamicMonitoringData {
-    // 异步刷新并获取动态监控数据
-    //
-    // 该函数获取系统的动态数据（CPU、内存、负载、系统），并并发获取磁盘和网络数据，
-    // 最后构造动态监控数据结构
-    //
-    // # 返回值
-    // 返回包含代理 UUID、时间戳以及 CPU、内存、负载、系统、磁盘、网络和 GPU 动态数据的动态监控数据结构
+    /// 异步刷新并获取动态监控数据。
+    ///
+    /// 1. 四路并发获取系统、GPU、磁盘、网络动态数据
+    /// 2. 构造动态监控数据结构
+    ///
+    /// 返回包含代理 UUID、时间戳以及 CPU、内存、负载、系统、磁盘、网络和 GPU 动态数据的结构体。
     async fn refresh_and_get() -> Self {
         // 统一 `tokio::join!` 四路并发（对齐静态实现风格），4 个来源互不共享锁/全局资源：
         //   - system: DynamicDataFromSystem 自己的 mutex
@@ -120,19 +125,18 @@ impl Monitor for DynamicMonitoringData {
     }
 }
 
-// 磁盘监控相关功能
-
-// 从磁盘获取的数据结构，包含磁盘的动态数据
+/// 从磁盘获取的数据结构，包含所有磁盘的动态数据。
 #[derive(Debug)]
 pub struct DataFromDisk(pub Vec<DynamicPerDiskData>);
 
 impl DataFromDisk {
-    // 异步刷新并获取磁盘数据
-    //
-    // 该函数刷新全局磁盘信息，计算磁盘读写速度，并收集每个磁盘的动态数据
-    //
-    // # 返回值
-    // 返回包含所有磁盘动态数据的向量
+    /// 异步刷新并获取磁盘数据。
+    ///
+    /// 1. 刷新全局磁盘信息并获取刷新间隔
+    /// 2. 计算每个磁盘的读写速率（字节/秒）
+    /// 3. 收集每个磁盘的动态数据
+    ///
+    /// 返回包含所有磁盘动态数据的结构体。
     pub async fn refresh_and_get() -> Self {
         let interval_secs = refresh_global_disk().await.as_secs_f64();
         // 首次 tick 或系统时钟异常可能返回 interval ≈ 0，除法会得到 inf（cast 成
@@ -171,19 +175,18 @@ impl DataFromDisk {
     }
 }
 
-// 网络监控相关功能
-
-// 从网络获取的数据结构，包含网络的动态数据
+/// 从网络获取的数据结构，包含网络接口动态数据及连接统计。
 #[derive(Debug)]
 pub struct DataFromNetwork(pub DynamicNetworkData);
 
 impl DataFromNetwork {
-    // 异步刷新并获取网络数据
-    //
-    // 该函数刷新全局网络信息，计算网络接口的传输速度，并统计 UDP 和 TCP 连接数
-    //
-    // # 返回值
-    // 返回包含网络接口数据以及 UDP 和 TCP 连接数的网络数据结构
+    /// 异步刷新并获取网络数据。
+    ///
+    /// 1. 刷新全局网络信息并获取刷新间隔
+    /// 2. 计算每个网络接口的收发速率（字节/秒）
+    /// 3. 统计 UDP 和 TCP 连接数
+    ///
+    /// 返回包含网络接口数据以及 UDP/TCP 连接数的结构体。
     pub async fn refresh_and_get() -> Self {
         let interval_secs = refresh_global_network().await.as_secs_f64();
         // 同磁盘：首次或时钟异常的近 0 值会使速率变成 u64::MAX，加一个 10ms 下限。

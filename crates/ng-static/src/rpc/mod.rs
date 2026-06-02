@@ -1,3 +1,8 @@
+//! 静态文件桶 RPC 模块入口。
+//!
+//! 职责：将 `static-bucket` 和 `static-bucket-file` 两个 RPC 命名空间
+//! 合并为一个 `RpcModule`，供服务器二进制在启动时合并到主 RPC 模块。
+
 pub mod static_bucket;
 pub mod static_bucket_file;
 

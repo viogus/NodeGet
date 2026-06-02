@@ -1,3 +1,9 @@
+//! `NodeGet` 服务器入口
+//!
+//! 负责解析命令行参数、初始化全局状态（配置、日志、数据库），
+//! 并根据子命令分发到对应处理逻辑。
+//! Serve 模式下支持配置热重载：收到 `RELOAD_NOTIFY` 信号后重新解析配置文件并重启服务。
+
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::cast_sign_loss,
@@ -17,10 +23,10 @@ mod rpc_nodeget;
 mod rpc_timing;
 mod subcommands;
 
-// 服务器主函数
-//
-// 该函数启动 NodeGet 服务器，初始化配置、日志、数据库连接、超级令牌，
-// 然后设置 RPC 服务和 WebSocket 终端处理器，并最终启动 HTTP 服务器。
+/// 服务器主函数
+///
+/// 构建多线程 Tokio 运行时，然后在异步上下文中执行 [`async_main`]。
+/// - `global_queue_interval(3)`：多线程调度器全局队列轮询间隔，平衡延迟与吞吐
 fn main() {
     println!("Starting nodeget-server");
 
@@ -33,6 +39,14 @@ fn main() {
     runtime.block_on(async_main());
 }
 
+/// 异步主逻辑：解析参数 → 初始化全局配置 → 按子命令分发
+///
+/// 内部步骤：
+/// 1. 初始化 JS 运行时（供 ng-js-runtime 全局使用）
+/// 2. 提前处理 Version 子命令（无需加载配置即可返回）
+/// 3. 设置配置文件路径、热重载信号通道
+/// 4. 解析配置文件并初始化全局 Config
+/// 5. 根据 `ServerCommand` 分发：Serve 进入热重载循环，其余为一次性子命令
 async fn async_main() {
     ng_js_runtime::init_server_runtime(tokio::runtime::Handle::current());
 
@@ -50,7 +64,7 @@ async fn async_main() {
     let _ = ng_config::set_server_config_path(config_path.clone());
     ng_config::init_reload_notify();
 
-    // Config Parse
+    // 解析配置文件
     let mut config =
         match ng_config::config::server::ServerConfig::get_and_parse_config(&config_path).await {
             Ok(cfg) => cfg,
@@ -60,12 +74,12 @@ async fn async_main() {
             }
         };
 
-    // Log init
+    // 初始化日志系统
     logging::init(config.logging.as_ref());
 
     info!(target: "server", config = ?config, "Starting nodeget-server");
 
-    // 初始化全局 Config
+    // 写入全局 Config 单例
     if let Err(e) = ng_config::set_server_config(config.clone()) {
         tracing::error!(target: "server", error = %e, "Failed to update global config");
         std::process::exit(1);
@@ -74,6 +88,7 @@ async fn async_main() {
     match args.command {
         ServerCommand::Serve { .. } => {
             init_db_connection().await;
+            // 热重载循环：serve 退出后重新解析配置，成功则重启服务
             loop {
                 subcommands::serve::run(&config).await;
 
@@ -123,7 +138,11 @@ async fn async_main() {
     }
 }
 
-/// 初始化数据库连接，从全局配置读取参数
+/// 初始化数据库连接
+///
+/// - 从全局 Config 读取 database 配置段
+/// - 未显式配置的超时/连接数参数使用默认值（单位：毫秒/个）
+/// - 调用 [`ng_db::init_db_connection`] 写入全局 DB 单例
 async fn init_db_connection() {
     let db_config = {
         let config_guard = ng_config::get_server_config()

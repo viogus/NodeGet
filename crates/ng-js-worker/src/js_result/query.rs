@@ -1,3 +1,8 @@
+//! `js-result` 查询操作 —— 按条件查询 JS 执行结果记录。
+//!
+//! 与 `delete.rs` 共享相似的筛选逻辑，但查询有默认 LIMIT 1000，
+//! 且支持 Last 修饰符获取最近一条记录。
+
 use crate::auth::{
     JsResultAction, ensure_js_result_permission, resolve_accessible_js_result_workers,
 };
@@ -10,6 +15,9 @@ use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, Quer
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 将单个查询条件应用到 select 查询构建器上。
+///
+/// `Limit` 和 `Last` 条件不在此处理，由调用方单独提取。
 fn apply_filter_to_select(
     mut select: sea_orm::Select<js_result::Entity>,
     condition: &JsResultQueryCondition,
@@ -76,6 +84,17 @@ fn apply_filter_to_select(
     select
 }
 
+/// 查询符合条件的 JS 执行结果记录。
+///
+/// - `token` —— 认证 Token
+/// - `query` —— 查询条件集合
+///
+/// 内部步骤：
+/// 1. 解析条件中的 Worker 名称，确定权限范围
+/// 2. 若未指定 Worker 名称，自动解析 token 可访问的所有 Worker
+/// 3. 逐个应用筛选条件到 select 查询
+/// 4. 应用排序（按开始时间降序、ID 降序）和 LIMIT
+/// 5. 默认 LIMIT 为 1000，最大 LIMIT 为 10000
 pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "js_result", condition_count = query.condition.len(), "processing js_result query request");
@@ -119,6 +138,7 @@ pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<Raw
         for condition in &query.condition {
             match condition {
                 JsResultQueryCondition::Limit(limit) => {
+                    // 单次查询上限 10000 条，防止返回过多数据
                     const MAX_LIMIT: u64 = 10_000;
                     limit_count = Some(std::cmp::min(*limit, MAX_LIMIT));
                 }
@@ -131,6 +151,7 @@ pub async fn query(token: String, query: JsResultDataQuery) -> RpcResult<Box<Raw
             }
         }
 
+        /// 查询默认 LIMIT，客户端未指定时使用此值。
         const DEFAULT_LIMIT: u64 = 1000;
 
         if is_last {

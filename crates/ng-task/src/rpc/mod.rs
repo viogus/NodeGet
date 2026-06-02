@@ -1,3 +1,16 @@
+//! Task RPC 命名空间：提供 JSON-RPC 方法供客户端调度和管理任务。
+//!
+//! 命名空间前缀为 `task`，包含以下方法：
+//! - `task_register_task` — 订阅任务事件流（WebSocket）
+//! - `task_create_task` — 创建任务并立即返回
+//! - `task_create_task_blocking` — 创建任务并阻塞等待 Agent 返回结果
+//! - `task_upload_task_result` — Agent 上传任务执行结果
+//! - `task_query` — 查询任务记录
+//! - `task_delete` — 删除任务记录
+//!
+//! 同时定义 `TaskAuthProvider` 和 `MonitoringUuidProvider` trait，
+//! 由服务器二进制在启动时注入具体实现。
+
 use jsonrpsee::PendingSubscriptionSink;
 use jsonrpsee::SubscriptionMessage;
 use jsonrpsee::core::{JsonRawValue, RpcResult, SubscriptionResult};
@@ -21,13 +34,13 @@ mod delete;
 mod query;
 mod upload_task_result;
 
-// ── Auth provider trait ────────────────────────────────────────────
+// ── Auth provider trait ────────────────────────────────────────
 
-/// Trait for authentication and authorization operations needed by task RPC.
+/// 任务鉴权 trait，由服务器二进制实现并注入
 ///
-/// The server crate implements this to provide concrete auth checking.
+/// 提供 Token 权限检查、SuperToken 判断和 Token 元数据获取能力
 pub trait TaskAuthProvider: Send + Sync + 'static {
-    /// Check token limits for scopes and permissions.
+    /// 检查 Token/Auth 是否满足给定的 scope 和 permission 约束
     fn check_token_limit(
         &self,
         token_or_auth: &TokenOrAuth,
@@ -35,68 +48,74 @@ pub trait TaskAuthProvider: Send + Sync + 'static {
         permissions: Vec<Permission>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send>>;
 
-    /// Check if the token is the super token.
+    /// 检查 Token/Auth 是否为 SuperToken
     fn check_super_token(
         &self,
         token_or_auth: &TokenOrAuth,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send>>;
 
-    /// Get the token metadata for the given token or auth.
+    /// 获取 Token/Auth 的元数据
     fn get_token(
         &self,
         token_or_auth: &TokenOrAuth,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<Token>> + Send>>;
 }
 
+/// 全局 AuthProvider 单例，由服务器启动时通过 `set_auth_provider` 注入
 static AUTH_PROVIDER: OnceLock<Arc<dyn TaskAuthProvider>> = OnceLock::new();
 
-/// Set the global auth provider for task RPC.
+/// 设置全局 AuthProvider，服务器启动时调用一次
 pub fn set_auth_provider(provider: Arc<dyn TaskAuthProvider>) {
     let _ = AUTH_PROVIDER.set(provider);
 }
 
-/// Get the global auth provider for task RPC.
+/// 获取全局 AuthProvider，未初始化时返回 None
 pub fn auth_provider() -> Option<&'static Arc<dyn TaskAuthProvider>> {
     AUTH_PROVIDER.get()
 }
 
-// ── Monitoring UUID provider trait ──────────────────────────────────
+// ── Monitoring UUID provider trait ──────────────────────────────
 
-/// Trait for monitoring UUID cache operations needed by task RPC.
+/// 监控 UUID 缓存操作 trait，由服务器二进制实现并注入
 ///
-/// The server crate implements this to provide concrete cache operations.
+/// 任务创建时需确保目标 Agent UUID 已注册到 monitoring_uuid 表
 pub trait MonitoringUuidProvider: Send + Sync + 'static {
-    /// Get or insert a UUID into the monitoring UUID table.
+    /// 获取或插入 UUID 到 monitoring_uuid 表，返回对应 i16 ID
     fn get_or_insert(
         &self,
         uuid: Uuid,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<i16, NodegetError>> + Send>>;
 
-    /// Reload the monitoring UUID cache.
+    /// 刷新 monitoring_uuid 缓存
     fn reload(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 }
 
+/// 全局 MonitoringUuidProvider 单例，由服务器启动时注入
 static MONITORING_UUID_PROVIDER: OnceLock<Arc<dyn MonitoringUuidProvider>> = OnceLock::new();
 
-/// Set the global monitoring UUID provider for task RPC.
+/// 设置全局 MonitoringUuidProvider，服务器启动时调用一次
 pub fn set_monitoring_uuid_provider(provider: Arc<dyn MonitoringUuidProvider>) {
     let _ = MONITORING_UUID_PROVIDER.set(provider);
 }
 
-/// Get the global monitoring UUID provider for task RPC.
+/// 获取全局 MonitoringUuidProvider，未初始化时返回 None
 pub fn monitoring_uuid_provider() -> Option<&'static Arc<dyn MonitoringUuidProvider>> {
     MONITORING_UUID_PROVIDER.get()
 }
 
-// ── RPC trait definition ──────────────────────────────────────────
+// ── RPC trait 定义 ──────────────────────────────────────────
 
+/// Task RPC 接口定义，所有方法返回 `RpcResult<Box<RawValue>>` 以统一日志格式
 #[rpc(server, namespace = "task")]
 pub trait Rpc {
-    #[subscription(name = "register_task", item = crate::types::TaskEvent, unsubscribe = "unregister_task")]
+    /// 订阅任务事件流，Agent 通过此方法接收待执行的任务
+    #[subscription(name = "register_task", item = crate::types::TaskEvent, unsubscribe = "unregister_task"
+    )]
     async fn register_task(&self, token: String, uuid: Uuid) -> SubscriptionResult;
 
+    /// 创建任务并立即返回任务 ID
     #[method(name = "create_task")]
     async fn create_task(
         &self,
@@ -105,6 +124,7 @@ pub trait Rpc {
         task_type: crate::types::TaskEventType,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 创建任务并阻塞等待 Agent 返回结果，超时则返回错误
     #[method(name = "create_task_blocking")]
     async fn create_task_blocking(
         &self,
@@ -114,6 +134,7 @@ pub trait Rpc {
         timeout_ms: u64,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// Agent 上传任务执行结果
     #[method(name = "upload_task_result")]
     async fn upload_task_result(
         &self,
@@ -121,6 +142,7 @@ pub trait Rpc {
         task_response: crate::types::TaskEventResponse,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 查询任务记录，支持多条件过滤
     #[method(name = "query")]
     async fn query(
         &self,
@@ -128,6 +150,7 @@ pub trait Rpc {
         task_data_query: crate::types::query::TaskDataQuery,
     ) -> RpcResult<Box<RawValue>>;
 
+    /// 删除任务记录，支持多条件过滤
     #[method(name = "delete")]
     async fn delete(
         &self,
@@ -136,7 +159,9 @@ pub trait Rpc {
     ) -> RpcResult<Box<RawValue>>;
 }
 
+/// Task RPC 实现，持有 `TaskManager` 和 `RpcHelper` 提供的数据库访问能力
 pub struct TaskRpcImpl {
+    /// 任务广播管理器，负责会话注册、事件分发和 blocking waiter 管理
     pub manager: Arc<TaskManager>,
 }
 
@@ -238,6 +263,7 @@ impl RpcServer for TaskRpcImpl {
 
         tracing::info!(target: "task", "subscription requested");
 
+        // 解析 Token 格式，失败则拒绝订阅
         let Ok(token_or_auth) = TokenOrAuth::from_full_token(&token) else {
             tracing::error!(target: "task", "token parse error, rejecting subscription");
             subscription_sink
@@ -250,6 +276,7 @@ impl RpcServer for TaskRpcImpl {
             return Ok(());
         };
 
+        // 获取 AuthProvider，未初始化则拒绝
         let provider = auth_provider()
             .ok_or_else(|| {
                 jsonrpsee::types::ErrorObject::borrowed(101, "Auth provider not initialized", None)
@@ -267,6 +294,7 @@ impl RpcServer for TaskRpcImpl {
             return Ok(());
         };
 
+        // 检查 Task::Listen 权限，scope 为目标 Agent UUID
         let is_allowed_result = provider
             .check_token_limit(
                 &token_or_auth,
@@ -304,6 +332,7 @@ impl RpcServer for TaskRpcImpl {
             }
         }
 
+        // 权限校验通过，接受订阅并注册会话
         let sink = subscription_sink.accept().await?;
         let (tx, mut rx) = mpsc::channel(32);
         let reg_id = Uuid::new_v4();
@@ -315,10 +344,11 @@ impl RpcServer for TaskRpcImpl {
         let uuid_clone = uuid;
         let reg_id_clone = reg_id;
 
-        // Drop the span guard before spawning so the spawned task doesn't inherit it
+        // 在 spawn 之前释放 span guard，避免 spawned task 继承当前 span
         drop(_guard);
         let forward_span = span.clone();
 
+        // 消息转发协程：将 mpsc 接收到的 TaskEvent 序列化后推送到 WebSocket
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let json_str = match serde_json::to_string(&msg) {
@@ -341,6 +371,7 @@ impl RpcServer for TaskRpcImpl {
                 }
             }
 
+            // 客户端断连或序列化失败，清理会话
             manager_clone
                 .remove_session(&uuid_clone, &reg_id_clone)
                 .await;
@@ -351,20 +382,32 @@ impl RpcServer for TaskRpcImpl {
     }
 }
 
-// ── TaskManager ────────────────────────────────────────────────────
+// ── TaskManager ────────────────────────────────────────────────
 
+/// 已连接 Agent 的会话表：UUID → (注册 ID, 任务事件发送端)
 type Peers = Arc<RwLock<HashMap<Uuid, (Uuid, mpsc::Sender<crate::types::TaskEvent>)>>>;
+
+/// Blocking waiter 表：task_id → oneshot 发送端，用于 `create_task_blocking` 等待结果
 type BlockingWaiters = Arc<RwLock<HashMap<u64, oneshot::Sender<crate::types::TaskEventResponse>>>>;
 
+/// 全局 TaskManager 单例，延迟初始化
 static GLOBAL_TASK_MANAGER: OnceLock<Arc<TaskManager>> = OnceLock::new();
 
+/// 任务广播管理器，负责 Agent 会话注册、任务事件分发和 blocking waiter 管理
+///
+/// 每个 Agent 通过 WebSocket 订阅 `register_task`，在此注册一个 mpsc Sender；
+/// 创建任务时通过 `send_event` 将 `TaskEvent` 发送到对应 Sender；
+/// `create_task_blocking` 通过 oneshot channel 等待 Agent 返回结果。
 #[derive(Clone)]
 pub struct TaskManager {
+    /// 已连接 Agent 的会话表
     peers: Peers,
+    /// 等待结果的 blocking waiter 表
     blocking_waiters: BlockingWaiters,
 }
 
 impl TaskManager {
+    /// 创建新的 TaskManager 实例
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -373,11 +416,17 @@ impl TaskManager {
         }
     }
 
+    /// 获取全局 TaskManager 单例，首次调用时初始化
     #[must_use]
     pub fn global() -> &'static Arc<Self> {
         GLOBAL_TASK_MANAGER.get_or_init(|| Arc::new(Self::new()))
     }
 
+    /// 注册 Agent 会话，UUID 相同时覆盖旧会话
+    ///
+    /// - `uuid` — Agent 的 UUID
+    /// - `reg_id` — 本次订阅的注册 ID，用于后续精确移除
+    /// - `tx` — 任务事件发送端，Agent 消费端接收 `TaskEvent`
     pub async fn add_session(
         &self,
         uuid: Uuid,
@@ -388,6 +437,7 @@ impl TaskManager {
         debug!(target: "task", uuid = %uuid, reg_id = %reg_id, "session registered");
     }
 
+    /// 移除 Agent 会话，仅当 reg_id 匹配时才移除（防止误删新会话）
     pub async fn remove_session(&self, uuid: &Uuid, reg_id: &Uuid) {
         let mut peers = self.peers.write().await;
 
@@ -400,6 +450,12 @@ impl TaskManager {
         drop(peers);
     }
 
+    /// 向指定 Agent 发送任务事件
+    ///
+    /// - `uuid` — 目标 Agent UUID
+    /// - `event` — 任务事件
+    ///
+    /// 返回错误码：(103, 发送失败消息) 或 (104, Agent 未连接)
     pub async fn send_event(
         &self,
         uuid: Uuid,
@@ -436,7 +492,8 @@ impl TaskManager {
     }
 
     /// 尝试通知 blocking waiter（upload_task_result 时调用）
-    /// 返回 true 表示有 waiter 被通知
+    ///
+    /// 返回 `true` 表示有 waiter 被通知，`false` 表示无人在等待
     pub async fn notify_blocking_waiter(
         &self,
         task_id: u64,
@@ -451,7 +508,7 @@ impl TaskManager {
     }
 }
 
-/// Build and return the `task` RPC module, ready to merge into the server's RPC router.
+/// 构建 Task RPC 模块，注册所有 `task_*` 方法，用于合并到服务器 RPC 路由
 pub fn rpc_module() -> jsonrpsee::RpcModule<TaskRpcImpl> {
     TaskRpcImpl {
         manager: TaskManager::global().clone(),

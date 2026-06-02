@@ -14,10 +14,10 @@ Task 是本项目的重要功能之一，也可以称为 `任务` 等
 
 ### 订阅方法
 
-| 订阅方法                                          | 描述                      |
-|------------------------------------------------|-------------------------|
-| [task_register_task](./crud.md#register-task)  | Agent 订阅任务下发通道           |
-| 取消订阅: `task_unregister_task`                      | Agent 取消任务订阅             |
+| 订阅方法                                          | 描述             |
+|-----------------------------------------------|----------------|
+| [task_register_task](./crud.md#register-task) | Agent 订阅任务下发通道 |
+| 取消订阅: `task_unregister_task`                  | Agent 取消任务订阅   |
 
 Agent 端实现请参考 [agent.md](./agent.md)。
 

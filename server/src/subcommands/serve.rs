@@ -1,3 +1,14 @@
+//! `serve` 子命令——HTTP/WebSocket 服务器启动与运行
+//!
+//! 职责：
+//! 1. 初始化所有全局缓存和 trait 注入（依赖倒置）
+//! 2. 构建路由表：JSON-RPC、静态文件、WebDAV、JS Worker HTTP 路由、Terminal WebSocket
+//! 3. 启动 TCP 监听（可选 TLS）和 Unix Socket 监听
+//! 4. 监听配置热重载信号，优雅关闭后由 main 循环重启
+//!
+//! 同时包含所有 trait 注入的具体实现（ServerAuthProvider、KvTokenChecker 等），
+//! 这些结构体将 ng-* crate 的抽象接口桥接到 `ng_token` 的具体逻辑。
+
 use axum::routing::any;
 use axum::{extract::Path, http::StatusCode};
 use base64::Engine as _;
@@ -20,6 +31,17 @@ use tracing::{debug, error, info, warn};
 use crate::rpc_nodeget::get_modules;
 use crate::rpc_timing::RpcTimingMiddleware;
 
+/// 启动服务器主循环
+///
+/// 内部步骤：
+/// 1. 安装 rustls 默认 provider（TLS 所需）
+/// 2. 初始化 Super Token
+/// 3. 初始化所有全局缓存（Token、Monitoring、Static、Crontab、JS Runtime Pool、DB Registry）
+/// 4. 注入所有 trait providers（AuthChecker、AuthProvider、TokenChecker 等）
+/// 5. 构建 RPC 模块和 axum 路由表
+/// 6. 启动 TCP（可选 TLS）+ Unix Socket 监听
+/// 7. 通过 `tokio::select!` 同时等待：服务器正常退出 或 热重载信号
+/// 8. 退出前刷新 monitoring buffer、关闭 DB registry、清理 Unix socket 文件
 pub async fn run(config: &ServerConfig) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -68,42 +90,42 @@ pub async fn run(config: &ServerConfig) {
     debug!(target: "server", "DB registry manager initialized");
 
     // ── 注入 trait providers ──────────────────────────────────────
-    // ng-config: 注册 super token 验证函数
+    // ng-config：注册 super token 验证函数
     ng_config::server_rpc::register_check_super_token(|token_or_auth| {
         Box::pin(async move { ng_token::check_super_token(token_or_auth).await })
     });
     debug!(target: "server", "ng-config check_super_token registered");
 
-    // ng-db: 注册 auth provider
+    // ng-db：注册 auth provider
     ng_db::rpc::set_auth_provider(std::sync::Arc::new(ServerAuthProvider));
     debug!(target: "server", "ng-db auth provider registered");
 
-    // ng-kv: 注册 token permission checker
+    // ng-kv：注册 token permission checker
     ng_kv::set_token_checker(Box::new(KvTokenChecker));
     debug!(target: "server", "ng-kv token checker registered");
 
-    // ng-static: 注册 token permission checker
+    // ng-static：注册 token permission checker
     ng_static::auth::set_token_checker(Box::new(StaticTokenChecker));
     debug!(target: "server", "ng-static token checker registered");
 
-    // ng-task: 注册 auth provider + monitoring UUID provider
+    // ng-task：注册 auth provider + monitoring UUID provider
     ng_task::set_auth_provider(std::sync::Arc::new(TaskAuthProvider));
     ng_task::set_monitoring_uuid_provider(std::sync::Arc::new(TaskMonitoringUuidProvider));
     debug!(target: "server", "ng-task providers registered");
 
-    // ng-js-worker: 注册 token permission checker
+    // ng-js-worker：注册 token permission checker
     ng_js_worker::set_token_checker(Box::new(JsWorkerTokenChecker));
     debug!(target: "server", "ng-js-worker token checker registered");
 
-    // ng-terminal: 注册 token permission checker
+    // ng-terminal：注册 token permission checker
     ng_terminal::set_token_checker(Box::new(TerminalTokenChecker));
     debug!(target: "server", "ng-terminal token checker registered");
 
-    // ng-js-runtime: 注册 JsWorkerService (inline_call + nodeget RPC dispatch)
+    // ng-js-runtime：注册 JsWorkerService (inline_call + nodeget RPC dispatch)
     ng_js_runtime::js_worker_service::set_js_worker_service(Box::new(JsWorkerServiceImpl));
     debug!(target: "server", "ng-js-runtime JsWorkerService registered");
 
-    // ng-crontab: 注册 JsWorkerScheduler (cron 触发 JS Worker 任务)
+    // ng-crontab：注册 JsWorkerScheduler (cron 触发 JS Worker 任务)
     ng_crontab::task::set_js_worker_scheduler(std::sync::Arc::new(CronJsWorkerScheduler));
     debug!(target: "server", "ng-crontab JsWorkerScheduler registered");
 
@@ -333,6 +355,7 @@ pub async fn run(config: &ServerConfig) {
             result = &mut serve_future => {
                 result.unwrap();
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;
                 #[cfg(not(target_os = "windows"))]
                 if let Some(task) = unix_server_task.take() {
@@ -346,6 +369,7 @@ pub async fn run(config: &ServerConfig) {
                 .notified() => {
                 info!(target: "server", "Config reload requested, stopping TLS server...");
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let stop_handle = stop_handle.clone();
                 tokio::spawn(async move {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;
@@ -376,6 +400,7 @@ pub async fn run(config: &ServerConfig) {
             result = &mut serve_future => {
                 result.unwrap();
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 #[cfg(not(target_os = "windows"))]
                 if let Some(task) = unix_server_task.take() {
                     task.abort();
@@ -388,6 +413,7 @@ pub async fn run(config: &ServerConfig) {
                 .notified() => {
                 info!(target: "server", "Config reload requested, stopping server for restart...");
                 ng_monitoring::monitoring_buffer::flush_and_shutdown().await;
+                ng_db::DbRegistryManager::global().shutdown().await;
                 let stop_handle = stop_handle.clone();
                 tokio::spawn(async move {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stop_handle.shutdown()).await;
@@ -403,6 +429,9 @@ pub async fn run(config: &ServerConfig) {
     }
 }
 
+/// 渲染根路径着陆页 HTML
+///
+/// 包含服务器 UUID、版本号和常用链接。
 fn render_root_html(serv_uuid: &str, serv_version: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -431,6 +460,9 @@ fn render_root_html(serv_uuid: &str, serv_version: &str) -> String {
     )
 }
 
+/// 判断 HTTP 请求是否为 WebSocket 升级请求
+///
+/// 检查 `Upgrade: websocket` 和 `Connection: upgrade` 两个头字段。
 fn is_websocket_upgrade(headers: &axum::http::HeaderMap) -> bool {
     let has_upgrade_header = headers
         .get(axum::http::header::UPGRADE)
@@ -449,33 +481,62 @@ fn is_websocket_upgrade(headers: &axum::http::HeaderMap) -> bool {
     has_upgrade_header && has_connection_upgrade
 }
 
+/// JS Worker HTTP 路由的请求头结构
 #[derive(Debug, Serialize)]
 struct JsRouteHeader {
+    /// 头字段名
     name: String,
+    /// 头字段值
     value: String,
 }
 
+/// JS Worker HTTP 路由的输入参数
 #[derive(Debug, Serialize)]
 struct JsRouteInput {
+    /// HTTP 方法（GET/POST 等）
     method: String,
+    /// 完整请求 URL
     url: String,
+    /// 请求头列表
     headers: Vec<JsRouteHeader>,
+    /// 请求体（Base64 编码）
     body_base64: String,
 }
 
+/// JS Worker HTTP 路由的输出结构
 #[derive(Debug, Deserialize)]
 struct JsRouteOutput {
+    /// HTTP 状态码
     status: u16,
+    /// 响应头列表
     headers: Vec<JsRouteOutputHeader>,
+    /// 响应体（Base64 编码）
     body_base64: String,
 }
 
+/// JS Worker HTTP 路由输出的响应头
 #[derive(Debug, Deserialize)]
 struct JsRouteOutputHeader {
+    /// 头字段名
     name: String,
+    /// 头字段值
     value: String,
 }
 
+/// 处理 JS Worker HTTP 路由请求
+///
+/// 内部步骤：
+/// 1. 校验 `route_name` 非空
+/// 2. 提取客户端 IP（从 `ConnectInfo` 或默认 127.0.0.1）
+/// 3. 构建完整 URL（处理 x-forwarded-proto 和 Host 头）
+/// 4. 注入 ng-connecting-ip 头供 JS 脚本获取真实 IP
+/// 5. 读取请求体（上限 8MB）并 Base64 编码
+/// 6. 从数据库查询 `route_name` 对应的 JS Worker
+/// 7. 在 `QuickJS` 运行时池中执行脚本
+/// 8. 解析脚本输出（`JsRouteOutput`），构建 HTTP 响应返回
+///
+/// - `route_name`：JS Worker 路由名称
+/// - req：原始 HTTP 请求
 async fn handle_js_worker_route(
     route_name: String,
     req: axum::extract::Request,
@@ -488,6 +549,7 @@ async fn handle_js_worker_route(
         return build_http_error(StatusCode::BAD_REQUEST, "route_name cannot be empty");
     }
 
+    // 提取客户端 IP
     let peer_ip = req
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
@@ -496,6 +558,7 @@ async fn handle_js_worker_route(
     let (parts, body) = req.into_parts();
     let method = parts.method.to_string();
     let uri = parts.uri.to_string();
+    // 处理反向代理场景下的协议和主机名
     let scheme = parts
         .headers
         .get("x-forwarded-proto")
@@ -512,6 +575,7 @@ async fn handle_js_worker_route(
         format!("{scheme}://{host}{uri}")
     };
 
+    // 收集请求头，过滤并注入 ng-connecting-ip
     let mut headers = parts
         .headers
         .iter()
@@ -528,6 +592,7 @@ async fn handle_js_worker_route(
         value: peer_ip,
     });
 
+    // 读取请求体（限制大小）
     let body_bytes = match axum::body::to_bytes(body, ROUTE_BODY_LIMIT_BYTES).await {
         Ok(bytes) => bytes.to_vec(),
         Err(e) => {
@@ -549,6 +614,7 @@ async fn handle_js_worker_route(
         );
     };
 
+    // 从数据库查询 route_name 绑定的 JS Worker
     let model = match js_worker::Entity::find()
         .filter(js_worker::Column::RouteName.eq(route_name.as_str()))
         .one(&db)
@@ -579,14 +645,15 @@ async fn handle_js_worker_route(
         );
     };
 
+    // Base64 编码请求体（在 spawn_blocking 中执行以避免阻塞异步运行时）
     let body_base64 = tokio::task::spawn_blocking(move || {
         base64::engine::general_purpose::STANDARD.encode(&body_bytes)
     })
-    .await
-    .unwrap_or_else(|e| {
-        error!(target: "js_worker", route_name = %route_name, error = %e, "base64 encoding task panicked");
-        String::new()
-    });
+        .await
+        .unwrap_or_else(|e| {
+            error!(target: "js_worker", route_name = %route_name, error = %e, "base64 encoding task panicked");
+            String::new()
+        });
     let js_input = JsRouteInput {
         method,
         url,
@@ -604,13 +671,14 @@ async fn handle_js_worker_route(
         }
     };
 
+    // 构建运行时限制参数
     let env = model.env.unwrap_or_else(|| serde_json::json!({}));
     let limits = RuntimeLimits::from_model(
         model.max_run_time,
         model.max_stack_size,
         model.max_heap_size,
     );
-    let run_result = runtime_pool::init_global_pool()
+    let run_result = runtime_pool::global_pool()
         .execute_script(
             model.name.as_str(),
             bytecode,
@@ -633,6 +701,7 @@ async fn handle_js_worker_route(
         }
     };
 
+    // 解析 JS 脚本输出
     let js_output: JsRouteOutput = match serde_json::from_value(js_value) {
         Ok(v) => v,
         Err(e) => {
@@ -644,6 +713,7 @@ async fn handle_js_worker_route(
         }
     };
 
+    // 构建响应：过滤危险头（content-encoding、transfer-encoding 由框架处理）
     let status = StatusCode::from_u16(js_output.status).unwrap_or(StatusCode::OK);
     let mut response = axum::http::Response::builder().status(status);
     for header in js_output.headers {
@@ -657,6 +727,7 @@ async fn handle_js_worker_route(
         }
     }
 
+    // 解码 Base64 响应体
     let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&js_output.body_base64)
     {
         Ok(v) => v,
@@ -680,6 +751,9 @@ async fn handle_js_worker_route(
         })
 }
 
+/// 根据文件扩展名猜测 MIME 类型
+///
+/// 覆盖常见 Web 静态资源类型，未匹配时返回 `application/octet-stream`。
 fn guess_mime_type(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html" | "htm") => "text/html; charset=utf-8",
@@ -701,6 +775,15 @@ fn guess_mime_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// 提供静态文件服务
+///
+/// - `sub_path`：静态文件桶的子路径
+/// - path：请求 URI 路径
+/// - cors：是否添加 CORS 允许头
+/// - method：HTTP 方法（仅允许 GET/HEAD，其他返回 405）
+///
+/// 路径安全：使用 [`resolve_safe_file_path`] 防止路径遍历攻击。
+/// 目录请求自动回落到 index.html。
 async fn serve_static_file(
     sub_path: &str,
     path: &str,
@@ -727,6 +810,7 @@ async fn serve_static_file(
         path.trim_start_matches('/')
     };
 
+    // 路径安全校验，防止目录遍历
     let resolved = match resolve_safe_file_path(&static_path, sub_path, file_path) {
         Ok(p) => p,
         Err(e) => return build_static_error(StatusCode::BAD_REQUEST, format!("{e}"), cors),
@@ -773,6 +857,7 @@ async fn serve_static_file(
         .unwrap_or_else(|e| build_http_error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))
 }
 
+/// 构建通用 HTTP 错误响应（text/plain）
 fn build_http_error(
     status: StatusCode,
     message: impl Into<String>,
@@ -787,7 +872,7 @@ fn build_http_error(
         .expect("Failed to build error response")
 }
 
-/// 静态文件服务专用的错误响应：按需带上 CORS 头，便于浏览器读取错误信息
+/// 构建静态文件服务专用错误响应：按需带上 CORS 头，便于浏览器读取错误信息
 fn build_static_error(
     status: StatusCode,
     message: impl Into<String>,
@@ -805,6 +890,12 @@ fn build_static_error(
         .expect("Failed to build error response")
 }
 
+/// 绑定 Unix Socket 监听器
+///
+/// 内部步骤：
+/// 1. 创建父目录（如不存在）
+/// 2. 删除已有的 socket 文件（避免地址已占用错误）
+/// 3. 绑定新监听器
 #[cfg(not(target_os = "windows"))]
 async fn bind_unix_listener(path: &str) -> std::io::Result<tokio::net::UnixListener> {
     use std::io::ErrorKind;
@@ -824,6 +915,9 @@ async fn bind_unix_listener(path: &str) -> std::io::Result<tokio::net::UnixListe
     tokio::net::UnixListener::bind(socket_path)
 }
 
+/// 清理 Unix Socket 文件
+///
+/// 服务器关闭时调用，删除 socket 文件以避免残留。
 #[cfg(not(target_os = "windows"))]
 async fn cleanup_unix_socket_file(path: Option<&str>) {
     use std::io::ErrorKind;
@@ -837,9 +931,9 @@ async fn cleanup_unix_socket_file(path: Option<&str>) {
     }
 }
 
-// ── Trait implementations for dependency injection ──────────────────
+// ── Trait 注入的具体实现（依赖倒置）──────────────────────────
 
-/// ng-db auth provider: delegates to `ng_token::check_token_limit` / `check_super_token`
+/// ng-db `AuthProvider` 实现：委托至 `ng_token::check_token_limit` / `check_super_token`
 struct ServerAuthProvider;
 
 impl ng_db::rpc::AuthProvider for ServerAuthProvider {
@@ -864,7 +958,7 @@ impl ng_db::rpc::AuthProvider for ServerAuthProvider {
     }
 }
 
-/// ng-kv token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
+/// ng-kv `TokenPermissionChecker` 实现：委托至 `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct KvTokenChecker;
 
 impl ng_kv::TokenPermissionChecker for KvTokenChecker {
@@ -906,7 +1000,7 @@ impl ng_kv::TokenPermissionChecker for KvTokenChecker {
     }
 }
 
-/// ng-static token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token`
+/// ng-static `TokenPermissionChecker` 实现：委托至 `ng_token::check_token_limit` / `check_super_token`
 struct StaticTokenChecker;
 
 impl ng_static::auth::TokenPermissionChecker for StaticTokenChecker {
@@ -933,7 +1027,7 @@ impl ng_static::auth::TokenPermissionChecker for StaticTokenChecker {
     }
 }
 
-/// ng-task auth provider: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
+/// ng-task `TaskAuthProvider` 实现：委托至 `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct TaskAuthProvider;
 
 impl ng_task::TaskAuthProvider for TaskAuthProvider {
@@ -972,7 +1066,7 @@ impl ng_task::TaskAuthProvider for TaskAuthProvider {
     }
 }
 
-/// ng-task monitoring UUID provider: delegates to `ng_monitoring::MonitoringUuidCache`
+/// ng-task `MonitoringUuidProvider` 实现：委托至 `ng_monitoring::MonitoringUuidCache`
 struct TaskMonitoringUuidProvider;
 
 impl ng_task::MonitoringUuidProvider for TaskMonitoringUuidProvider {
@@ -996,7 +1090,7 @@ impl ng_task::MonitoringUuidProvider for TaskMonitoringUuidProvider {
     }
 }
 
-/// ng-js-worker token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token` / `get_token`
+/// ng-js-worker `TokenPermissionChecker` 实现：委托至 `ng_token::check_token_limit` / `check_super_token` / `get_token`
 struct JsWorkerTokenChecker;
 
 impl ng_js_worker::TokenPermissionChecker for JsWorkerTokenChecker {
@@ -1038,7 +1132,7 @@ impl ng_js_worker::TokenPermissionChecker for JsWorkerTokenChecker {
     }
 }
 
-/// ng-terminal token permission checker: delegates to `ng_token::check_token_limit` / `check_super_token`
+/// ng-terminal `TokenPermissionChecker` 实现：委托至 `ng_token::check_token_limit` / `check_super_token`
 struct TerminalTokenChecker;
 
 impl ng_terminal::TokenPermissionChecker for TerminalTokenChecker {
@@ -1065,22 +1159,27 @@ impl ng_terminal::TokenPermissionChecker for TerminalTokenChecker {
     }
 }
 
+/// ng-js-runtime `JsWorkerService` 实现：委托至 `ng_js_worker::service`
+///
+/// 提供两个功能：
+/// - `run_inline_call_and_record_result`：执行内联 JS 调用并记录结果
+/// - `get_rpc_module`：获取 RPC 模块分发器，供 JS 脚本调用内部 RPC
 struct JsWorkerServiceImpl;
 
 impl ng_js_runtime::js_worker_service::JsWorkerService for JsWorkerServiceImpl {
     fn run_inline_call_and_record_result(
         &self,
         js_script_name: String,
-        params: serde_json::Value,
+        params_json: String,
         timeout_sec: Option<f64>,
         inline_caller: Option<String>,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send>,
+        Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>,
     > {
         Box::pin(async move {
             ng_js_worker::service::run_inline_call_and_record_result(
                 js_script_name,
-                params,
+                params_json,
                 timeout_sec,
                 inline_caller,
             )
@@ -1105,6 +1204,9 @@ impl ng_js_runtime::js_worker_service::JsWorkerService for JsWorkerServiceImpl {
     }
 }
 
+/// RPC 模块 JSON 分发器
+///
+/// 实现 `RawJsonDispatcher`，使 JS 脚本可通过原始 JSON 字符串调用任意 RPC 方法。
 struct RpcModuleDispatcher(jsonrpsee::RpcModule<()>);
 
 impl ng_js_runtime::js_worker_service::RawJsonDispatcher for RpcModuleDispatcher {
@@ -1127,7 +1229,9 @@ impl ng_js_runtime::js_worker_service::RawJsonDispatcher for RpcModuleDispatcher
     }
 }
 
-/// ng-crontab `JsWorkerScheduler`: delegates to `ng_js_worker::service::enqueue_defined_js_worker_run`
+/// ng-crontab `JsWorkerScheduler` 实现：委托至 `ng_js_worker::service::enqueue_defined_js_worker_run`
+///
+/// 当 cron 任务触发时，将 JS Worker 执行任务入队。
 struct CronJsWorkerScheduler;
 
 impl ng_crontab::task::JsWorkerScheduler for CronJsWorkerScheduler {

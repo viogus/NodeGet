@@ -1,4 +1,8 @@
-// 系统监控相关功能
+//! 系统监控数据采集模块。
+//!
+//! 负责采集 CPU、内存、负载、系统信息等核心监控数据，
+//! 分为静态数据（[`StaticDataFromSystem`]）和动态数据（[`DynamicDataFromSystem`]）两类。
+//! 子模块 `process` 提供进程数统计，`virtualization_detect` 提供虚拟化环境检测。
 
 use crate::monitoring::refresh_global_system;
 use ng_monitoring::data_structure::{
@@ -10,7 +14,7 @@ use sysinfo::System;
 use tokio::sync::{Mutex, MutexGuard, OnceCell};
 use virtualization_detect::detect_virtualization;
 
-/// 把 `count_processes()` 的同步 IO（Linux 下是遍历 `/proc`，Windows 下是 `EnumProcesses`）
+/// 将 `count_processes()` 的同步 IO（Linux 下遍历 `/proc`，Windows 下 `EnumProcesses`）
 /// 卸到 tokio blocking 池，避免阻塞 runtime worker。失败时返回 0 与同步路径一致。
 async fn count_processes_async() -> u32 {
     tokio::task::spawn_blocking(count_processes)
@@ -18,7 +22,7 @@ async fn count_processes_async() -> u32 {
         .unwrap_or(0)
 }
 
-/// 获取精确的 OS 版本号
+/// 获取精确的 OS 版本号。
 ///
 /// 优先使用 sysinfo 的 `os_version()`（读取 `/etc/os-release` 的 `VERSION_ID`），
 /// 但某些发行版（如 Debian）的 `VERSION_ID` 只有主版本号（如 "11"），
@@ -26,8 +30,9 @@ async fn count_processes_async() -> u32 {
 ///
 /// 采用 `tokio::fs` 的异步读取，避免在 tokio runtime worker 上做 blocking IO；
 /// `/etc/*` 本地文件几乎都是内存页缓存命中，开销极小。
-// 非 Linux 平台上函数体里没有 `.await`（Linux 专属分支被 `cfg` 剔除），clippy 会
-// 误报 unused_async；保留 async 签名便于调用点统一（跨平台 `.await` 写法相同）。
+///
+/// 非 Linux 平台上函数体里没有 `.await`（Linux 专属分支被 `cfg` 剔除），clippy 会
+/// 误报 `unused_async`；保留 async 签名便于调用点统一（跨平台 `.await` 写法相同）。
 #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_async))]
 async fn get_precise_os_version() -> String {
     let version = System::os_version().unwrap_or_default();
@@ -74,26 +79,27 @@ async fn get_precise_os_version() -> String {
     version
 }
 
-// 进程监控模块
+/// 进程数统计模块
 pub mod process;
-// 虚拟化检测模块
+/// 虚拟化环境检测模块
 pub mod virtualization_detect;
 
-// 从系统获取的静态数据结构，包含 CPU 和系统的基本信息
+/// 从系统获取的静态数据结构，包含 CPU 和系统的基本信息。
 #[derive(Debug)]
 pub struct StaticDataFromSystem(pub StaticCPUData, pub StaticSystemData);
 
-// 全局静态系统数据实例，用于缓存系统静态信息
+/// 全局静态系统数据实例，用于缓存系统静态信息。
 static GLOBAL_STATIC_DATA_FROM_SYSTEM: OnceCell<Mutex<StaticDataFromSystem>> =
     OnceCell::const_new();
 
 impl StaticDataFromSystem {
-    // 创建新的静态系统数据实例
-    //
-    // 该函数刷新系统信息并获取 CPU 和系统的基本静态信息，如核心数、品牌、系统名称等
-    //
-    // # 返回值
-    // 返回包含 CPU 和系统静态数据的结构体
+    /// 创建新的静态系统数据实例。
+    ///
+    /// 1. 刷新全局系统信息
+    /// 2. 获取每核 CPU 静态信息（名称、厂商、品牌）
+    /// 3. 获取系统静态信息（内核、架构、虚拟化等）
+    ///
+    /// 返回包含 CPU 和系统静态数据的结构体。
     pub async fn new() -> Self {
         refresh_global_system().await;
         let system_mutex = crate::monitoring::get_global_system().await;
@@ -136,12 +142,11 @@ impl StaticDataFromSystem {
         )
     }
 
-    // 获取静态系统数据的可变引用
-    //
-    // 如果全局静态系统数据实例不存在，则初始化它；否则直接返回现有的实例
-    //
-    // # 返回值
-    // 返回静态系统数据的互斥锁保护的可变引用
+    /// 获取静态系统数据的可变引用。
+    ///
+    /// 如果全局静态系统数据实例不存在，则初始化它；否则直接返回现有的实例。
+    ///
+    /// 返回静态系统数据的 `MutexGuard`。
     pub async fn get() -> MutexGuard<'static, Self> {
         let data_mutex = GLOBAL_STATIC_DATA_FROM_SYSTEM
             .get_or_init(|| async { Mutex::new(Self::new().await) })
@@ -151,7 +156,7 @@ impl StaticDataFromSystem {
     }
 }
 
-// 从系统获取的动态数据结构，包含 CPU、内存、负载和系统实时数据
+/// 从系统获取的动态数据结构，包含 CPU、内存、负载和系统实时数据。
 #[derive(Debug)]
 pub struct DynamicDataFromSystem(
     pub DynamicCPUData,
@@ -159,17 +164,20 @@ pub struct DynamicDataFromSystem(
     pub DynamicLoadData,
     pub DynamicSystemData,
 );
-// 全局动态系统数据实例，用于缓存系统动态信息
+/// 全局动态系统数据实例，用于缓存系统动态信息。
 static GLOBAL_DYNAMIC_DATA_FROM_SYSTEM: OnceCell<Mutex<DynamicDataFromSystem>> =
     OnceCell::const_new();
 
 impl DynamicDataFromSystem {
-    // 创建新的动态系统数据实例
-    //
-    // 该函数刷新系统信息并获取 CPU、内存、负载和系统的动态信息
-    //
-    // # 返回值
-    // 返回包含 CPU、内存、负载和系统动态数据的结构体
+    /// 创建新的动态系统数据实例。
+    ///
+    /// 1. 刷新全局系统信息
+    /// 2. 获取每核 CPU 使用率和频率
+    /// 3. 获取内存和 Swap 使用情况
+    /// 4. 获取负载均值
+    /// 5. 获取启动时间、运行时间和进程数
+    ///
+    /// 返回包含 CPU、内存、负载和系统动态数据的结构体。
     async fn new() -> Self {
         refresh_global_system().await;
         let system_mutex = crate::monitoring::get_global_system().await;
@@ -214,9 +222,9 @@ impl DynamicDataFromSystem {
         )
     }
 
-    // 更新动态系统数据
-    //
-    // 该函数刷新现有系统数据，更新 CPU 使用率和频率、内存使用情况、负载和系统信息
+    /// 更新动态系统数据。
+    ///
+    /// 刷新现有系统数据，更新 CPU 使用率和频率、内存使用情况、负载和系统信息。
     async fn update(&mut self) {
         // 仅处理变更数据
         refresh_global_system().await;
@@ -246,12 +254,11 @@ impl DynamicDataFromSystem {
         self.3.process_count = u64::from(count_processes_async().await);
     }
 
-    // 异步刷新并获取动态系统数据
-    //
-    // 如果全局动态系统数据实例不存在，则初始化它；否则更新现有数据并返回
-    //
-    // # 返回值
-    // 返回动态系统数据的互斥锁保护的可变引用
+    /// 异步刷新并获取动态系统数据。
+    ///
+    /// 如果全局动态系统数据实例不存在，则初始化它；否则更新现有数据并返回。
+    ///
+    /// 返回动态系统数据的 `MutexGuard`。
     pub async fn refresh_and_get() -> MutexGuard<'static, Self> {
         // 外部调用
         let data_mutex = GLOBAL_DYNAMIC_DATA_FROM_SYSTEM

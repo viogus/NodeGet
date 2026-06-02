@@ -1,3 +1,8 @@
+//! `token_roll_token_secret` RPC 方法实现。
+//!
+//! 重新生成指定 Token 的 secret，仅超级令牌可调用。
+//! 轮换后旧 secret 立即失效。
+
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
 use ng_core::utils::generate_random_string;
@@ -10,21 +15,20 @@ use super::utils::{find_target_token, verify_supertoken};
 use crate::cache::TokenCache;
 use crate::hash_string;
 
-/// 重新生成目标 token 的 secret（Super Token 专用）
+/// 重新生成目标 Token 的 secret（仅超级令牌可调用）。
 ///
-/// # 参数
-/// - `token` — Super Token（用于鉴权）
-/// - `target_token` — 目标 token 的 `token_key` 或 `username`
-///   - 支持纯 `token_key`、`username`，或 `token_key:secret` 格式（secret 不校验）
+/// - `token`：超级令牌凭据（用于鉴权）
+/// - `target_token`：目标 Token 的 `token_key` 或 `username`；
+///   支持纯 `token_key`、`username`，或 `token_key:secret` 格式（secret 不校验）
+/// - 返回：成功时为 `{"key":"<token_key>","secret":"<new_secret>"}`
+/// - 错误：鉴权失败、目标不存在、数据库错误
 ///
-/// # 返回值
-/// 成功时返回新的 `token_secret`：
-/// ```json
-/// {"key":"<token_key>","secret":"<new_secret>"}
-/// ```
-///
-/// # 鉴权
-/// 仅 Super Token 可以调用。
+/// 内部步骤：
+/// 1. 验证调用者为超级令牌
+/// 2. 查找目标 Token 记录
+/// 3. 生成新的 32 字符随机 secret，计算哈希
+/// 4. 更新数据库中的 token_hash
+/// 5. 刷新 TokenCache
 pub async fn roll_token_secret(token: String, target_token: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         verify_supertoken(&token).await?;
@@ -52,6 +56,7 @@ pub async fn roll_token_secret(token: String, target_token: String) -> RpcResult
             "token secret rolled successfully"
         );
 
+        // 轮换成功后刷新缓存，使旧 secret 立即失效
         if let Err(e) = TokenCache::reload().await {
             tracing::error!(
                 target: "token",
@@ -60,14 +65,17 @@ pub async fn roll_token_secret(token: String, target_token: String) -> RpcResult
             );
         }
 
-        let response = format!(
-            r#"{{"key":"{}","secret":"{}"}}"#,
-            updated.token_key, new_secret
-        );
-        RawValue::from_string(response)
-            .map_err(|e| NodegetError::SerializationError(format!("{e}")).into())
+        let json_str = serde_json::to_string(&serde_json::json!({
+            "key": updated.token_key,
+            "secret": new_secret
+        }))
+        .map_err(|e| NodegetError::SerializationError(format!("{e}")))?;
+
+        RawValue::from_string(json_str)
+            .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
     };
 
+    // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject
     match process_logic.await {
         Ok(result) => Ok(result),
         Err(e) => {

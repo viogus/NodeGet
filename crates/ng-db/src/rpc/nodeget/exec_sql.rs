@@ -1,4 +1,6 @@
-use crate::db_registry::{is_read_query, json_to_sea_value, row_to_json};
+//! `nodeget-server::exec_sql` RPC 实现 — 在主库上执行 SQL
+
+use crate::db_registry::{json_to_sea_value, row_to_json};
 use crate::rpc::{to_rpc_error, token_identity};
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -9,6 +11,23 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use tracing::{debug, warn};
 
+/// 在主库上执行 SQL 语句，需要 `NodeGet::ExecSql` 权限（Global 作用域）
+///
+/// - `token` — 认证 Token
+/// - `sql` — SQL 语句
+/// - `params` — 参数数组或 null
+/// - 返回值：包含 `data`、`row_count`、`truncated` 的响应
+///
+/// 内部步骤：
+/// 1. 解析 Token 并检查 `NodeGet::ExecSql` 权限
+/// 2. 从全局单例获取主库连接
+/// 3. 解析参数为 `SeaORM` `Value` 数组
+/// 4. 执行 SQL 并收集结果行
+/// 5. 超过 10000 行时截断并标记 `truncated: true`
+///
+/// # Errors
+///
+/// 当 Token 解析失败、认证提供者未初始化、权限不足、数据库未初始化或 SQL 执行失败时返回错误
 pub async fn exec_sql(
     token: String,
     sql: String,
@@ -48,33 +67,29 @@ pub async fn exec_sql(
             Some(Value::Array(arr)) => arr.iter().map(json_to_sea_value).collect(),
             Some(Value::Null) | None => vec![],
             _ => {
-                return Err(
-                    NodegetError::InvalidInput("params must be an array".to_owned()).into(),
-                );
+                return Err(NodegetError::InvalidInput(
+                    "params must be an array or null".to_owned(),
+                )
+                .into());
             }
         };
 
         let stmt = Statement::from_sql_and_values(db_backend, &sql, sea_values);
 
-        let is_select = is_read_query(&sql);
+        let mut rows = db.query_all_raw(stmt).await?;
+        let total_count = rows.len() as u64;
+        let truncated = rows.len() > 10_000;
+        if truncated {
+            rows.truncate(10_000);
+        }
+        let json_rows: Vec<Value> = rows.iter().map(row_to_json).collect();
 
-        let response = if is_select {
-            let rows = db.query_all_raw(stmt).await?;
-            let json_rows: Vec<Value> = rows.iter().map(row_to_json).collect();
-
-            serde_json::json!({
-                "success": true,
-                "data": json_rows,
-                "row_count": json_rows.len(),
-            })
-        } else {
-            let result = db.execute_raw(stmt).await?;
-            serde_json::json!({
-                "success": true,
-                "data": [],
-                "row_count": result.rows_affected(),
-            })
-        };
+        let response = serde_json::json!({
+            "success": true,
+            "data": json_rows,
+            "row_count": total_count,
+            "truncated": truncated,
+        });
 
         let json_str = serde_json::to_string(&response)?;
 

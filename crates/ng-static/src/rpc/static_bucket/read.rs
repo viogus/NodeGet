@@ -1,3 +1,7 @@
+//! `static-bucket.read` RPC 实现。
+//!
+//! 职责：鉴权（需 `StaticBucket::Read` 权限） -> 调用业务层 -> 序列化返回。
+
 use crate::auth::check_static_bucket_permission;
 use crate::ops::read_static;
 use jsonrpsee::core::RpcResult;
@@ -6,6 +10,12 @@ use ng_core::permission::data_structure::StaticBucket;
 use serde_json::value::RawValue;
 use tracing::debug;
 
+/// 处理 `static-bucket.read` RPC 请求。
+///
+/// - `token` - 认证 Token
+/// - `name` - 目标桶名称
+///
+/// 返回：桶配置模型序列化为 `RawValue`；桶不存在时返回 `NotFound` 错误。
 pub async fn read(token: String, name: String) -> RpcResult<Box<RawValue>> {
     let process_logic = async {
         debug!(target: "static_bucket", name = %name, "processing static-bucket_read request");
