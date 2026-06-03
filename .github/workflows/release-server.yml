@@ -255,7 +255,7 @@ jobs:
       - name: Download Linux musl binaries
         uses: actions/download-artifact@v8
         with:
-          pattern: server-x86_64-unknown-linux-musl,server-aarch64-unknown-linux-musl
+          pattern: server-*-musl
           path: downloads
           merge-multiple: true
 

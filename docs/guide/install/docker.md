@@ -1,13 +1,23 @@
 # Docker 安装
 
-## 安装 Server
-
 官方 Docker 镜像由 CI 从源码编译并推送到 Docker Hub：
 
 - `genshinmc/nodeget:latest`：最新发布版本镜像
 - `genshinmc/nodeget:vX.Y.Z`：Release tag 镜像
 
-### PostgreSQL + NodeGet
+## 一键
+
+```bash
+docker run -d \
+  --name nodeget \
+  -p 2211:2211 \
+  -v /your/host/path:/nodeget \
+  genshinmc/nodeget:latest
+```
+
+该命令默认使用 
+
+## PostgreSQL + NodeGet
 
 先进入一个用于存放 NodeGet Server 配置和数据的目录，然后执行：
 
@@ -16,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/NodeSeekDev/NodeGet/main/docker-com
 docker compose up -d
 ```
 
-### SQLite + NodeGet
+## SQLite + NodeGet
 
 同样先进入一个用于存放 NodeGet Server 配置和数据的目录，然后执行：
 
@@ -47,8 +57,7 @@ data/
 docker compose logs nodeget | grep -E 'Super Token'
 ```
 
-获取 Super Token
-后，可前往 [NodeGet Dashboard 的 Server 管理页面](https://dash.nodeget.com/#/dashboard/node-manage?tab=servers) 添加
+获取 Super Token 后，可前往 [NodeGet Dashboard 的 Server 管理页面](https://dash.nodeget.com/#/dashboard/node-manage?tab=servers) 添加
 Server。
 
 如需修改镜像 tag、端口映射、数据库账号等 Docker 部署参数，请编辑下载下来的 `docker-compose.yml`。
