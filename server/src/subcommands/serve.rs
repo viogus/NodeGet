@@ -23,6 +23,7 @@ use ng_db::entity::js_worker;
 use ng_js_runtime::RunType;
 use ng_js_runtime::RuntimeLimits;
 use ng_js_runtime::runtime_pool;
+use ng_js_worker::ensure_bytecode_version;
 use ng_static::cache::StaticCache;
 use ng_static::ops::{get_static_path, resolve_safe_file_path};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -673,12 +674,15 @@ async fn handle_js_worker_route(
         }
     };
 
-    let Some(bytecode) = model.js_byte_code else {
-        error!(target: "js_worker", route_name = %route_name, worker_name = %model.name, "js_worker has no precompiled bytecode");
-        return build_http_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("js_worker '{}' has no precompiled bytecode", model.name),
-        );
+    let bytecode = match ensure_bytecode_version(&model, &db).await {
+        Ok(bc) => bc,
+        Err(e) => {
+            error!(target: "js_worker", route_name = %route_name, worker_name = %model.name, error = %e, "js_worker bytecode version check/recompile failed");
+            return build_http_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("js_worker '{}' bytecode error: {e}", model.name),
+            );
+        }
     };
 
     // Base64 编码请求体（在 spawn_blocking 中执行以避免阻塞异步运行时）

@@ -23,22 +23,31 @@ use tracing::{debug, error, info, trace};
 
 /// 获取当前 QuickJS 字节码版本号（首字节）。
 ///
-/// 编译一个最小脚本提取 BC_VERSION，结果缓存在 `OnceLock` 中。
-fn current_bc_version() -> u8 {
+/// 在 `spawn_blocking` 中编译最小脚本提取 BC_VERSION，避免在 tokio runtime 内
+/// 调用 `compile_js_module_to_bytecode`（其内部 `block_on` 会创建嵌套 runtime 导致 panic）。
+/// 结果缓存在 `OnceLock` 中，后续调用零开销。
+async fn current_bc_version() -> u8 {
     static VERSION: OnceLock<u8> = OnceLock::new();
-    *VERSION.get_or_init(|| {
+    if let Some(&v) = VERSION.get() {
+        return v;
+    }
+    let v = tokio::task::spawn_blocking(|| {
         compile_js_module_to_bytecode("0")
             .ok()
             .and_then(|bc| bc.first().copied())
             .unwrap_or(0)
     })
+    .await
+    .unwrap_or(0);
+    let _ = VERSION.set(v);
+    v
 }
 
 /// 检查字节码版本是否匹配当前 QuickJS，不匹配时从源码重编译并更新 DB。
 ///
 /// - 匹配：原样返回 `bytecode`
 /// - 不匹配：用 `js_script` 重编译，写入 DB，驱逐运行时池中旧 worker，返回新字节码
-async fn ensure_bytecode_version(
+pub async fn ensure_bytecode_version(
     model: &js_worker::Model,
     db: &sea_orm::DatabaseConnection,
 ) -> anyhow::Result<Vec<u8>> {
@@ -49,7 +58,8 @@ async fn ensure_bytecode_version(
         ))
     })?;
 
-    if bytecode.first() == Some(&current_bc_version()) {
+    let version = current_bc_version().await;
+    if bytecode.first() == Some(&version) {
         return Ok(bytecode);
     }
 
@@ -57,7 +67,7 @@ async fn ensure_bytecode_version(
         target: "js_worker",
         name = %model.name,
         stored_version = bytecode.first().unwrap_or(&0),
-        current_version = current_bc_version(),
+        current_version = version,
         "Bytecode version mismatch, recompiling from source"
     );
 

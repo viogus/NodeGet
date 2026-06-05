@@ -24,7 +24,8 @@ pub use auth::{TokenPermissionChecker, set_token_checker};
 
 #[cfg(feature = "server")]
 pub use service::{
-    enqueue_defined_js_worker_run, enqueue_source_js_worker_run, run_inline_call_and_record_result,
+    enqueue_defined_js_worker_run, enqueue_source_js_worker_run, ensure_bytecode_version,
+    run_inline_call_and_record_result,
 };
 
 #[cfg(feature = "server")]
