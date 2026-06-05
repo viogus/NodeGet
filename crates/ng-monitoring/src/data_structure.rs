@@ -237,14 +237,44 @@ const EXCLUDED_MOUNT_PREFIXES: &[&str] = &[
     "/var/tmp",
     "/dev",
     "/run",
+    "/var/lib/containerd",
     "/var/lib/containers",
     "/var/lib/docker",
+    "/var/lib/kubelet/plugins",
+    "/var/lib/kubelet/plugins_registry",
+    "/var/lib/kubelet/pods",
+    "/var/lib/rancher/k3s/agent/containerd",
+    "/var/lib/rancher/k3s/agent/kubelet/plugins",
+    "/var/lib/rancher/k3s/agent/kubelet/plugins_registry",
+    "/var/lib/rancher/k3s/agent/kubelet/pods",
     "/proc",
     "/sys",
     "/sys/fs/cgroup",
     "/etc/resolv.conf",
     "/etc/host",
+    "/etc/hostname",
+    "/etc/hosts",
     "/nix/store",
+];
+
+/// 排除的文件系统类型列表，匹配这些类型的磁盘在摘要统计中被排除。
+const EXCLUDED_FILE_SYSTEMS: &[&str] = &[
+    "autofs",
+    "bpf",
+    "cgroup",
+    "cgroup2",
+    "debugfs",
+    "devtmpfs",
+    "fusectl",
+    "nsfs",
+    "overlay",
+    "proc",
+    "pstore",
+    "securityfs",
+    "squashfs",
+    "sysfs",
+    "tmpfs",
+    "tracefs",
 ];
 
 /// 判断网卡名称是否为虚拟接口。
@@ -258,6 +288,17 @@ pub fn is_virtual_interface(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// 判断挂载点是否匹配路径前缀。
+///
+/// 只有完整路径段匹配才返回 `true`，避免 `/run` 误匹配 `/runner`。
+#[must_use]
+fn mount_point_matches_prefix(mount_point: &str, prefix: &str) -> bool {
+    mount_point == prefix
+        || mount_point
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// 判断挂载点是否应被排除（不纳入摘要统计）。
 ///
 /// - `mount_point` — 挂载点路径
@@ -266,7 +307,26 @@ pub fn is_virtual_interface(name: &str) -> bool {
 pub fn is_excluded_mount(mount_point: &str) -> bool {
     EXCLUDED_MOUNT_PREFIXES
         .iter()
-        .any(|prefix| mount_point.starts_with(prefix))
+        .any(|prefix| mount_point_matches_prefix(mount_point, prefix))
+}
+
+/// 判断文件系统类型是否应被排除（不纳入摘要统计）。
+///
+/// - `file_system` — 文件系统类型
+/// - 返回值 — 若匹配排除类型则返回 `true`
+#[must_use]
+pub fn is_excluded_file_system(file_system: &str) -> bool {
+    EXCLUDED_FILE_SYSTEMS
+        .iter()
+        .any(|excluded| file_system.eq_ignore_ascii_case(excluded))
+}
+
+/// 判断单块磁盘是否应被排除（不纳入摘要统计）。
+///
+/// 完整动态数据仍保留所有磁盘；此函数仅用于 Dynamic Summary 的默认汇总口径。
+#[must_use]
+pub fn is_excluded_summary_disk(disk: &DynamicPerDiskData) -> bool {
+    is_excluded_mount(&disk.mount_point) || is_excluded_file_system(&disk.file_system)
 }
 
 /// 将百分比数值缩放为 i16 存储格式（乘以 10，保留一位小数精度）。
@@ -337,7 +397,7 @@ impl DynamicMonitoringSummaryData {
             _ => data
                 .disk
                 .iter()
-                .filter(|d| !is_excluded_mount(&d.mount_point))
+                .filter(|d| !is_excluded_summary_disk(d))
                 .collect(),
         };
         let total_space: u64 = disks.iter().map(|d| d.total_space).sum();
@@ -606,7 +666,66 @@ pub struct DynamicGpuData {
 
 #[cfg(test)]
 mod tests {
-    use super::{scale_cpu_percent_to_i16, scale_load_to_i16};
+    use super::{
+        DiskKind, DynamicCPUData, DynamicLoadData, DynamicMonitoringData,
+        DynamicMonitoringSummaryData, DynamicNetworkData, DynamicPerDiskData, DynamicRamData,
+        DynamicSystemData, is_excluded_file_system, is_excluded_mount, is_excluded_summary_disk,
+        scale_cpu_percent_to_i16, scale_load_to_i16,
+    };
+
+    fn disk(mount_point: &str, file_system: &str, total_space: u64) -> DynamicPerDiskData {
+        DynamicPerDiskData {
+            kind: DiskKind::Ssd,
+            name: mount_point.to_owned(),
+            file_system: file_system.to_owned(),
+            mount_point: mount_point.to_owned(),
+            total_space,
+            available_space: total_space / 2,
+            is_removable: false,
+            is_read_only: false,
+            read_speed: total_space / 10,
+            write_speed: total_space / 20,
+        }
+    }
+
+    fn monitoring_data(disks: Vec<DynamicPerDiskData>) -> DynamicMonitoringData {
+        DynamicMonitoringData {
+            uuid: uuid::Uuid::nil(),
+            time: 0,
+            cpu: DynamicCPUData {
+                per_core: Vec::new(),
+                total_cpu_usage: 0.0,
+            },
+            ram: DynamicRamData {
+                total_memory: 0,
+                available_memory: 0,
+                used_memory: 0,
+                total_swap: 0,
+                used_swap: 0,
+            },
+            load: DynamicLoadData {
+                one: 0.0,
+                five: 0.0,
+                fifteen: 0.0,
+            },
+            system: DynamicSystemData {
+                boot_time: 0,
+                uptime: 0,
+                process_count: 0,
+            },
+            disk: disks,
+            network: DynamicNetworkData {
+                interfaces: Vec::new(),
+                udp_connections: 0,
+                tcp_connections: 0,
+            },
+            gpu: Vec::new(),
+        }
+    }
+
+    fn disk_summary(disks: Vec<DynamicPerDiskData>) -> DynamicMonitoringSummaryData {
+        DynamicMonitoringSummaryData::from_with_filter(&monitoring_data(disks), None, None)
+    }
 
     #[test]
     fn cpu_percent_scales_normal_values() {
@@ -647,5 +766,150 @@ mod tests {
     fn load_nan_returns_none() {
         assert_eq!(scale_load_to_i16(f64::NAN), None);
         assert_eq!(scale_load_to_i16(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn excluded_mount_prefixes_match_path_boundaries() {
+        assert!(is_excluded_mount("/run"));
+        assert!(is_excluded_mount("/run/containerd"));
+        assert!(is_excluded_mount("/tmp"));
+        assert!(is_excluded_mount("/tmp/cache"));
+        assert!(!is_excluded_mount("/runner"));
+        assert!(!is_excluded_mount("/tmp-data"));
+    }
+
+    #[test]
+    fn excluded_mount_prefixes_cover_kubernetes_volume_paths() {
+        assert!(is_excluded_mount(
+            "/var/lib/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount"
+        ));
+        assert!(is_excluded_mount(
+            "/var/lib/rancher/k3s/agent/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount"
+        ));
+        assert!(is_excluded_mount(
+            "/var/lib/kubelet/plugins/kubernetes.io/csi/driver.longhorn.io/volume-id/globalmount"
+        ));
+        assert!(is_excluded_mount(
+            "/var/lib/rancher/k3s/agent/kubelet/plugins/kubernetes.io/csi/driver.longhorn.io/volume-id/globalmount"
+        ));
+    }
+
+    #[test]
+    fn excluded_file_systems_cover_pseudo_file_systems() {
+        assert!(is_excluded_file_system("tmpfs"));
+        assert!(is_excluded_file_system("overlay"));
+        assert!(is_excluded_file_system("PROC"));
+        assert!(!is_excluded_file_system("ext4"));
+        assert!(!is_excluded_file_system("xfs"));
+        assert!(!is_excluded_file_system("zfs"));
+    }
+
+    #[test]
+    fn default_disk_summary_keeps_real_host_disks() {
+        let summary = disk_summary(vec![disk("/", "ext4", 100), disk("/data", "xfs", 200)]);
+
+        assert_eq!(summary.total_space, Some(300));
+        assert_eq!(summary.available_space, Some(150));
+        assert_eq!(summary.read_speed, Some(30));
+        assert_eq!(summary.write_speed, Some(15));
+    }
+
+    #[test]
+    fn default_disk_summary_excludes_kubernetes_volume_mounts() {
+        let summary = disk_summary(vec![
+            disk("/", "ext4", 100),
+            disk(
+                "/var/lib/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount",
+                "ext4",
+                50,
+            ),
+            disk(
+                "/var/lib/rancher/k3s/agent/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount",
+                "ext4",
+                70,
+            ),
+            disk(
+                "/var/lib/rancher/k3s/agent/kubelet/plugins/kubernetes.io/csi/driver.longhorn.io/volume-id/globalmount",
+                "ext4",
+                90,
+            ),
+        ]);
+
+        assert_eq!(summary.total_space, Some(100));
+        assert_eq!(summary.available_space, Some(50));
+    }
+
+    #[test]
+    fn default_disk_summary_excludes_container_runtime_and_pseudo_disks() {
+        let summary = disk_summary(vec![
+            disk("/", "ext4", 100),
+            disk(
+                "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs",
+                "overlay",
+                20,
+            ),
+            disk(
+                "/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs",
+                "overlay",
+                20,
+            ),
+            disk("/run", "tmpfs", 10),
+            disk("/proc", "proc", 10),
+        ]);
+
+        assert_eq!(summary.total_space, Some(100));
+        assert_eq!(summary.available_space, Some(50));
+    }
+
+    #[test]
+    fn default_disk_summary_keeps_longhorn_data_directory_mounts() {
+        let summary = disk_summary(vec![
+            disk("/", "ext4", 100),
+            disk("/var/lib/longhorn", "xfs", 500),
+        ]);
+
+        assert_eq!(summary.total_space, Some(600));
+        assert_eq!(summary.available_space, Some(300));
+        assert!(!is_excluded_summary_disk(&disk(
+            "/var/lib/longhorn",
+            "xfs",
+            500
+        )));
+    }
+
+    #[test]
+    fn explicit_disk_filter_keeps_existing_whitelist_behavior() {
+        let data = monitoring_data(vec![
+            disk("/", "ext4", 100),
+            disk("/data", "xfs", 200),
+            disk(
+                "/var/lib/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount",
+                "ext4",
+                50,
+            ),
+        ]);
+
+        let data_disk_filter = vec!["/data".to_owned()];
+        let summary =
+            DynamicMonitoringSummaryData::from_with_filter(&data, Some(&data_disk_filter), None);
+
+        assert_eq!(summary.total_space, Some(200));
+        assert_eq!(summary.available_space, Some(100));
+    }
+
+    #[test]
+    fn explicit_disk_filter_can_select_default_excluded_mounts() {
+        let kubelet_mount = "/var/lib/kubelet/pods/pod-id/volumes/kubernetes.io~csi/pvc-id/mount";
+        let data = monitoring_data(vec![
+            disk("/", "ext4", 100),
+            disk(kubelet_mount, "ext4", 50),
+        ]);
+        let kubelet_disk_filter = vec![kubelet_mount.to_owned()];
+
+        let summary =
+            DynamicMonitoringSummaryData::from_with_filter(&data, Some(&kubelet_disk_filter), None);
+
+        assert_eq!(summary.total_space, Some(50));
+        assert_eq!(summary.available_space, Some(25));
     }
 }
