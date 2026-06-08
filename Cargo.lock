@@ -2687,6 +2687,7 @@ version = "0.5.10"
 dependencies = [
  "anyhow",
  "libc",
+ "portable-atomic",
  "rand 0.10.1",
  "serde",
  "serde_json",
@@ -3459,6 +3460,12 @@ dependencies = [
  "pnet_macros",
  "pnet_macros_support",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-pty"

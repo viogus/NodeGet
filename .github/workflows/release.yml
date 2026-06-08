@@ -137,6 +137,9 @@ jobs:
           - release_for: linux_x86_64_gnu
             target: x86_64-unknown-linux-gnu
             binary_name: nodeget-agent-linux-x86_64-gnu
+          - release_for: linux_x86_64_android
+            target: x86_64-linux-android
+            binary_name: nodeget-agent-linux-x86_64-android
           # i686
           - release_for: linux_i686_gnu
             target: i686-unknown-linux-gnu
@@ -144,6 +147,9 @@ jobs:
           - release_for: linux_i686_musl
             target: i686-unknown-linux-musl
             binary_name: nodeget-agent-linux-i686-musl
+          - release_for: linux_i686_android
+            target: i686-linux-android
+            binary_name: nodeget-agent-linux-i686-android
           # aarch64
           - release_for: linux_aarch64_gnu
             target: aarch64-unknown-linux-gnu
@@ -151,6 +157,9 @@ jobs:
           - release_for: linux_aarch64_musl
             target: aarch64-unknown-linux-musl
             binary_name: nodeget-agent-linux-aarch64-musl
+          - release_for: linux_aarch64_android
+            target: aarch64-linux-android
+            binary_name: nodeget-agent-linux-aarch64-android
           # arm (generic)
           - release_for: linux_arm_gnueabi
             target: arm-unknown-linux-gnueabi
@@ -164,6 +173,9 @@ jobs:
           - release_for: linux_arm_musleabihf
             target: arm-unknown-linux-musleabihf
             binary_name: nodeget-agent-linux-arm-musleabihf
+          - release_for: linux_arm_androideabi
+            target: arm-linux-androideabi
+            binary_name: nodeget-agent-linux-arm-androideabi
           # armv7
           - release_for: linux_armv7_gnueabi
             target: armv7-unknown-linux-gnueabi
@@ -177,15 +189,23 @@ jobs:
           - release_for: linux_armv7_musleabihf
             target: armv7-unknown-linux-musleabihf
             binary_name: nodeget-agent-linux-armv7-musleabihf
-          # thumbv7neon (ARMv7 with NEON SIMD)
+          - release_for: linux_armv7_androideabi
+            target: armv7-linux-androideabi
+            binary_name: nodeget-agent-linux-armv7-androideabi
+          # armv5te
+          - release_for: linux_armv5te_gnueabi
+            target: armv5te-unknown-linux-gnueabi
+            binary_name: nodeget-agent-linux-armv5te-gnueabi
+          - release_for: linux_armv5te_musleabi
+            target: armv5te-unknown-linux-musleabi
+            binary_name: nodeget-agent-linux-armv5te-musleabi
+          # thumb
           - release_for: linux_thumbv7neon_gnueabihf
             target: thumbv7neon-unknown-linux-gnueabihf
             binary_name: nodeget-agent-linux-thumbv7neon-gnueabihf
-          # riscv64
-          - release_for: linux_riscv64gc_gnu
-            target: riscv64gc-unknown-linux-gnu
-            binary_name: nodeget-agent-linux-riscv64gc-gnu
-            no_upx: true
+          - release_for: linux_thumbv7neon_androideabi
+            target: thumbv7neon-linux-androideabi
+            binary_name: nodeget-agent-linux-thumbv7neon-androideabi
           # powerpc
           - release_for: linux_powerpc64_gnu
             target: powerpc64-unknown-linux-gnu
@@ -200,6 +220,24 @@ jobs:
             target: s390x-unknown-linux-gnu
             binary_name: nodeget-agent-linux-s390x-gnu
             no_upx: true
+          # Loongarch64
+          - release_for: linux_loongarch64_gnu
+            target: loongarch64-unknown-linux-gnu
+            binary_name: nodeget-agent-linux-loongarch64-gnu
+          - release_for: linux_loongarch64_musl
+            target: loongarch64-unknown-linux-musl
+            binary_name: nodeget-agent-linux-loongarch64-musl
+          # riscv
+          - release_for: linux_riscv64gc_gnu
+            target: riscv64gc-unknown-linux-gnu
+            binary_name: nodeget-agent-linux-riscv64gc-gnu
+          - release_for: linux_riscv64gc_musl
+            target: riscv64gc-unknown-linux-musl
+            binary_name: nodeget-agent-linux-riscv64gc-musl
+          # sparc
+          - release_for: linux_sparc64_gnu
+            target: sparc64-unknown-linux-gnu
+            binary_name: nodeget-agent-linux-sparc64-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6

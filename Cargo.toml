@@ -63,6 +63,7 @@ tower = { version = "0.5.3", default-features = false }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 dhat = { version = "0.3.3"}
 arc-swap = { version = "1.9", default-features = false }
+portable-atomic = { version = "1.13.1", default-features = false }
 
 # Internal crates
 ng-core = { path = "crates/ng-core" }
