@@ -8,7 +8,7 @@ use rand::distr::Alphanumeric;
 use rand::{RngExt, rng};
 use serde::Deserialize;
 use serde::Serialize;
-use std::sync::atomic::{AtomicI64, Ordering};
+use portable_atomic::{AtomicI64, Ordering};
 
 #[cfg(feature = "for-server")]
 pub mod error_message;

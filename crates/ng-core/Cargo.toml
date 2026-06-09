@@ -14,6 +14,9 @@ uuid = { workspace = true }
 rand = { workspace = true }
 tracing = { workspace = true }
 
+# 32 位平台兼容：portable-atomic 在不支持原生 64 位原子操作的平台提供回退实现
+portable-atomic = { workspace = true }
+
 # for-server / for-agent feature dependencies
 libc = { version = "0.2.175", default-features = false, optional = true }
 

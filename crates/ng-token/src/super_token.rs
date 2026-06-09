@@ -27,7 +27,7 @@ use crate::hash_to_bytes;
 /// - 错误：数据库插入失败（通常因 ID=1 唯一约束冲突）
 async fn insert_new_super_token(
     db: &sea_orm::DatabaseConnection,
-) -> anyhow::Result<(String, String)> {
+) -> Result<(String, String), sea_orm::DbErr> {
     let token_key = generate_random_string(16);
     let token_secret = generate_random_string(32);
     let full_token = format!("{token_key}:{token_secret}");
@@ -50,12 +50,7 @@ async fn insert_new_super_token(
         password_hash: Set(Some(password_hash)),
     };
 
-    token::Entity::insert(super_token_model)
-        .exec(db)
-        .await
-        .map_err(|e| {
-            NodegetError::DatabaseError(format!("Failed to initialize super token: {e}"))
-        })?;
+    token::Entity::insert(super_token_model).exec(db).await?;
 
     debug!(target: "token", "Super token inserted into database");
     Ok((full_token, raw_password))
@@ -82,15 +77,22 @@ pub async fn generate_super_token() -> anyhow::Result<Option<(String, String)>> 
             }
             Ok(Some(result))
         }
-        Err(e) => {
-            // 判断是否为唯一约束冲突（SQLite 和 PostgreSQL 的错误消息不同）
-            let error_msg = format!("{e}");
-            if error_msg.contains("UNIQUE constraint failed") || error_msg.contains("duplicate key")
-            {
+        Err(db_err) => {
+            // 使用 SeaORM 的 sql_err() 精确判断唯一约束冲突，
+            // 不依赖错误消息字符串（PostgreSQL 中文 locale 下消息不含 "duplicate key"）
+            let is_unique_violation = matches!(
+                db_err.sql_err(),
+                Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+            );
+
+            if is_unique_violation {
                 debug!(target: "token", "Super token already exists, skipping generation");
                 Ok(None)
             } else {
-                Err(e)
+                Err(NodegetError::DatabaseError(format!(
+                    "Failed to initialize super token: {db_err}"
+                ))
+                .into())
             }
         }
     }
