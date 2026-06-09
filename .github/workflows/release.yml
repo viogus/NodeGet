@@ -137,11 +137,6 @@ jobs:
           - release_for: linux_x86_64_gnu
             target: x86_64-unknown-linux-gnu
             binary_name: nodeget-agent-linux-x86_64-gnu
-          # Android：NDK 缺少 libunwind，必须用 build-std 编译 panic_abort 版 std
-          - release_for: linux_x86_64_android
-            target: x86_64-linux-android
-            binary_name: nodeget-agent-linux-x86_64-android
-            build_std: true
           # ── i686 ──
           - release_for: linux_i686_gnu
             target: i686-unknown-linux-gnu
@@ -149,10 +144,6 @@ jobs:
           - release_for: linux_i686_musl
             target: i686-unknown-linux-musl
             binary_name: nodeget-agent-linux-i686-musl
-          - release_for: linux_i686_android
-            target: i686-linux-android
-            binary_name: nodeget-agent-linux-i686-android
-            build_std: true
           # ── aarch64 ──
           - release_for: linux_aarch64_gnu
             target: aarch64-unknown-linux-gnu
@@ -160,10 +151,6 @@ jobs:
           - release_for: linux_aarch64_musl
             target: aarch64-unknown-linux-musl
             binary_name: nodeget-agent-linux-aarch64-musl
-          - release_for: linux_aarch64_android
-            target: aarch64-linux-android
-            binary_name: nodeget-agent-linux-aarch64-android
-            build_std: true
           # ── arm (generic) ──
           - release_for: linux_arm_gnueabi
             target: arm-unknown-linux-gnueabi
@@ -276,29 +263,10 @@ jobs:
             target: s390x-unknown-linux-gnu
             binary_name: nodeget-agent-linux-s390x-gnu
             no_upx: true
-          # LoongArch64
-          - release_for: linux_loongarch64_gnu
-            target: loongarch64-unknown-linux-gnu
-            binary_name: nodeget-agent-linux-loongarch64-gnu
-            build_std: true
-          - release_for: linux_loongarch64_musl
-            target: loongarch64-unknown-linux-musl
-            binary_name: nodeget-agent-linux-loongarch64-musl
-            build_std: true
           # riscv64
           - release_for: linux_riscv64gc_gnu
             target: riscv64gc-unknown-linux-gnu
             binary_name: nodeget-agent-linux-riscv64gc-gnu
-            no_upx: true
-          - release_for: linux_riscv64gc_musl
-            target: riscv64gc-unknown-linux-musl
-            binary_name: nodeget-agent-linux-riscv64gc-musl
-            no_upx: true
-            build_std: true
-          # sparc64
-          - release_for: linux_sparc64_gnu
-            target: sparc64-unknown-linux-gnu
-            binary_name: nodeget-agent-linux-sparc64-gnu
             no_upx: true
     steps:
       - name: Checkout
