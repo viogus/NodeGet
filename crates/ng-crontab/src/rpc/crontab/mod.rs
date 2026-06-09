@@ -22,20 +22,22 @@ mod set_enable;
 
 /// 校验 crontab 名称合法性。
 ///
-/// 只允许字母、数字、下划线、短横线。禁止路径分隔符及控制字符。
+/// 允许 Unicode 字母、数字、下划线、短横线（支持中文等多语言命名）。
+/// 禁止路径分隔符、控制字符及可能造成问题的特殊符号。
 fn validate_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         return Err(ng_core::error::NodegetError::InvalidInput("name cannot be empty".to_owned()).into());
     }
-    if name.len() > 128 {
+    if name.chars().count() > 128 {
         return Err(ng_core::error::NodegetError::InvalidInput("name too long (max 128 chars)".to_owned()).into());
     }
-    let valid = name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let valid = name.chars().all(|c| {
+        // 允许：Unicode 字母/数字（含中文）、下划线、短横线
+        c.is_alphanumeric() || c == '_' || c == '-'
+    });
     if !valid {
         return Err(ng_core::error::NodegetError::InvalidInput(
-            "name contains invalid characters (only [A-Za-z0-9_-] are allowed)".to_owned(),
+            "name contains invalid characters (alphanumeric, underscore, hyphen allowed)".to_owned(),
         )
         .into());
     }
@@ -208,6 +210,16 @@ mod tests {
         assert!(validate_name(&name).is_ok());
     }
 
+    #[test]
+    fn validate_name_accepts_chinese() {
+        assert!(validate_name("电信ping").is_ok());
+    }
+
+    #[test]
+    fn validate_name_accepts_mixed_chinese_ascii() {
+        assert!(validate_name("定时任务_1").is_ok());
+    }
+
     // ── validate_name: empty ──────────────────────────────────────
 
     #[test]
@@ -259,8 +271,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_name_rejects_unicode() {
-        assert!(validate_name("定时任务").is_err());
+    fn validate_name_rejects_unicode_symbols() {
+        // Unicode 符号（非字母数字）仍应被拒绝
+        assert!(validate_name("任务❌").is_err());
     }
 
     #[test]
