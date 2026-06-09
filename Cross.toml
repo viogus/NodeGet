@@ -1,4 +1,4 @@
-## Android
+### Android：NDK 缺少 libunwind，必须用 build-std 编译 panic_abort 版 std
 #[target.x86_64-linux-android]
 #build-std = true
 #
@@ -17,25 +17,25 @@
 #[target.thumbv7neon-linux-androideabi]
 #build-std = true
 #
-## ARM 老款 (tier 3)：无预编译 std，必须从源码构建
+### ARM 老款 (tier 3)：无预编译 std，必须从源码构建
 #[target.armv5te-unknown-linux-gnueabi]
 #build-std = true
 #
 #[target.armv5te-unknown-linux-musleabi]
 #build-std = true
 #
-## 极老 x86 (tier 3)
+### 极老 x86 (tier 3)
 #[target.i586-unknown-linux-gnu]
 #build-std = true
 #
 #[target.i586-unknown-linux-musl]
 #build-std = true
 #
-## 32 位 PowerPC (tier 3)
+### 32 位 PowerPC (tier 3)
 #[target.powerpc-unknown-linux-gnu]
 #build-std = true
 #
-## MIPS 系列 (tier 3)：无预编译 std，必须从源码构建
+### MIPS 系列 (tier 3)：无预编译 std，必须从源码构建
 #[target.mips-unknown-linux-gnu]
 #build-std = true
 #
@@ -58,4 +58,15 @@
 #build-std = true
 #
 #[target.mips64el-unknown-linux-muslabi64]
+#build-std = true
+#
+### LoongArch64 (tier 3)
+#[target.loongarch64-unknown-linux-gnu]
+#build-std = true
+#
+#[target.loongarch64-unknown-linux-musl]
+#build-std = true
+#
+### RISC-V 64 musl (tier 3)
+#[target.riscv64gc-unknown-linux-musl]
 #build-std = true

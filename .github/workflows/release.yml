@@ -241,19 +241,23 @@ jobs:
             target: mips64-unknown-linux-gnuabi64
             binary_name: nodeget-agent-linux-mips64-gnu
             build_std: true
+            no_upx: true
           - release_for: linux_mips64_musl
             target: mips64-unknown-linux-muslabi64
             binary_name: nodeget-agent-linux-mips64-musl
             build_std: true
+            no_upx: true
           # mips64el (tier 3)
           - release_for: linux_mips64el_gnu
             target: mips64el-unknown-linux-gnuabi64
             binary_name: nodeget-agent-linux-mips64el-gnu
             build_std: true
+            no_upx: true
           - release_for: linux_mips64el_musl
             target: mips64el-unknown-linux-muslabi64
             binary_name: nodeget-agent-linux-mips64el-musl
             build_std: true
+            no_upx: true
           # powerpc
           - release_for: linux_powerpc_gnu
             target: powerpc-unknown-linux-gnu

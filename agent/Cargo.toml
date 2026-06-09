@@ -3,6 +3,9 @@ name = "nodeget-agent"
 version.workspace = true
 edition.workspace = true
 
+[build-dependencies]
+cc = "1"
+
 [dependencies]
 # Internal crates
 ng-core = { workspace = true, features = ["for-agent"] }

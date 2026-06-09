@@ -2944,6 +2944,7 @@ version = "0.5.11"
 dependencies = [
  "anyhow",
  "base64",
+ "cc",
  "futures-util",
  "hickory-resolver",
  "libc",
