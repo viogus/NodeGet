@@ -239,7 +239,10 @@ max_batch_size = 500
         let config: ServerConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.jsonrpc_max_connections, Some(200));
         assert_eq!(config.enable_unix_socket, Some(true));
-        assert_eq!(config.unix_socket_path, Some("/tmp/nodeget.sock".to_owned()));
+        assert_eq!(
+            config.unix_socket_path,
+            Some("/tmp/nodeget.sock".to_owned())
+        );
         assert_eq!(config.max_request_body_size, Some(5242880));
         assert_eq!(config.max_response_body_size, Some(52428800));
         assert_eq!(config.tls_cert, Some("/etc/tls/cert.pem".to_owned()));
@@ -257,7 +260,10 @@ max_batch_size = 500
 
         let logging = config.logging.unwrap();
         assert_eq!(logging.log_filter, Some("info,db=warn".to_owned()));
-        assert_eq!(logging.json_log_file, Some("/var/log/nodeget.json".to_owned()));
+        assert_eq!(
+            logging.json_log_file,
+            Some("/var/log/nodeget.json".to_owned())
+        );
         assert_eq!(logging.json_log_filter, Some("debug".to_owned()));
         assert_eq!(logging.memory_log_capacity, Some(1000));
         assert_eq!(logging.memory_log_filter, Some("trace".to_owned()));
@@ -338,6 +344,9 @@ database_url = "sqlite://./db/nodeget.db"
         let deserialized: ServerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.server_uuid, deserialized.server_uuid);
         assert_eq!(config.ws_listener, deserialized.ws_listener);
-        assert_eq!(config.database.database_url, deserialized.database.database_url);
+        assert_eq!(
+            config.database.database_url,
+            deserialized.database.database_url
+        );
     }
 }

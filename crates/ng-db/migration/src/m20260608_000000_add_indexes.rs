@@ -213,11 +213,7 @@ impl MigrationTrait for Migration {
         }
 
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx-js_result-js_worker_id")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx-js_result-js_worker_id").to_owned())
             .await?;
 
         match manager.get_database_backend() {
@@ -239,11 +235,7 @@ impl MigrationTrait for Migration {
             .await?;
 
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx-crontab_result-cron_id")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx-crontab_result-cron_id").to_owned())
             .await?;
 
         Ok(())

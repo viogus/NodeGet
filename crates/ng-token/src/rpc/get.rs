@@ -57,8 +57,7 @@ pub async fn get(token: String, supertoken: Option<String>) -> RpcResult<Box<Raw
             get_token(&token_or_auth).await?
         };
 
-        serde_json::value::to_raw_value(&token_info)
-            .map_err(|e| NodegetError::from(e).into())
+        serde_json::value::to_raw_value(&token_info).map_err(|e| NodegetError::from(e).into())
     };
 
     // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject

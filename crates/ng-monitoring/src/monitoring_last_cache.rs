@@ -19,9 +19,9 @@ use crate::data_structure::{
 use crate::query::apply_descaling_to_json_object;
 use crate::query::{DynamicDataQueryField, DynamicSummaryQueryField, StaticDataQueryField};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
-use std::sync::Arc;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
@@ -149,7 +149,8 @@ impl MonitoringLastCache {
         let guard = recover_read(&self.static_cache);
         let entry = guard.get(uuid)?;
         let full_obj = entry.value.as_object()?;
-        let filtered = build_filtered_map(full_obj, fields.iter().map(StaticDataQueryField::json_key));
+        let filtered =
+            build_filtered_map(full_obj, fields.iter().map(StaticDataQueryField::json_key));
         drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Static last-cache hit");
         Some(filtered)
@@ -168,7 +169,8 @@ impl MonitoringLastCache {
         let guard = recover_read(&self.dynamic_cache);
         let entry = guard.get(uuid)?;
         let full_obj = entry.value.as_object()?;
-        let filtered = build_filtered_map(full_obj, fields.iter().map(DynamicDataQueryField::json_key));
+        let filtered =
+            build_filtered_map(full_obj, fields.iter().map(DynamicDataQueryField::json_key));
         drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Dynamic last-cache hit");
         Some(filtered)
@@ -193,7 +195,10 @@ impl MonitoringLastCache {
             return Some(cloned);
         }
         let full_obj = entry.value.as_object()?;
-        let filtered = build_filtered_map(full_obj, fields.iter().map(DynamicSummaryQueryField::json_key));
+        let filtered = build_filtered_map(
+            full_obj,
+            fields.iter().map(DynamicSummaryQueryField::json_key),
+        );
         drop(guard);
         trace!(target: "monitoring", %uuid, field_count = fields.len(), "Dynamic-summary last-cache hit");
         Some(filtered)
@@ -257,7 +262,10 @@ fn build_filtered_map<'a, I: Iterator<Item = &'a str>>(
         filtered.insert("timestamp".to_owned(), v.clone());
     }
     for key in extra_keys {
-        if key != "uuid" && key != "timestamp" && let Some(v) = full_obj.get(key) {
+        if key != "uuid"
+            && key != "timestamp"
+            && let Some(v) = full_obj.get(key)
+        {
             filtered.insert(key.to_owned(), v.clone());
         }
     }

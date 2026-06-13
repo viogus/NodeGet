@@ -68,8 +68,7 @@ pub async fn list_all_tokens(token: String) -> RpcResult<Box<RawValue>> {
         let response = ListAllTokensResponse { tokens };
 
         debug!(target: "token", token_count = response.tokens.len(), "list_all_tokens completed");
-        serde_json::value::to_raw_value(&response)
-            .map_err(|e| NodegetError::from(e).into())
+        serde_json::value::to_raw_value(&response).map_err(|e| NodegetError::from(e).into())
     };
 
     // 统一错误转换：anyhow → NodegetError → JSON-RPC ErrorObject

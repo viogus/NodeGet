@@ -87,7 +87,11 @@ pub struct JsonError {
 
 ## 非 NodegetError 的 ad-hoc 错误
 
-需要特别说明的是，上面列出的错误码与 `NodegetError` 枚举只是 NodeGet 项目中统一的错误集合，**并非穷尽所有错误码**。很多 RPC handler（例如 task、static、KV、crontab、token、js-worker 等命名空间）会在具体业务场景下直接构造 jsonrpsee 的 `ErrorObject`，返回项目自定的 `code` 和 `message`。这些 ad-hoc 错误码可能与 `NodegetError` 的取值一致，也可能不一致。客户端在实现错误处理时，除了识别上述通用错误码外，还应以具体响应中的 `message` 作为业务错误判断依据，而不是仅依赖 `code`。
+需要特别说明的是，上面列出的错误码与 `NodegetError` 枚举只是 NodeGet 项目中统一的错误集合，**并非穷尽所有错误码**。很多 RPC
+handler（例如 task、static、KV、crontab、token、js-worker 等命名空间）会在具体业务场景下直接构造 jsonrpsee 的 `ErrorObject`
+，返回项目自定的 `code` 和 `message`。这些 ad-hoc 错误码可能与 `NodegetError`
+的取值一致，也可能不一致。客户端在实现错误处理时，除了识别上述通用错误码外，还应以具体响应中的 `message` 作为业务错误判断依据，而不是仅依赖
+`code`。
 
 ## 错误处理示例
 

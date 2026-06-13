@@ -145,7 +145,11 @@ mod tests {
     #[test]
     fn replace_auto_gen_replaces_double_quoted() {
         let content = "server_uuid = \"auto_gen\"\nws_listener = \"0.0.0.0:3000\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
         assert!(!result.contains("auto_gen"));
         assert!(result.contains("ws_listener"));
@@ -154,21 +158,33 @@ mod tests {
     #[test]
     fn replace_auto_gen_replaces_single_quoted() {
         let content = "agent_uuid = 'auto_gen'\n";
-        let result = replace_auto_gen_uuid(content, "agent_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "agent_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
     fn replace_auto_gen_preserves_comments() {
         let content = "# this is a comment\nserver_uuid = \"auto_gen\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("# this is a comment"));
     }
 
     #[test]
     fn replace_auto_gen_preserves_empty_lines() {
         let content = "\nserver_uuid = \"auto_gen\"\n\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
@@ -182,35 +198,55 @@ mod tests {
     #[test]
     fn replace_auto_gen_case_insensitive() {
         let content = "server_uuid = \"AUTO_GEN\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
     fn replace_auto_gen_key_case_insensitive() {
         let content = "SERVER_UUID = \"auto_gen\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
     fn replace_auto_gen_preserves_leading_whitespace() {
         let content = "  server_uuid = \"auto_gen\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert!(result.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
     fn replace_auto_gen_ignores_non_auto_gen_value() {
         let content = "server_uuid = \"some-other-value\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert_eq!(result, content);
     }
 
     #[test]
     fn replace_auto_gen_wrong_key_ignored() {
         let content = "agent_uuid = \"auto_gen\"\n";
-        let result = replace_auto_gen_uuid(content, "server_uuid", "550e8400-e29b-41d4-a716-446655440000");
+        let result = replace_auto_gen_uuid(
+            content,
+            "server_uuid",
+            "550e8400-e29b-41d4-a716-446655440000",
+        );
         assert_eq!(result, content);
     }
 }

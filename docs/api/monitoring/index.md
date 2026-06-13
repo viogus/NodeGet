@@ -12,7 +12,8 @@
 > - `agent_report_static` / `agent_report_dynamic` / `agent_report_dynamic_summary`
 > - `agent_query_static` / `agent_query_dynamic` / `agent_query_dynamic_summary`
 > - `agent_delete_static` / `agent_delete_dynamic` / `agent_delete_dynamic_summary`
-> - `agent_static_data_multi_last_query` / `agent_dynamic_data_multi_last_query` / `agent_dynamic_summary_multi_last_query`
+> - `agent_static_data_multi_last_query` / `agent_dynamic_data_multi_last_query` /
+    `agent_dynamic_summary_multi_last_query`
 >
 > Agent UUID 管理使用独立的 **`agent-uuid`** 命名空间：
 > - `agent-uuid_list_all` — 列出所有非软删除的 Agent UUID
@@ -53,7 +54,24 @@ JSON 示例：
 {
   "uuid": "e8583352-39e8-5a5b-b66c-e450689088fd",
   "time": 1769341269012,
-  "data_hash": [171, 205, 18, 52, 86, 120, 144, 171, 205, 239, 1, 35, 69, 103, 137, 171],
+  "data_hash": [
+    171,
+    205,
+    18,
+    52,
+    86,
+    120,
+    144,
+    171,
+    205,
+    239,
+    1,
+    35,
+    69,
+    103,
+    137,
+    171
+  ],
   "cpu": {
     "physical_cores": 16,
     "logical_cores": 32,
@@ -409,11 +427,29 @@ pub enum DynamicDataQueryField { Cpu, Ram, Load, System, Disk, Network, Gpu }
 
 #[serde(rename_all = "snake_case")]
 pub enum DynamicSummaryQueryField {
-    CpuUsage, GpuUsage, UsedSwap, TotalSwap, UsedMemory, TotalMemory,
-    AvailableMemory, LoadOne, LoadFive, LoadFifteen, Uptime, BootTime,
-    ProcessCount, TotalSpace, AvailableSpace, ReadSpeed, WriteSpeed,
-    TcpConnections, UdpConnections, TotalReceived, TotalTransmitted,
-    TransmitSpeed, ReceiveSpeed,
+    CpuUsage,
+    GpuUsage,
+    UsedSwap,
+    TotalSwap,
+    UsedMemory,
+    TotalMemory,
+    AvailableMemory,
+    LoadOne,
+    LoadFive,
+    LoadFifteen,
+    Uptime,
+    BootTime,
+    ProcessCount,
+    TotalSpace,
+    AvailableSpace,
+    ReadSpeed,
+    WriteSpeed,
+    TcpConnections,
+    UdpConnections,
+    TotalReceived,
+    TotalTransmitted,
+    TransmitSpeed,
+    ReceiveSpeed,
 }
 ```
 
@@ -442,27 +478,45 @@ pub enum QueryCondition {
 JSON 解析示例：
 
 ```json
-{ "uuid": "e8583352-39e8-5a5b-b66c-e450689088fd" }
+{
+  "uuid": "e8583352-39e8-5a5b-b66c-e450689088fd"
+}
 ```
 
 ```json
-{ "timestamp_from_to": [1769344168646, 1769344169646] }
+{
+  "timestamp_from_to": [
+    1769344168646,
+    1769344169646
+  ]
+}
 ```
 
 ```json
-{ "timestamp_from": 1769344168646 }
+{
+  "timestamp_from": 1769344168646
+}
 ```
 
 ```json
-{ "storage_time_from_to": [1769344168646, 1769344169646] }
+{
+  "storage_time_from_to": [
+    1769344168646,
+    1769344169646
+  ]
+}
 ```
 
 ```json
-{ "storage_time_from": 1769344168646 }
+{
+  "storage_time_from": 1769344168646
+}
 ```
 
 ```json
-{ "limit": 1000 }
+{
+  "limit": 1000
+}
 ```
 
 ```json
@@ -538,18 +592,20 @@ pub struct DynamicSummaryResponseItem {
 
 Agent UUID 的管理与监控数据分离，位于 **`agent-uuid`** 命名空间下，直接操作 `monitoring_uuid` 表。
 
-| 方法名 | 描述 | 权限要求 |
-|--------|------|----------|
-| `agent-uuid_list_all` | 列出所有非软删除的 Agent UUID | `MonitoringUuid::List` 或 `NodeGet::ListAllAgentUuid` |
-| `agent-uuid_list_all_with_agent_mode` | 列出所有 Agent UUID，并标注每个 UUID 是否为软删除状态 | `MonitoringUuid::List` 或 `NodeGet::ListAllAgentUuid` |
-| `agent-uuid_delete` | 按 UUID 软删除 Agent（标记 `soft_delete`，不会真正从数据库删除） | `Super Token` |
+| 方法名                                   | 描述                                            | 权限要求                                                 |
+|---------------------------------------|-----------------------------------------------|------------------------------------------------------|
+| `agent-uuid_list_all`                 | 列出所有非软删除的 Agent UUID                          | `MonitoringUuid::List` 或 `NodeGet::ListAllAgentUuid` |
+| `agent-uuid_list_all_with_agent_mode` | 列出所有 Agent UUID，并标注每个 UUID 是否为软删除状态           | `MonitoringUuid::List` 或 `NodeGet::ListAllAgentUuid` |
+| `agent-uuid_delete`                   | 按 UUID 软删除 Agent（标记 `soft_delete`，不会真正从数据库删除） | `Super Token`                                        |
 
 返回的 UUID 列表均会去重并按字母顺序排序。`list_all` 与 `list_all_with_agent_mode` 的权限和作用域过滤行为与
-`list_all_agent_uuid` 一致：返回结果受 Token 的 Scope 限制，只有拥有对应 AgentUuid Scope 的 "List 权限 + 至少一种非 List 操作权限"
+`list_all_agent_uuid` 一致：返回结果受 Token 的 Scope 限制，只有拥有对应 AgentUuid Scope 的 "List 权限 + 至少一种非 List
+操作权限"
 时，才能看到该 UUID。
 
 ## 相关页面
 
 - [Agent 上报](./agent.md) — `agent_report_static` / `agent_report_dynamic` / `agent_report_dynamic_summary`
 - [查询与删除](./query.md) — 查询、批量最新、删除
-- [Agent UUID CRUD](../agent_uuid/crud.md) — `agent-uuid_list_all` / `agent-uuid_list_all_with_agent_mode` / `agent-uuid_delete`
+- [Agent UUID CRUD](../agent_uuid/crud.md) — `agent-uuid_list_all` / `agent-uuid_list_all_with_agent_mode` /
+  `agent-uuid_delete`

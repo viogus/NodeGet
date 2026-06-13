@@ -62,7 +62,10 @@ pub async fn report_dynamic_summary(
         }
         debug!(target: "monitoring", agent_uuid = %agent_uuid, "report_dynamic_summary: permission check passed");
 
-        let uuid_id = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?
+        let uuid_id = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
             .get_or_insert(agent_uuid)
             .await
             .map_err(|e| NodegetError::DatabaseError(format!("UUID cache error: {e}")))?;
@@ -99,16 +102,25 @@ pub async fn report_dynamic_summary(
 
         debug!(target: "monitoring", agent_uuid = %data.uuid, "Received dynamic summary data, sending to buffer");
 
-        monitoring_buffer::get().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned()))?.dynamic_summary.send(in_data);
+        monitoring_buffer::get()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned())
+            })?
+            .dynamic_summary
+            .send(in_data);
 
-        MonitoringLastCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned()))?.update_dynamic_summary_prebuilt(
-            agent_uuid,
-            crate::monitoring_last_cache::build_dynamic_summary_value(
+        MonitoringLastCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned())
+            })?
+            .update_dynamic_summary_prebuilt(
                 agent_uuid,
-                data.time.cast_signed(),
-                &data,
-            ),
-        );
+                crate::monitoring_last_cache::build_dynamic_summary_value(
+                    agent_uuid,
+                    data.time.cast_signed(),
+                    &data,
+                ),
+            );
 
         debug!(target: "monitoring", agent_uuid = %data.uuid, "Dynamic summary data buffered successfully");
 

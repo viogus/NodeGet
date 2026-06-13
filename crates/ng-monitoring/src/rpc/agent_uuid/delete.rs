@@ -43,7 +43,10 @@ pub async fn delete_agent_uuid(token: String, agent_uuid: Uuid) -> RpcResult<Box
         }
         debug!(target: "rpc", %agent_uuid, "delete_agent_uuid: permission check passed");
 
-        let deleted = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?
+        let deleted = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
             .soft_delete(agent_uuid)
             .await
             .map_err(|e| {

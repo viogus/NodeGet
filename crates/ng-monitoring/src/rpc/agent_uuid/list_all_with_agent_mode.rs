@@ -50,7 +50,11 @@ pub async fn list_all_agent_uuids_with_agent_mode(token: String) -> RpcResult<Bo
         }
         debug!(target: "rpc", "list_all_agent_uuids_with_agent_mode: permission check passed");
 
-        let uuids = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?.list_all_with_agent_mode();
+        let uuids = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
+            .list_all_with_agent_mode();
 
         let items: Vec<AgentUuidWithMode> = uuids
             .into_iter()

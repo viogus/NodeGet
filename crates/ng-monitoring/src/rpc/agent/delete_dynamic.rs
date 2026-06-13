@@ -42,12 +42,13 @@ pub async fn delete_dynamic(
 
         let scopes = scopes_from_conditions(&conditions);
         let checker = require_permission_checker()?;
-        let is_allowed = checker.check_token_limit(
-            &token_or_auth,
-            scopes,
-            vec![Permission::DynamicMonitoring(DynamicMonitoring::Delete)],
-        )
-        .await?;
+        let is_allowed = checker
+            .check_token_limit(
+                &token_or_auth,
+                scopes,
+                vec![Permission::DynamicMonitoring(DynamicMonitoring::Delete)],
+            )
+            .await?;
 
         if !is_allowed {
             warn!(target: "monitoring", "权限拒绝: 缺少 DynamicMonitoring Delete 权限");

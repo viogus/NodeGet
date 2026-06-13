@@ -10,13 +10,15 @@
 
 GitHub Releases 会发布预编译的 Server 和 Agent 二进制文件。下面列出当前 CI 覆盖的主要平台：
 
-| 平台 | 架构 | libc | Server | Agent |
-|------|------|------|--------|-------|
-| Linux | x86_64 | musl / gnu | ✓ | ✓ |
-| Linux | aarch64 | musl / gnu | ✓ | ✓ |
-| Linux | armv7 | gnueabihf | ✓ | ✓ |
-| Windows | x86_64 | msvc | ✓ | ✓ |
-| Windows | aarch64 | msvc | ✓ | ✓ |
-| macOS | aarch64 | - | ✓ | ✓ |
+| 平台      | 架构      | libc       | Server | Agent |
+|---------|---------|------------|--------|-------|
+| Linux   | x86_64  | musl / gnu | ✓      | ✓     |
+| Linux   | aarch64 | musl / gnu | ✓      | ✓     |
+| Linux   | armv7   | gnueabihf  | ✓      | ✓     |
+| Windows | x86_64  | msvc       | ✓      | ✓     |
+| Windows | aarch64 | msvc       | ✓      | ✓     |
+| macOS   | aarch64 | -          | ✓      | ✓     |
 
-Agent 额外覆盖了大量 Linux 目标平台，包括 i686、arm、armv7、mips/mipsel/mips64/mips64el、powerpc、powerpc64、powerpc64le、s390x、riscv64gc 等，详见仓库的 [`.github/workflows/release.yml`](https://github.com/NodeSeekDev/NodeGet/blob/main/.github/workflows/release.yml)。
+Agent 额外覆盖了大量 Linux 目标平台，包括
+i686、arm、armv7、mips/mipsel/mips64/mips64el、powerpc、powerpc64、powerpc64le、s390x、riscv64gc 等，详见仓库的 [
+`.github/workflows/release.yml`](https://github.com/NodeSeekDev/NodeGet/blob/main/.github/workflows/release.yml)。

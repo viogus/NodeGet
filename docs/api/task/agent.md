@@ -23,13 +23,14 @@ Http、或主动取消订阅 均不会再接收到来自 Server 的任务
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "method": "task_register_task",
-    "params": {
-        "token": "YOUR_TOKEN",
-        "uuid": "AGENT_UUID_HERE" // Agent UUID
-    },
-    "id": 1
+  "jsonrpc": "2.0",
+  "method": "task_register_task",
+  "params": {
+    "token": "YOUR_TOKEN",
+    "uuid": "AGENT_UUID_HERE"
+    // Agent UUID
+  },
+  "id": 1
 }
 ```
 
@@ -37,13 +38,15 @@ Http、或主动取消订阅 均不会再接收到来自 Server 的任务
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "method": "task_register_task",
-    "params": [
-        "YOUR_TOKEN",
-        "AGENT_UUID_HERE" // Agent UUID
-    ],
-    "id": 1 // 该 ID 可自定义，返回值也带统一 ID 用于辨别哪一个请求
+  "jsonrpc": "2.0",
+  "method": "task_register_task",
+  "params": [
+    "YOUR_TOKEN",
+    "AGENT_UUID_HERE"
+    // Agent UUID
+  ],
+  "id": 1
+  // 该 ID 可自定义，返回值也带统一 ID 用于辨别哪一个请求
 }
 ```
 
@@ -53,9 +56,10 @@ Http、或主动取消订阅 均不会再接收到来自 Server 的任务
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 1,
-    "result": 5293582878088374 // 订阅 ID
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": 5293582878088374
+  // 订阅 ID
 }
 ```
 
@@ -65,17 +69,17 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
 
 ```json
 {
-    "subscription": 5293582878088374,
-    // 为上面的订阅 ID，可用于校验 (若在同一长连接中注册多个任务接收器)
-    "result": {
-        "task_id": 3,
-        // 数据库中的 ID 字段，上报任务结果需要使用
-        "task_token": "k6bsrBv1hS",
-        // 字段仅任务注册者可获取，用于校验上传者是否为接收者，任务下发方 / Server 均不主动知晓
-        "task_event_type": {
-            // 任务主体，该结构体参考 Task 总览
-        }
+  "subscription": 5293582878088374,
+  // 为上面的订阅 ID，可用于校验 (若在同一长连接中注册多个任务接收器)
+  "result": {
+    "task_id": 3,
+    // 数据库中的 ID 字段，上报任务结果需要使用
+    "task_token": "k6bsrBv1hS",
+    // 字段仅任务注册者可获取，用于校验上传者是否为接收者，任务下发方 / Server 均不主动知晓
+    "task_event_type": {
+      // 任务主体，该结构体参考 Task 总览
     }
+  }
 }
 ```
 
@@ -87,24 +91,31 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "method": "task_upload_task_result",
-    "params": {
-        "token": "demo_token", // 上报用 Token，非 Task Token
-        "task_response": {
-            "task_id": 3, // Task ID
-            "agent_uuid": "AGENT_UUID_HERE", // 下发任务时指定的 Agent UUID
-            "task_token": "k6bsrBv1hS", // 下发任务时生成的 Task Token
-            "timestamp": 1769341269012, // 完成时的毫秒时间戳
-            "success": true, // 是否成功
-            "error_message": "XXXXXX", // 可选字段；建议在 success=false 时填写
-            "task_event_result": {
-                // 可选字段；建议在 success=true 时填写
-                // 任务回报结构体，该结构体参考 Task 总览
-            }
-        }
-    },
-    "id": 2
+  "jsonrpc": "2.0",
+  "method": "task_upload_task_result",
+  "params": {
+    "token": "demo_token",
+    // 上报用 Token，非 Task Token
+    "task_response": {
+      "task_id": 3,
+      // Task ID
+      "agent_uuid": "AGENT_UUID_HERE",
+      // 下发任务时指定的 Agent UUID
+      "task_token": "k6bsrBv1hS",
+      // 下发任务时生成的 Task Token
+      "timestamp": 1769341269012,
+      // 完成时的毫秒时间戳
+      "success": true,
+      // 是否成功
+      "error_message": "XXXXXX",
+      // 可选字段；建议在 success=false 时填写
+      "task_event_result": {
+        // 可选字段；建议在 success=true 时填写
+        // 任务回报结构体，该结构体参考 Task 总览
+      }
+    }
+  },
+  "id": 2
 }
 ```
 
@@ -112,24 +123,32 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "method": "task_upload_task_result",
-    "params": [
-        "demo_token", // 上报用 Token，非 Task Token
-        {
-            "task_id": 3, // Task ID
-            "agent_uuid": "AGENT_UUID_HERE", // 下发任务时指定的 Agent UUID
-            "task_token": "k6bsrBv1hS", // 下发任务时生成的 Task Token
-            "timestamp": 1769341269012, // 完成时的毫秒时间戳
-            "success": true, // 是否成功
-            "error_message": "XXXXXX", // 可选字段；建议在 success=false 时填写
-            "task_event_result": {
-                // 可选字段；建议在 success=true 时填写
-                // 任务回报结构体，该结构体参考 Task 总览
-            }
-        }
-    ],
-    "id": 2 // 该 ID 可自定义，返回值也带统一 ID 用于辨别哪一个请求
+  "jsonrpc": "2.0",
+  "method": "task_upload_task_result",
+  "params": [
+    "demo_token",
+    // 上报用 Token，非 Task Token
+    {
+      "task_id": 3,
+      // Task ID
+      "agent_uuid": "AGENT_UUID_HERE",
+      // 下发任务时指定的 Agent UUID
+      "task_token": "k6bsrBv1hS",
+      // 下发任务时生成的 Task Token
+      "timestamp": 1769341269012,
+      // 完成时的毫秒时间戳
+      "success": true,
+      // 是否成功
+      "error_message": "XXXXXX",
+      // 可选字段；建议在 success=false 时填写
+      "task_event_result": {
+        // 可选字段；建议在 success=true 时填写
+        // 任务回报结构体，该结构体参考 Task 总览
+      }
+    }
+  ],
+  "id": 2
+  // 该 ID 可自定义，返回值也带统一 ID 用于辨别哪一个请求
 }
 ```
 
@@ -141,11 +160,12 @@ Agent 会在这一 WebSocket 长连接中接收到 method 为 `task_register_tas
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 2,
-    "result": {
-        "id": 3 // 在数据库中表的 ID 字段
-    }
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "id": 3
+    // 在数据库中表的 ID 字段
+  }
 }
 ```
 

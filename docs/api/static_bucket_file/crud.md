@@ -213,7 +213,8 @@
 
 - 不能跨 bucket 移动：`from` 和 `to` 都在同一 `name` 的磁盘根目录内。
 - 源文件不存在 &rarr; 返回 `NotFound` 错误。
-- 目标路径已存在时的行为取决于操作系统：`tokio::fs::rename` 在 Unix 上会覆盖目标文件，在 Windows 上会报错（目标已存在）。因此**不要依赖跨平台一致的覆盖语义**。
+- 目标路径已存在时的行为取决于操作系统：`tokio::fs::rename` 在 Unix 上会覆盖目标文件，在 Windows 上会报错（目标已存在）。因此
+  **不要依赖跨平台一致的覆盖语义**。
 - 自动创建 `to` 缺失的父目录。
 - `from == to` 视作 no-op，直接返回成功。
 - 路径经 `resolve_safe_file_path` 双重校验，拒绝 `..` 穿透、绝对路径、反斜杠、Windows 盘符等。
@@ -278,9 +279,21 @@
 
 ```json
 [
-  { "path": "404.html", "size": 1024, "mtime": 1715000000000 },
-  { "path": "docs/1.md", "size": 3, "mtime": 1715000123456 },
-  { "path": "index.html", "size": 7, "mtime": 1715001000789 }
+  {
+    "path": "404.html",
+    "size": 1024,
+    "mtime": 1715000000000
+  },
+  {
+    "path": "docs/1.md",
+    "size": 3,
+    "mtime": 1715000123456
+  },
+  {
+    "path": "index.html",
+    "size": 7,
+    "mtime": 1715001000789
+  }
 ]
 ```
 
@@ -320,9 +333,21 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": [
-    { "path": "404.html", "size": 1024, "mtime": 1715000000000 },
-    { "path": "docs/1.md", "size": 3, "mtime": 1715000123456 },
-    { "path": "index.html", "size": 7, "mtime": 1715001000789 }
+    {
+      "path": "404.html",
+      "size": 1024,
+      "mtime": 1715000000000
+    },
+    {
+      "path": "docs/1.md",
+      "size": 3,
+      "mtime": 1715000123456
+    },
+    {
+      "path": "index.html",
+      "size": 7,
+      "mtime": 1715001000789
+    }
   ]
 }
 ```

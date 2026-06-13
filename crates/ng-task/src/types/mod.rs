@@ -314,35 +314,66 @@ mod tests {
 
     #[test]
     fn task_event_type_task_name() {
-        assert_eq!(TaskEventType::Ping("8.8.8.8".to_owned()).task_name(), "ping");
-        assert_eq!(TaskEventType::TcpPing("8.8.8.8".to_owned()).task_name(), "tcp_ping");
-        assert_eq!(TaskEventType::HttpPing("https://example.com".parse().unwrap()).task_name(), "http_ping");
-        assert_eq!(TaskEventType::WebShell(WebShellTask {
-            url: "ws://localhost".parse().unwrap(),
-            terminal_id: uuid::Uuid::nil(),
-        }).task_name(), "web_shell");
-        assert_eq!(TaskEventType::Execute(ExecuteTask {
-            cmd: "ls".to_owned(),
-            args: vec![],
-        }).task_name(), "execute");
-        assert_eq!(TaskEventType::HttpRequest(HttpRequestTask {
-            url: "https://example.com".parse().unwrap(),
-            method: "GET".to_owned(),
-            headers: BTreeMap::new(),
-            body: None,
-            body_base64: None,
-            ip: None,
-        }).task_name(), "http_request");
-        assert_eq!(TaskEventType::Dns(DnsTask {
-            domain: "example.com".to_owned(),
-            record_types: vec![DnsRecordType::A],
-            dns_server: None,
-        }).task_name(), "dns");
+        assert_eq!(
+            TaskEventType::Ping("8.8.8.8".to_owned()).task_name(),
+            "ping"
+        );
+        assert_eq!(
+            TaskEventType::TcpPing("8.8.8.8".to_owned()).task_name(),
+            "tcp_ping"
+        );
+        assert_eq!(
+            TaskEventType::HttpPing("https://example.com".parse().unwrap()).task_name(),
+            "http_ping"
+        );
+        assert_eq!(
+            TaskEventType::WebShell(WebShellTask {
+                url: "ws://localhost".parse().unwrap(),
+                terminal_id: uuid::Uuid::nil(),
+            })
+            .task_name(),
+            "web_shell"
+        );
+        assert_eq!(
+            TaskEventType::Execute(ExecuteTask {
+                cmd: "ls".to_owned(),
+                args: vec![],
+            })
+            .task_name(),
+            "execute"
+        );
+        assert_eq!(
+            TaskEventType::HttpRequest(HttpRequestTask {
+                url: "https://example.com".parse().unwrap(),
+                method: "GET".to_owned(),
+                headers: BTreeMap::new(),
+                body: None,
+                body_base64: None,
+                ip: None,
+            })
+            .task_name(),
+            "http_request"
+        );
+        assert_eq!(
+            TaskEventType::Dns(DnsTask {
+                domain: "example.com".to_owned(),
+                record_types: vec![DnsRecordType::A],
+                dns_server: None,
+            })
+            .task_name(),
+            "dns"
+        );
         assert_eq!(TaskEventType::ReadConfig.task_name(), "read_config");
-        assert_eq!(TaskEventType::EditConfig("content".to_owned()).task_name(), "edit_config");
+        assert_eq!(
+            TaskEventType::EditConfig("content".to_owned()).task_name(),
+            "edit_config"
+        );
         assert_eq!(TaskEventType::Ip.task_name(), "ip");
         assert_eq!(TaskEventType::Version.task_name(), "version");
-        assert_eq!(TaskEventType::SelfUpdate("v1.0".to_owned()).task_name(), "self_update");
+        assert_eq!(
+            TaskEventType::SelfUpdate("v1.0".to_owned()).task_name(),
+            "self_update"
+        );
     }
 
     #[test]
@@ -352,43 +383,80 @@ mod tests {
         assert!(TaskEventType::HttpPing("https://example.com".parse().unwrap()).is_ping_task());
         assert!(!TaskEventType::Ip.is_ping_task());
         assert!(!TaskEventType::ReadConfig.is_ping_task());
-        assert!(!TaskEventType::Execute(ExecuteTask {
-            cmd: "ls".to_owned(),
-            args: vec![],
-        }).is_ping_task());
+        assert!(
+            !TaskEventType::Execute(ExecuteTask {
+                cmd: "ls".to_owned(),
+                args: vec![],
+            })
+            .is_ping_task()
+        );
     }
 
     #[test]
     fn task_event_type_permission_field() {
-        assert_eq!(TaskEventType::Ping("8.8.8.8".to_owned()).permission_field(), "allow_icmp_ping");
-        assert_eq!(TaskEventType::TcpPing("8.8.8.8".to_owned()).permission_field(), "allow_tcp_ping");
-        assert_eq!(TaskEventType::HttpPing("https://example.com".parse().unwrap()).permission_field(), "allow_http_ping");
-        assert_eq!(TaskEventType::WebShell(WebShellTask {
-            url: "ws://localhost".parse().unwrap(),
-            terminal_id: uuid::Uuid::nil(),
-        }).permission_field(), "allow_web_shell");
-        assert_eq!(TaskEventType::Execute(ExecuteTask {
-            cmd: "ls".to_owned(),
-            args: vec![],
-        }).permission_field(), "allow_execute");
-        assert_eq!(TaskEventType::HttpRequest(HttpRequestTask {
-            url: "https://example.com".parse().unwrap(),
-            method: "GET".to_owned(),
-            headers: BTreeMap::new(),
-            body: None,
-            body_base64: None,
-            ip: None,
-        }).permission_field(), "allow_http_request");
-        assert_eq!(TaskEventType::Dns(DnsTask {
-            domain: "example.com".to_owned(),
-            record_types: vec![],
-            dns_server: None,
-        }).permission_field(), "allow_dns");
-        assert_eq!(TaskEventType::ReadConfig.permission_field(), "allow_read_config");
-        assert_eq!(TaskEventType::EditConfig("".to_owned()).permission_field(), "allow_edit_config");
+        assert_eq!(
+            TaskEventType::Ping("8.8.8.8".to_owned()).permission_field(),
+            "allow_icmp_ping"
+        );
+        assert_eq!(
+            TaskEventType::TcpPing("8.8.8.8".to_owned()).permission_field(),
+            "allow_tcp_ping"
+        );
+        assert_eq!(
+            TaskEventType::HttpPing("https://example.com".parse().unwrap()).permission_field(),
+            "allow_http_ping"
+        );
+        assert_eq!(
+            TaskEventType::WebShell(WebShellTask {
+                url: "ws://localhost".parse().unwrap(),
+                terminal_id: uuid::Uuid::nil(),
+            })
+            .permission_field(),
+            "allow_web_shell"
+        );
+        assert_eq!(
+            TaskEventType::Execute(ExecuteTask {
+                cmd: "ls".to_owned(),
+                args: vec![],
+            })
+            .permission_field(),
+            "allow_execute"
+        );
+        assert_eq!(
+            TaskEventType::HttpRequest(HttpRequestTask {
+                url: "https://example.com".parse().unwrap(),
+                method: "GET".to_owned(),
+                headers: BTreeMap::new(),
+                body: None,
+                body_base64: None,
+                ip: None,
+            })
+            .permission_field(),
+            "allow_http_request"
+        );
+        assert_eq!(
+            TaskEventType::Dns(DnsTask {
+                domain: "example.com".to_owned(),
+                record_types: vec![],
+                dns_server: None,
+            })
+            .permission_field(),
+            "allow_dns"
+        );
+        assert_eq!(
+            TaskEventType::ReadConfig.permission_field(),
+            "allow_read_config"
+        );
+        assert_eq!(
+            TaskEventType::EditConfig("".to_owned()).permission_field(),
+            "allow_edit_config"
+        );
         assert_eq!(TaskEventType::Ip.permission_field(), "allow_ip");
         assert_eq!(TaskEventType::Version.permission_field(), "allow_version");
-        assert_eq!(TaskEventType::SelfUpdate("".to_owned()).permission_field(), "allow_self_update");
+        assert_eq!(
+            TaskEventType::SelfUpdate("".to_owned()).permission_field(),
+            "allow_self_update"
+        );
     }
 
     #[test]
@@ -426,13 +494,25 @@ mod tests {
 
     #[test]
     fn task_event_type_result_from_duration_non_ping_returns_none() {
-        assert!(TaskEventType::Ip.result_from_duration(Duration::from_millis(10)).is_none());
-        assert!(TaskEventType::ReadConfig.result_from_duration(Duration::from_millis(10)).is_none());
-        assert!(TaskEventType::Dns(DnsTask {
-            domain: "example.com".to_owned(),
-            record_types: vec![],
-            dns_server: None,
-        }).result_from_duration(Duration::from_millis(10)).is_none());
+        assert!(
+            TaskEventType::Ip
+                .result_from_duration(Duration::from_millis(10))
+                .is_none()
+        );
+        assert!(
+            TaskEventType::ReadConfig
+                .result_from_duration(Duration::from_millis(10))
+                .is_none()
+        );
+        assert!(
+            TaskEventType::Dns(DnsTask {
+                domain: "example.com".to_owned(),
+                record_types: vec![],
+                dns_server: None,
+            })
+            .result_from_duration(Duration::from_millis(10))
+            .is_none()
+        );
     }
 
     #[test]
@@ -441,8 +521,14 @@ mod tests {
         assert_eq!(TaskEventResult::TcpPing(30.0).task_name(), "tcp_ping");
         assert_eq!(TaskEventResult::HttpPing(100.0).task_name(), "http_ping");
         assert_eq!(TaskEventResult::WebShell(true).task_name(), "web_shell");
-        assert_eq!(TaskEventResult::Execute("output".to_owned()).task_name(), "execute");
-        assert_eq!(TaskEventResult::ReadConfig("config".to_owned()).task_name(), "read_config");
+        assert_eq!(
+            TaskEventResult::Execute("output".to_owned()).task_name(),
+            "execute"
+        );
+        assert_eq!(
+            TaskEventResult::ReadConfig("config".to_owned()).task_name(),
+            "read_config"
+        );
         assert_eq!(TaskEventResult::EditConfig(true).task_name(), "edit_config");
         assert_eq!(TaskEventResult::Ip(None, None).task_name(), "ip");
         assert_eq!(TaskEventResult::SelfUpdate(true).task_name(), "self_update");
@@ -455,10 +541,7 @@ mod tests {
             Duration::from_millis(50),
         );
         assert!(result.is_some());
-        let result = TaskEventResult::from_duration(
-            &TaskEventType::Ip,
-            Duration::from_millis(50),
-        );
+        let result = TaskEventResult::from_duration(&TaskEventType::Ip, Duration::from_millis(50));
         assert!(result.is_none());
     }
 

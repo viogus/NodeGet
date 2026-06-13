@@ -1,6 +1,7 @@
 # 自动化脚本安装
 
-> ⚠️ 注意：自动化脚本安装目前**仅支持 Linux 系统**。不过 CI 已经构建了 `nodeget-server` 和 `nodeget-agent` 的 Windows x86_64 / aarch64 版本，Windows 用户可以直接从 GitHub Releases 下载 `.exe` 二进制文件。
+> ⚠️ 注意：自动化脚本安装目前**仅支持 Linux 系统**。不过 CI 已经构建了 `nodeget-server` 和 `nodeget-agent` 的 Windows
+> x86_64 / aarch64 版本，Windows 用户可以直接从 GitHub Releases 下载 `.exe` 二进制文件。
 
 ## 整体安装流程
 

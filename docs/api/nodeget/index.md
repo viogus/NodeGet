@@ -6,20 +6,20 @@ NodeGet 是本项目的基础服务接口模块，提供服务端状态查询、
 
 ## 方法列表
 
-| 方法名                                                  | 描述                          | 权限要求                                                  |
-|------------------------------------------------------|-----------------------------|--------------------------------------------------------|
-| [hello](./crud.md#hello)                             | 测试服务是否正常运行                  | 无                                                      |
-| [version](./crud.md#version)                         | 获取服务端版本信息                   | 无                                                      |
-| [uuid](./crud.md#uuid)                               | 获取当前 Server UUID            | 无                                                      |
+| 方法名                                                  | 描述                          | 权限要求                                                 |
+|------------------------------------------------------|-----------------------------|------------------------------------------------------|
+| [hello](./crud.md#hello)                             | 测试服务是否正常运行                  | 无                                                    |
+| [version](./crud.md#version)                         | 获取服务端版本信息                   | 无                                                    |
+| [uuid](./crud.md#uuid)                               | 获取当前 Server UUID            | 无                                                    |
 | [list_all_agent_uuid](./crud.md#list-all-agent-uuid) | ~~获取所有 Agent UUID 列表~~（已废弃） | `NodeGet::ListAllAgentUuid` 或 `MonitoringUuid::List` |
-| [read_config](./crud.md#read-config)                 | 读取服务端配置文件原文                 | SuperToken                                             |
-| [edit_config](./crud.md#edit-config)                 | 写入并触发服务端配置热重载               | SuperToken                                             |
-| [database_storage](./crud.md#database-storage)       | 查询数据库各表存储占用                 | SuperToken                                             |
-| [log](./crud.md#log)                                 | 查询内存日志缓冲区                   | SuperToken                                             |
-| [stream_log](./crud.md#stream-log)                   | 实时流式日志订阅（WebSocket）         | SuperToken                                             |
-| [exec_sql](./crud.md#exec-sql)                       | 在主数据库执行原始 SQL               | `NodeGet::ExecSql`                                     |
-| [get_database_type](./crud.md#get-database-type)     | 获取主数据库后端类型                  | `NodeGet::ExecSql`                                     |
-| [self_update](./crud.md#self-update)                 | 触发自更新                       | SuperToken                                             |
+| [read_config](./crud.md#read-config)                 | 读取服务端配置文件原文                 | SuperToken                                           |
+| [edit_config](./crud.md#edit-config)                 | 写入并触发服务端配置热重载               | SuperToken                                           |
+| [database_storage](./crud.md#database-storage)       | 查询数据库各表存储占用                 | SuperToken                                           |
+| [log](./crud.md#log)                                 | 查询内存日志缓冲区                   | SuperToken                                           |
+| [stream_log](./crud.md#stream-log)                   | 实时流式日志订阅（WebSocket）         | SuperToken                                           |
+| [exec_sql](./crud.md#exec-sql)                       | 在主数据库执行原始 SQL               | `NodeGet::ExecSql`                                   |
+| [get_database_type](./crud.md#get-database-type)     | 获取主数据库后端类型                  | `NodeGet::ExecSql`                                   |
+| [self_update](./crud.md#self-update)                 | 触发自更新                       | SuperToken                                           |
 
 如需对本地 SQLite 数据库执行 SQL 操作，请使用 [Db 命名空间](../db/index.md)。
 
@@ -212,7 +212,8 @@ NodeGet 是本项目的基础服务接口模块，提供服务端状态查询、
 Scope 下同时拥有 "List 权限" 和 "至少一种非 List 操作权限" 时，才能看到该 UUID；全局 Scope 下拥有 List 权限则返回所有
 UUID。
 
-`exec_sql` 返回结果中，`data` 字段最多包含 10,000 条 SELECT 行。当实际行数超过 10,000 时，响应会额外包含 `"truncated": true` 字段，且
+`exec_sql` 返回结果中，`data` 字段最多包含 10,000 条 SELECT 行。当实际行数超过 10,000 时，响应会额外包含
+`"truncated": true` 字段，且
 `row_count` 仍为实际总行数。DML/DDL 语句不受此限制影响。
 
 `read_config` / `edit_config` / `database_storage` / `log` / `stream_log` / `self_update` 仅允许 **SuperToken**

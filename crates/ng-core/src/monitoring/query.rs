@@ -131,7 +131,11 @@ mod tests {
 
     #[test]
     fn static_field_serde_round_trip() {
-        for field in [StaticDataQueryField::Cpu, StaticDataQueryField::System, StaticDataQueryField::Gpu] {
+        for field in [
+            StaticDataQueryField::Cpu,
+            StaticDataQueryField::System,
+            StaticDataQueryField::Gpu,
+        ] {
             let json = serde_json::to_string(&field).unwrap();
             let de: StaticDataQueryField = serde_json::from_str(&json).unwrap();
             assert_eq!(field, de);

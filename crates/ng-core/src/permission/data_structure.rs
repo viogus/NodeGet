@@ -349,7 +349,9 @@ mod tests {
 
     #[test]
     fn scope_serde_round_trip() {
-        let s = Scope::AgentUuid(uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
+        let s = Scope::AgentUuid(
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        );
         let json = serde_json::to_string(&s).unwrap();
         let de: Scope = serde_json::from_str(&json).unwrap();
         assert_eq!(s, de);
@@ -387,58 +389,124 @@ mod tests {
 
     #[test]
     fn permission_dynamic_monitoring_write_delete() {
-        assert_eq!(Permission::DynamicMonitoring(DynamicMonitoring::Write), Permission::DynamicMonitoring(DynamicMonitoring::Write));
-        assert_eq!(Permission::DynamicMonitoring(DynamicMonitoring::Delete), Permission::DynamicMonitoring(DynamicMonitoring::Delete));
+        assert_eq!(
+            Permission::DynamicMonitoring(DynamicMonitoring::Write),
+            Permission::DynamicMonitoring(DynamicMonitoring::Write)
+        );
+        assert_eq!(
+            Permission::DynamicMonitoring(DynamicMonitoring::Delete),
+            Permission::DynamicMonitoring(DynamicMonitoring::Delete)
+        );
     }
 
     #[test]
     fn permission_dynamic_monitoring_summary() {
         let p = Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Read);
         assert_eq!(p.clone(), p);
-        assert_eq!(Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Write), Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Write));
-        assert_eq!(Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Delete), Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Delete));
+        assert_eq!(
+            Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Write),
+            Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Write)
+        );
+        assert_eq!(
+            Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Delete),
+            Permission::DynamicMonitoringSummary(DynamicMonitoringSummary::Delete)
+        );
     }
 
     #[test]
     fn permission_task_variants() {
-        assert_eq!(Permission::Task(Task::Create("t".into())), Permission::Task(Task::Create("t".into())));
-        assert_eq!(Permission::Task(Task::Read("t".into())), Permission::Task(Task::Read("t".into())));
-        assert_eq!(Permission::Task(Task::Write("t".into())), Permission::Task(Task::Write("t".into())));
-        assert_eq!(Permission::Task(Task::Delete("t".into())), Permission::Task(Task::Delete("t".into())));
-        assert_eq!(Permission::Task(Task::Listen), Permission::Task(Task::Listen));
+        assert_eq!(
+            Permission::Task(Task::Create("t".into())),
+            Permission::Task(Task::Create("t".into()))
+        );
+        assert_eq!(
+            Permission::Task(Task::Read("t".into())),
+            Permission::Task(Task::Read("t".into()))
+        );
+        assert_eq!(
+            Permission::Task(Task::Write("t".into())),
+            Permission::Task(Task::Write("t".into()))
+        );
+        assert_eq!(
+            Permission::Task(Task::Delete("t".into())),
+            Permission::Task(Task::Delete("t".into()))
+        );
+        assert_eq!(
+            Permission::Task(Task::Listen),
+            Permission::Task(Task::Listen)
+        );
     }
 
     #[test]
     fn permission_crontab() {
-        assert_eq!(Permission::Crontab(Crontab::Read), Permission::Crontab(Crontab::Read));
-        assert_eq!(Permission::Crontab(Crontab::Write), Permission::Crontab(Crontab::Write));
-        assert_eq!(Permission::Crontab(Crontab::Delete), Permission::Crontab(Crontab::Delete));
+        assert_eq!(
+            Permission::Crontab(Crontab::Read),
+            Permission::Crontab(Crontab::Read)
+        );
+        assert_eq!(
+            Permission::Crontab(Crontab::Write),
+            Permission::Crontab(Crontab::Write)
+        );
+        assert_eq!(
+            Permission::Crontab(Crontab::Delete),
+            Permission::Crontab(Crontab::Delete)
+        );
     }
 
     #[test]
     fn permission_crontab_result() {
-        assert_eq!(Permission::CrontabResult(CrontabResult::Read("c".into())), Permission::CrontabResult(CrontabResult::Read("c".into())));
-        assert_eq!(Permission::CrontabResult(CrontabResult::Delete("c".into())), Permission::CrontabResult(CrontabResult::Delete("c".into())));
+        assert_eq!(
+            Permission::CrontabResult(CrontabResult::Read("c".into())),
+            Permission::CrontabResult(CrontabResult::Read("c".into()))
+        );
+        assert_eq!(
+            Permission::CrontabResult(CrontabResult::Delete("c".into())),
+            Permission::CrontabResult(CrontabResult::Delete("c".into()))
+        );
     }
 
     #[test]
     fn permission_kv() {
-        assert_eq!(Permission::Kv(Kv::ListAllNamespace), Permission::Kv(Kv::ListAllNamespace));
-        assert_eq!(Permission::Kv(Kv::ListAllKeys), Permission::Kv(Kv::ListAllKeys));
-        assert_eq!(Permission::Kv(Kv::Read("ns".into())), Permission::Kv(Kv::Read("ns".into())));
-        assert_eq!(Permission::Kv(Kv::Write("ns".into())), Permission::Kv(Kv::Write("ns".into())));
-        assert_eq!(Permission::Kv(Kv::Delete("ns".into())), Permission::Kv(Kv::Delete("ns".into())));
+        assert_eq!(
+            Permission::Kv(Kv::ListAllNamespace),
+            Permission::Kv(Kv::ListAllNamespace)
+        );
+        assert_eq!(
+            Permission::Kv(Kv::ListAllKeys),
+            Permission::Kv(Kv::ListAllKeys)
+        );
+        assert_eq!(
+            Permission::Kv(Kv::Read("ns".into())),
+            Permission::Kv(Kv::Read("ns".into()))
+        );
+        assert_eq!(
+            Permission::Kv(Kv::Write("ns".into())),
+            Permission::Kv(Kv::Write("ns".into()))
+        );
+        assert_eq!(
+            Permission::Kv(Kv::Delete("ns".into())),
+            Permission::Kv(Kv::Delete("ns".into()))
+        );
     }
 
     #[test]
     fn permission_terminal() {
-        assert_eq!(Permission::Terminal(Terminal::Connect), Permission::Terminal(Terminal::Connect));
+        assert_eq!(
+            Permission::Terminal(Terminal::Connect),
+            Permission::Terminal(Terminal::Connect)
+        );
     }
 
     #[test]
     fn permission_nodeget() {
-        assert_eq!(Permission::NodeGet(NodeGet::GetRtPool), Permission::NodeGet(NodeGet::GetRtPool));
-        assert_eq!(Permission::NodeGet(NodeGet::ExecSql), Permission::NodeGet(NodeGet::ExecSql));
+        assert_eq!(
+            Permission::NodeGet(NodeGet::GetRtPool),
+            Permission::NodeGet(NodeGet::GetRtPool)
+        );
+        assert_eq!(
+            Permission::NodeGet(NodeGet::ExecSql),
+            Permission::NodeGet(NodeGet::ExecSql)
+        );
     }
 
     #[test]
@@ -452,40 +520,94 @@ mod tests {
 
     #[test]
     fn permission_monitoring_uuid() {
-        assert_eq!(Permission::MonitoringUuid(MonitoringUuid::List), Permission::MonitoringUuid(MonitoringUuid::List));
-        assert_eq!(Permission::MonitoringUuid(MonitoringUuid::Delete), Permission::MonitoringUuid(MonitoringUuid::Delete));
+        assert_eq!(
+            Permission::MonitoringUuid(MonitoringUuid::List),
+            Permission::MonitoringUuid(MonitoringUuid::List)
+        );
+        assert_eq!(
+            Permission::MonitoringUuid(MonitoringUuid::Delete),
+            Permission::MonitoringUuid(MonitoringUuid::Delete)
+        );
     }
 
     #[test]
     fn permission_js_worker() {
-        assert_eq!(Permission::JsWorker(JsWorker::ListAllJsWorker), Permission::JsWorker(JsWorker::ListAllJsWorker));
-        assert_eq!(Permission::JsWorker(JsWorker::Create), Permission::JsWorker(JsWorker::Create));
-        assert_eq!(Permission::JsWorker(JsWorker::Read), Permission::JsWorker(JsWorker::Read));
-        assert_eq!(Permission::JsWorker(JsWorker::Write), Permission::JsWorker(JsWorker::Write));
-        assert_eq!(Permission::JsWorker(JsWorker::Delete), Permission::JsWorker(JsWorker::Delete));
-        assert_eq!(Permission::JsWorker(JsWorker::RunDefinedJsWorker), Permission::JsWorker(JsWorker::RunDefinedJsWorker));
-        assert_eq!(Permission::JsWorker(JsWorker::RunRawJsWorker), Permission::JsWorker(JsWorker::RunRawJsWorker));
+        assert_eq!(
+            Permission::JsWorker(JsWorker::ListAllJsWorker),
+            Permission::JsWorker(JsWorker::ListAllJsWorker)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::Create),
+            Permission::JsWorker(JsWorker::Create)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::Read),
+            Permission::JsWorker(JsWorker::Read)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::Write),
+            Permission::JsWorker(JsWorker::Write)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::Delete),
+            Permission::JsWorker(JsWorker::Delete)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::RunDefinedJsWorker),
+            Permission::JsWorker(JsWorker::RunDefinedJsWorker)
+        );
+        assert_eq!(
+            Permission::JsWorker(JsWorker::RunRawJsWorker),
+            Permission::JsWorker(JsWorker::RunRawJsWorker)
+        );
     }
 
     #[test]
     fn permission_js_result() {
-        assert_eq!(Permission::JsResult(JsResult::Read("w".into())), Permission::JsResult(JsResult::Read("w".into())));
-        assert_eq!(Permission::JsResult(JsResult::Delete("w".into())), Permission::JsResult(JsResult::Delete("w".into())));
+        assert_eq!(
+            Permission::JsResult(JsResult::Read("w".into())),
+            Permission::JsResult(JsResult::Read("w".into()))
+        );
+        assert_eq!(
+            Permission::JsResult(JsResult::Delete("w".into())),
+            Permission::JsResult(JsResult::Delete("w".into()))
+        );
     }
 
     #[test]
     fn permission_static_bucket() {
-        assert_eq!(Permission::StaticBucket(StaticBucket::Read), Permission::StaticBucket(StaticBucket::Read));
-        assert_eq!(Permission::StaticBucket(StaticBucket::Write), Permission::StaticBucket(StaticBucket::Write));
-        assert_eq!(Permission::StaticBucket(StaticBucket::Delete), Permission::StaticBucket(StaticBucket::Delete));
+        assert_eq!(
+            Permission::StaticBucket(StaticBucket::Read),
+            Permission::StaticBucket(StaticBucket::Read)
+        );
+        assert_eq!(
+            Permission::StaticBucket(StaticBucket::Write),
+            Permission::StaticBucket(StaticBucket::Write)
+        );
+        assert_eq!(
+            Permission::StaticBucket(StaticBucket::Delete),
+            Permission::StaticBucket(StaticBucket::Delete)
+        );
     }
 
     #[test]
     fn permission_static_bucket_file() {
-        assert_eq!(Permission::StaticBucketFile(StaticBucketFile::Read), Permission::StaticBucketFile(StaticBucketFile::Read));
-        assert_eq!(Permission::StaticBucketFile(StaticBucketFile::Write), Permission::StaticBucketFile(StaticBucketFile::Write));
-        assert_eq!(Permission::StaticBucketFile(StaticBucketFile::Delete), Permission::StaticBucketFile(StaticBucketFile::Delete));
-        assert_eq!(Permission::StaticBucketFile(StaticBucketFile::List), Permission::StaticBucketFile(StaticBucketFile::List));
+        assert_eq!(
+            Permission::StaticBucketFile(StaticBucketFile::Read),
+            Permission::StaticBucketFile(StaticBucketFile::Read)
+        );
+        assert_eq!(
+            Permission::StaticBucketFile(StaticBucketFile::Write),
+            Permission::StaticBucketFile(StaticBucketFile::Write)
+        );
+        assert_eq!(
+            Permission::StaticBucketFile(StaticBucketFile::Delete),
+            Permission::StaticBucketFile(StaticBucketFile::Delete)
+        );
+        assert_eq!(
+            Permission::StaticBucketFile(StaticBucketFile::List),
+            Permission::StaticBucketFile(StaticBucketFile::List)
+        );
     }
 
     #[test]

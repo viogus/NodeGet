@@ -13,10 +13,7 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
-use tokio::{
-    sync::mpsc,
-    task,
-};
+use tokio::{sync::mpsc, task};
 use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{WebSocketStream, connect_async_tls_with_config};
@@ -38,7 +35,9 @@ static TERMINAL_CONNECTION_POOL: LazyLock<TerminalConnectionPool> =
 ///
 /// 返回 `Ok(())`；ID 已存在时返回错误。
 fn reserve_terminal_id(terminal_id: &str) -> Result<()> {
-    let mut guard = TERMINAL_CONNECTION_POOL.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = TERMINAL_CONNECTION_POOL
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if guard.contains(terminal_id) {
         return Err(NodegetError::InvalidInput(format!(
             "Terminal ID '{terminal_id}' is already connected"
@@ -52,7 +51,9 @@ fn reserve_terminal_id(terminal_id: &str) -> Result<()> {
 ///
 /// - `terminal_id` - 终端连接 ID
 fn release_terminal_id(terminal_id: &str) {
-    let mut guard = TERMINAL_CONNECTION_POOL.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = TERMINAL_CONNECTION_POOL
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.remove(terminal_id);
 }
 

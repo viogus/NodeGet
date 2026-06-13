@@ -61,7 +61,7 @@ log = { version = "0.4.31", default-features = false, features = ["std"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 tower = { version = "0.5.3", default-features = false }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
-dhat = { version = "0.3.3"}
+dhat = { version = "0.3.3" }
 arc-swap = { version = "1.9", default-features = false }
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback"] }
 

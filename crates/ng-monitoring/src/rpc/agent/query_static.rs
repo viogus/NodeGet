@@ -99,7 +99,9 @@ pub async fn query_static(
         debug!(target: "monitoring", conditions_count = static_data_query.condition.len(), fields_count = static_data_query.fields.len(), "Static query permission check passed");
 
         let db = AgentRpcImpl::get_db()?;
-        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?;
+        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| {
+            NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+        })?;
 
         let query = static_monitoring::Entity::find()
             .select_only()

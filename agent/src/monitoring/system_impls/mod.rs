@@ -9,8 +9,8 @@ use ng_monitoring::data_structure::{
     DynamicCPUData, DynamicLoadData, DynamicPerCpuCoreData, DynamicRamData, DynamicSystemData,
     StaticCPUData, StaticPerCpuCoreData, StaticSystemData,
 };
-use std::sync::Arc;
 use process::count_processes;
+use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::{Mutex, MutexGuard, OnceCell};
 use virtualization_detect::detect_virtualization;

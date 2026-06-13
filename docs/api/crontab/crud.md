@@ -10,9 +10,12 @@
 
 ```json
 {
-  "token": "demo_token",           // Token
-  "name": "task_name",             // 任务名称
-  "cron_expression": "0 0 * * * *",  // Cron 表达式（秒 分 时 日 月 周）
+  "token": "demo_token",
+  // Token
+  "name": "task_name",
+  // 任务名称
+  "cron_expression": "0 0 * * * *",
+  // Cron 表达式（秒 分 时 日 月 周）
   "cron_type": {
     // 任务类型，详情见下文
   }
@@ -40,12 +43,14 @@ Agent 任务类型 — 在特定 Agent 上执行任务:
 {
   "agent": [
     [
-      "00000000-0000-0000-0000-000000000001", // Agent UUID
+      "00000000-0000-0000-0000-000000000001",
+      // Agent UUID
       "00000000-0000-0000-0000-000000000002"
     ],
     {
       "task": {
-        "ping": "www.example.com" // TaskEventType
+        "ping": "www.example.com"
+        // TaskEventType
       }
     }
   ]
@@ -58,9 +63,11 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 {
   "server": {
     "js_worker": [
-      "demo_nodeget_fetch",  // 脚本名（js_worker.name）
+      "demo_nodeget_fetch",
+      // 脚本名（js_worker.name）
       {
-        "hello": "from_cron" // 传给脚本的 params（任意 JSON）
+        "hello": "from_cron"
+        // 传给脚本的 params（任意 JSON）
       }
     ]
   }
@@ -89,13 +96,27 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 ```json
 {
   "scopes": [
-    {"agent_uuid": "00000000-0000-0000-0000-000000000001"},
-    {"agent_uuid": "00000000-0000-0000-0000-000000000002"}
+    {
+      "agent_uuid": "00000000-0000-0000-0000-000000000001"
+    },
+    {
+      "agent_uuid": "00000000-0000-0000-0000-000000000002"
+    }
   ],
   "permissions": [
-    {"crontab": "write"},
-    {"task": {"create": "ping"}},
-    {"task": {"create": "tcp_ping"}}
+    {
+      "crontab": "write"
+    },
+    {
+      "task": {
+        "create": "ping"
+      }
+    },
+    {
+      "task": {
+        "create": "tcp_ping"
+      }
+    }
   ]
 }
 ```
@@ -105,12 +126,26 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 ```json
 {
   "scopes": [
-    {"agent_uuid": "00000000-0000-0000-0000-000000000001"}
+    {
+      "agent_uuid": "00000000-0000-0000-0000-000000000001"
+    }
   ],
   "permissions": [
-    {"crontab": "write"},
-    {"task": {"create": "*"}},      // 授权创建所有任务类型
-    {"task": {"write": "tcp*"}}     // 授权写入所有 tcp 开头的任务
+    {
+      "crontab": "write"
+    },
+    {
+      "task": {
+        "create": "*"
+      }
+    },
+    // 授权创建所有任务类型
+    {
+      "task": {
+        "write": "tcp*"
+      }
+    }
+    // 授权写入所有 tcp 开头的任务
   ]
 }
 ```
@@ -120,12 +155,20 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 ```json
 {
   "scopes": [
-    {"global": null},
-    {"js_worker": "demo_*"}
+    {
+      "global": null
+    },
+    {
+      "js_worker": "demo_*"
+    }
   ],
   "permissions": [
-    {"crontab": "write"},
-    {"js_worker": "run_defined_js_worker"}
+    {
+      "crontab": "write"
+    },
+    {
+      "js_worker": "run_defined_js_worker"
+    }
   ]
 }
 ```
@@ -136,7 +179,8 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "id": 123 // 数据库中的任务 ID
+  "id": 123
+  // 数据库中的任务 ID
 }
 ```
 
@@ -229,9 +273,12 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "token": "demo_token",                // Token
-  "name": "task_name",                  // 目标任务名称
-  "cron_expression": "0 * * * * *",     // 新的 Cron 表达式
+  "token": "demo_token",
+  // Token
+  "name": "task_name",
+  // 目标任务名称
+  "cron_expression": "0 * * * * *",
+  // 新的 Cron 表达式
   "cron_type": {
     // 新的任务类型，格式与 crontab_create 一致
   }
@@ -254,8 +301,10 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "id": 123,       // 任务 ID
-  "success": true  // 操作结果
+  "id": 123,
+  // 任务 ID
+  "success": true
+  // 操作结果
 }
 ```
 
@@ -349,7 +398,8 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "token": "demo_token" // Token
+  "token": "demo_token"
+  // Token
 }
 ```
 
@@ -366,16 +416,22 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 读取成功后返回 Crontab 列表，每个元素结构如下:
 
-> **注意**：`crontab_get` 直接从 `CrontabCache` 读取已解析好的任务数据，不会在此方法内解析 Cron 表达式或 `cron_type`。如果存在损坏数据，解析错误会在缓存加载/调度器初始化阶段抛出，而不是在调用 `crontab_get` 时返回。
+> **注意**：`crontab_get` 直接从 `CrontabCache` 读取已解析好的任务数据，不会在此方法内解析 Cron 表达式或 `cron_type`
+> 。如果存在损坏数据，解析错误会在缓存加载/调度器初始化阶段抛出，而不是在调用 `crontab_get` 时返回。
 
 ```json
 [
   {
-    "id": 123,                              // 任务 ID
-    "name": "ping_task",                    // 任务名称
-    "enable": true,                         // 是否启用
-    "cron_expression": "0 * * * * *",       // Cron 表达式
-    "cron_type": {                          // 任务类型
+    "id": 123,
+    // 任务 ID
+    "name": "ping_task",
+    // 任务名称
+    "enable": true,
+    // 是否启用
+    "cron_expression": "0 * * * * *",
+    // Cron 表达式
+    "cron_type": {
+      // 任务类型
       "agent": [
         [
           "00000000-0000-0000-0000-000000000001"
@@ -387,7 +443,8 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
         }
       ]
     },
-    "last_run_time": 1769341269012          // 最后运行时间（毫秒时间戳），可为 null
+    "last_run_time": 1769341269012
+    // 最后运行时间（毫秒时间戳），可为 null
   }
 ]
 ```
@@ -447,8 +504,10 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "token": "demo_token",             // Token
-  "name": "task_name_to_delete"      // 要删除的任务名称
+  "token": "demo_token",
+  // Token
+  "name": "task_name_to_delete"
+  // 要删除的任务名称
 }
 ```
 
@@ -466,7 +525,8 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "success": true // 操作结果
+  "success": true
+  // 操作结果
 }
 ```
 
@@ -508,9 +568,12 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "token": "demo_token",    // Token
-  "name": "task_name",      // 目标任务名称
-  "enable": true            // 启用状态，true 为启用，false 为禁用
+  "token": "demo_token",
+  // Token
+  "name": "task_name",
+  // 目标任务名称
+  "enable": true
+  // 启用状态，true 为启用，false 为禁用
 }
 ```
 
@@ -531,8 +594,10 @@ Server 任务类型 — 触发已注册的 JsWorker 脚本:
 
 ```json
 {
-  "success": true,  // 操作结果
-  "enabled": true   // 当前的启用状态
+  "success": true,
+  // 操作结果
+  "enabled": true
+  // 当前的启用状态
 }
 ```
 

@@ -245,7 +245,8 @@
 
 ```json
 {
-  "token": "demo_super_token" // Super Token
+  "token": "demo_super_token"
+  // Super Token
 }
 ```
 
@@ -260,7 +261,11 @@
 返回所有静态服务 `name` 字段组成的数组，**按字典序排序**：
 
 ```json
-["api-docs", "blog", "my-site"]
+[
+  "api-docs",
+  "blog",
+  "my-site"
+]
 ```
 
 ### 完整示例
@@ -284,6 +289,10 @@
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": ["api-docs", "blog", "my-site"]
+  "result": [
+    "api-docs",
+    "blog",
+    "my-site"
+  ]
 }
 ```

@@ -39,9 +39,8 @@ const AUTH_FAILED_MESSAGE: &str = "Invalid credentials";
 /// 2. 常量时间比较哈希值验证凭据
 /// 3. 从 CachedToken 构建返回用的 Token 结构体（不含哈希）
 pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
-    let cache = TokenCache::global().ok_or_else(|| {
-        NodegetError::ConfigNotFound("TokenCache not initialized".to_owned())
-    })?;
+    let cache = TokenCache::global()
+        .ok_or_else(|| NodegetError::ConfigNotFound("TokenCache not initialized".to_owned()))?;
 
     let cached_token = match token_or_auth {
         TokenOrAuth::Token(key, secret) => {
@@ -105,9 +104,8 @@ pub async fn get_token(token_or_auth: &TokenOrAuth) -> anyhow::Result<Token> {
 /// 1. 优先按 token_key 在缓存中查找
 /// 2. 若未找到，回退按 username 查找
 pub async fn get_token_by_key_or_username(identifier: &str) -> anyhow::Result<Token> {
-    let cache = TokenCache::global().ok_or_else(|| {
-        NodegetError::ConfigNotFound("TokenCache not initialized".to_owned())
-    })?;
+    let cache = TokenCache::global()
+        .ok_or_else(|| NodegetError::ConfigNotFound("TokenCache not initialized".to_owned()))?;
 
     let cached_token = if let Some(entry) = cache.find_by_key(identifier) {
         debug!(target: "auth", identifier = %identifier, "found token by key");
@@ -590,9 +588,18 @@ mod tests {
     #[test]
     fn test_scope_matches_global_covers_all() {
         assert!(scope_matches(&Scope::Global, &Scope::Global));
-        assert!(scope_matches(&Scope::Global, &Scope::KvNamespace("ns".to_string())));
-        assert!(scope_matches(&Scope::Global, &Scope::JsWorker("w".to_string())));
-        assert!(scope_matches(&Scope::Global, &Scope::StaticBucket("b".to_string())));
+        assert!(scope_matches(
+            &Scope::Global,
+            &Scope::KvNamespace("ns".to_string())
+        ));
+        assert!(scope_matches(
+            &Scope::Global,
+            &Scope::JsWorker("w".to_string())
+        ));
+        assert!(scope_matches(
+            &Scope::Global,
+            &Scope::StaticBucket("b".to_string())
+        ));
         assert!(scope_matches(&Scope::Global, &Scope::Db("d".to_string())));
     }
 

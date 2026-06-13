@@ -83,7 +83,9 @@ pub async fn execute_http_request(task: HttpRequestTask) -> Result<HttpRequestTa
             })?,
         };
         // 按 IP 缓存 Client：首次构建后复用，避免每次请求重建连接池/TLS/DNS 缓存。
-        let mut cache = IP_BOUND_CLIENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = IP_BOUND_CLIENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(cached) = cache.get(&ip) {
             cached.clone()
         } else {

@@ -12,8 +12,8 @@
 use ng_config::config::server::MonitoringBufferConfig;
 use ng_db::entity::{dynamic_monitoring, dynamic_monitoring_summary, static_monitoring};
 use sea_orm::EntityTrait;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, interval};
@@ -158,7 +158,8 @@ pub async fn flush_and_shutdown() {
     let handles_opt = FLUSH_HANDLES.lock().unwrap().take();
     if let Some(handles) = handles_opt {
         let timeout_dur = Duration::from_secs(5);
-        let result = tokio::time::timeout(timeout_dur, futures_util::future::join_all(handles)).await;
+        let result =
+            tokio::time::timeout(timeout_dur, futures_util::future::join_all(handles)).await;
         match result {
             Ok(results) => {
                 for (i, res) in results.into_iter().enumerate() {
@@ -392,4 +393,3 @@ where
         debug!(target: "monitoring", table = table_name, count = total, "Batch insert succeeded");
     }
 }
-

@@ -17,6 +17,7 @@ use std::fmt as stdfmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use arc_swap::ArcSwap;
 use ng_config::config::server::LoggingConfig;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Metadata, Subscriber};
@@ -31,7 +32,6 @@ use tracing_subscriber::{
     registry::LookupSpan,
     util::SubscriberInitExt,
 };
-use arc_swap::ArcSwap;
 use uuid::Uuid;
 
 /// 内存日志环形缓冲区默认容量

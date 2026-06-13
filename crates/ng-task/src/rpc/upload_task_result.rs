@@ -44,7 +44,9 @@ pub async fn upload_task_result(
             .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
         let provider = ng_core::permission::permission_checker::get_permission_checker()
-            .ok_or_else(|| NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned()))?;
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned())
+            })?;
 
         // 先进行权限预检，防止无权限调用者通过数据库查询差异探测任务存在性（时序攻击）
         // 预检逻辑：检查 token 是否对目标 Agent 持有任意 Task::Write 权限（不限具体 pattern）

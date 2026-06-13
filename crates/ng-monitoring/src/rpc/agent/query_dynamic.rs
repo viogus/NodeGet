@@ -106,7 +106,9 @@ pub async fn query_dynamic(
         debug!(target: "monitoring", conditions_count = dynamic_data_query.condition.len(), fields_count = dynamic_data_query.fields.len(), "Dynamic query permission check passed");
 
         let db = AgentRpcImpl::get_db()?;
-        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?;
+        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| {
+            NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+        })?;
 
         let query = dynamic_monitoring::Entity::find()
             .select_only()

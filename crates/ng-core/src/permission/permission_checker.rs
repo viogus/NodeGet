@@ -69,7 +69,8 @@ pub fn get_permission_checker() -> Option<&'static std::sync::Arc<dyn Permission
 /// 获取全局 PermissionChecker，未初始化时返回统一错误。
 ///
 /// 供各业务 crate 的 auth 模块调用，避免重复编写 `ok_or_else` 错误构造。
-pub fn require_permission_checker() -> anyhow::Result<&'static std::sync::Arc<dyn PermissionChecker>> {
+pub fn require_permission_checker() -> anyhow::Result<&'static std::sync::Arc<dyn PermissionChecker>>
+{
     get_permission_checker().ok_or_else(|| {
         NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned()).into()
     })

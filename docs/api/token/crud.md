@@ -10,8 +10,10 @@
 
 ```json
 {
-  "token": "demo_token",            // 需要查询的 Token
-  "supertoken": "SUPER_TOKEN"       // 可选，Super Token，启用后允许 token 传入 username / token_key
+  "token": "demo_token",
+  // 需要查询的 Token
+  "supertoken": "SUPER_TOKEN"
+  // 可选，Super Token，启用后允许 token 传入 username / token_key
 }
 ```
 
@@ -22,7 +24,8 @@
 
 ```json
 {
-  "token": "target_username_or_token_key", // 仅传入 username 或 token_key 即可
+  "token": "target_username_or_token_key",
+  // 仅传入 username 或 token_key 即可
   "supertoken": "SUPER_TOKEN_KEY:SUPER_TOKEN_SECRET"
 }
 ```
@@ -41,28 +44,37 @@
 
 ```json
 {
-  "version": 1,                    // Token 版本
-  "token_key": "n0kB8lSAykFd9Egu", // Token Key
-  "timestamp_from": null,          // 有效期起始，毫秒时间戳
-  "timestamp_to": null,            // 有效期结束，毫秒时间戳
-  "token_limit": [                 // 权限列表
+  "version": 1,
+  // Token 版本
+  "token_key": "n0kB8lSAykFd9Egu",
+  // Token Key
+  "timestamp_from": null,
+  // 有效期起始，毫秒时间戳
+  "timestamp_to": null,
+  // 有效期结束，毫秒时间戳
+  "token_limit": [
+    // 权限列表
     {
       "scopes": [
-        "global"                   // 全局作用域
+        "global"
+        // 全局作用域
       ],
       "permissions": [
         {
-          "task": "listen"         // 监听任务
+          "task": "listen"
+          // 监听任务
         },
         {
           "task": {
-            "write": "ping"        // 上报 ping 任务
+            "write": "ping"
+            // 上报 ping 任务
           }
         }
       ]
     }
   ],
-  "username": null                 // 用户名
+  "username": null
+  // 用户名
 }
 ```
 
@@ -72,13 +84,16 @@
 {
   "permissions": [
     {
-      "crontab": "read"   // 读取 Crontab
+      "crontab": "read"
+      // 读取 Crontab
     },
     {
-      "crontab": "write"  // 创建 Crontab
+      "crontab": "write"
+      // 创建 Crontab
     },
     {
-      "crontab": "delete" // 删除 Crontab
+      "crontab": "delete"
+      // 删除 Crontab
     }
   ]
 }
@@ -156,14 +171,22 @@
 
 ```json
 {
-  "father_token": "demo_super_token", // 父 Token，必须为 Super Token
-  "token_creation": {                 // TokenCreationRequest 结构体
-    "username": "GM",                 // 可选，用户名
-    "password": "ILoveRust1",         // 可选，密码
-    "timestamp_from": null,           // 可选，有效期起始，毫秒时间戳
-    "timestamp_to": null,             // 可选，有效期结束，毫秒时间戳
-    "version": 1,                     // 可选，版本号；服务端固定存储为 1，客户端传入的值会被忽略
-    "token_limit": [                  // 权限列表
+  "father_token": "demo_super_token",
+  // 父 Token，必须为 Super Token
+  "token_creation": {
+    // TokenCreationRequest 结构体
+    "username": "GM",
+    // 可选，用户名
+    "password": "ILoveRust1",
+    // 可选，密码
+    "timestamp_from": null,
+    // 可选，有效期起始，毫秒时间戳
+    "timestamp_to": null,
+    // 可选，有效期结束，毫秒时间戳
+    "version": 1,
+    // 可选，版本号；服务端固定存储为 1，客户端传入的值会被忽略
+    "token_limit": [
+      // 权限列表
       // Limit 结构体，参考 Token 总览
       // 该字段为 Vec<_>，可指定多个
     ]
@@ -201,8 +224,10 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "key": "n0kB8lSAykFd9Egu",                // Token Key
-  "secret": "a0a7V3g43xjUCYIU5Md76H5QMPSlPPT6" // Token Secret
+  "key": "n0kB8lSAykFd9Egu",
+  // Token Key
+  "secret": "a0a7V3g43xjUCYIU5Md76H5QMPSlPPT6"
+  // Token Secret
 }
 ```
 
@@ -267,8 +292,10 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "token": "demo_super_token",                    // Super Token
-  "target_token": "target_token_key_or_username"   // 目标 Token 的 token_key 或 username
+  "token": "demo_super_token",
+  // Super Token
+  "target_token": "target_token_key_or_username"
+  // 目标 Token 的 token_key 或 username
 }
 ```
 
@@ -301,9 +328,12 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "message": "Token xxx deleted successfully by SuperToken", // 删除成功提示
-  "rows_affected": 1,        // 受影响的行数
-  "matched_by": "token_key"  // 匹配方式，token_key 或 username
+  "message": "Token xxx deleted successfully by SuperToken",
+  // 删除成功提示
+  "rows_affected": 1,
+  // 受影响的行数
+  "matched_by": "token_key"
+  // 匹配方式，token_key 或 username
 }
 ```
 
@@ -347,17 +377,22 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "token": "demo_super_token",                    // Super Token
-  "target_token": "target_token_key_or_username",  // 目标 Token 的 token_key 或 username
-  "limit": [                                       // 新的权限列表，会覆盖原有 token_limit
+  "token": "demo_super_token",
+  // Super Token
+  "target_token": "target_token_key_or_username",
+  // 目标 Token 的 token_key 或 username
+  "limit": [
+    // 新的权限列表，会覆盖原有 token_limit
     {
       "scopes": [
-        "global"                                   // 全局作用域
+        "global"
+        // 全局作用域
       ],
       "permissions": [
         {
           "task": {
-            "read": "ping"                         // 读取 ping 任务
+            "read": "ping"
+            // 读取 ping 任务
           }
         }
       ]
@@ -385,9 +420,12 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "success": true,                  // 是否成功
-  "id": 2,                         // 目标 Token 在数据库中的 ID
-  "token_key": "BgFqEhzoCISpAAON"  // 目标 Token 的 token_key
+  "success": true,
+  // 是否成功
+  "id": 2,
+  // 目标 Token 在数据库中的 ID
+  "token_key": "BgFqEhzoCISpAAON"
+  // 目标 Token 的 token_key
 }
 ```
 
@@ -448,7 +486,8 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "token": "demo_super_token" // Super Token
+  "token": "demo_super_token"
+  // Super Token
 }
 ```
 
@@ -466,26 +505,35 @@ pub struct TokenCreationRequest {
 {
   "tokens": [
     {
-      "version": 1,                         // Token 版本
-      "token_key": "n0kB8lSAykFd9Egu",      // Token Key
-      "timestamp_from": null,               // 有效期起始
-      "timestamp_to": null,                 // 有效期结束
-      "token_limit": [],                    // 权限列表
-      "username": "root"                    // 用户名，Super Token 固定为 root
+      "version": 1,
+      // Token 版本
+      "token_key": "n0kB8lSAykFd9Egu",
+      // Token Key
+      "timestamp_from": null,
+      // 有效期起始
+      "timestamp_to": null,
+      // 有效期结束
+      "token_limit": [],
+      // 权限列表
+      "username": "root"
+      // 用户名，Super Token 固定为 root
     },
     {
       "version": 1,
       "token_key": "demo_child_key",
-      "timestamp_from": 1735689600000,      // 毫秒时间戳
+      "timestamp_from": 1735689600000,
+      // 毫秒时间戳
       "timestamp_to": 1767225600000,
       "token_limit": [
         {
           "scopes": [
-            "global"                        // 全局作用域
+            "global"
+            // 全局作用域
           ],
           "permissions": [
             {
-              "task": "listen"              // 监听任务
+              "task": "listen"
+              // 监听任务
             }
           ]
         }
@@ -506,9 +554,12 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "token": "demo_super_token",                    // Super Token，用于鉴权
-  "target_token": "target_token_key_or_username",   // 目标 Token 的 token_key 或 username
-  "new_password": "new_password_here"               // 新密码，不少于 6 个字符
+  "token": "demo_super_token",
+  // Super Token，用于鉴权
+  "target_token": "target_token_key_or_username",
+  // 目标 Token 的 token_key 或 username
+  "new_password": "new_password_here"
+  // 新密码，不少于 6 个字符
 }
 ```
 
@@ -583,8 +634,10 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "token": "demo_super_token",                    // Super Token，用于鉴权
-  "target_token": "target_token_key_or_username"   // 目标 Token 的 token_key 或 username
+  "token": "demo_super_token",
+  // Super Token，用于鉴权
+  "target_token": "target_token_key_or_username"
+  // 目标 Token 的 token_key 或 username
 }
 ```
 
@@ -616,8 +669,10 @@ pub struct TokenCreationRequest {
 
 ```json
 {
-  "key": "BgFqEhzoCISpAAON",              // Token Key
-  "secret": "x9qW3mP7vL2kR8tY5nJ4hG6fE1dC0bA3" // 新生成的 Token Secret
+  "key": "BgFqEhzoCISpAAON",
+  // Token Key
+  "secret": "x9qW3mP7vL2kR8tY5nJ4hG6fE1dC0bA3"
+  // 新生成的 Token Secret
 }
 ```
 

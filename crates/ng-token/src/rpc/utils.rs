@@ -78,8 +78,7 @@ pub async fn find_target_token(identifier: &str) -> Result<token::Model, Nodeget
 /// - `token`：原始凭据字符串
 /// - 返回：成功为 `()`，非超级令牌时为 PermissionDenied 错误
 pub async fn verify_supertoken(token: &str) -> Result<(), NodegetError> {
-    let token_or_auth =
-        TokenOrAuth::from_full_token(token).map_err(NodegetError::ParseError)?;
+    let token_or_auth = TokenOrAuth::from_full_token(token).map_err(NodegetError::ParseError)?;
 
     let is_super = check_super_token(&token_or_auth)
         .await

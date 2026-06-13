@@ -245,7 +245,11 @@ impl RpcServer for TaskRpcImpl {
         // 获取 PermissionChecker，未初始化则拒绝
         let provider = ng_core::permission::permission_checker::get_permission_checker()
             .ok_or_else(|| {
-                jsonrpsee::types::ErrorObject::borrowed(101, "PermissionChecker not initialized", None)
+                jsonrpsee::types::ErrorObject::borrowed(
+                    101,
+                    "PermissionChecker not initialized",
+                    None,
+                )
             })
             .ok();
 

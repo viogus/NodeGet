@@ -300,7 +300,8 @@ pub async fn create_static(
 /// 返回：命中时返回 `Some(model)`，未命中返回 `None`。
 /// 数据源为 [`StaticCache`]，不访问数据库。
 pub async fn read_static(name: &str) -> anyhow::Result<Option<static_entity::Model>> {
-    let cache = StaticCache::global().ok_or_else(|| NodegetError::ConfigNotFound("StaticCache not initialized".to_owned()))?;
+    let cache = StaticCache::global()
+        .ok_or_else(|| NodegetError::ConfigNotFound("StaticCache not initialized".to_owned()))?;
     let model = cache.get_by_name(name).map(|arc| (*arc).clone());
     debug!(target: "static", name = %name, found = model.is_some(), "read_static from cache");
     Ok(model)
@@ -904,7 +905,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let nodeget_err = err.downcast_ref::<NodegetError>().unwrap();
-        assert!(matches!(nodeget_err, NodegetError::InvalidInput(msg) if msg.contains("'.'") || msg.contains("'..'")));
+        assert!(
+            matches!(nodeget_err, NodegetError::InvalidInput(msg) if msg.contains("'.'") || msg.contains("'..'"))
+        );
     }
 
     #[test]
@@ -941,9 +944,15 @@ mod tests {
 
     #[test]
     fn validate_name_rejects_special_chars() {
-        for ch in ['!', '@', '#', '$', '%', '&', '(', ')', '=', '+', '[', ']', '{', '}', '|', ';', ':', '\'', '"', '<', '>', ',', '?'] {
+        for ch in [
+            '!', '@', '#', '$', '%', '&', '(', ')', '=', '+', '[', ']', '{', '}', '|', ';', ':',
+            '\'', '"', '<', '>', ',', '?',
+        ] {
             let name = format!("a{ch}b");
-            assert!(validate_name(&name).is_err(), "expected rejection for char '{ch}'");
+            assert!(
+                validate_name(&name).is_err(),
+                "expected rejection for char '{ch}'"
+            );
         }
     }
 
@@ -1014,7 +1023,9 @@ mod tests {
         let mut path = String::new();
         // 256 segments of "a" separated by "/" = 256 + 255 = 511 chars
         for i in 0..256 {
-            if i > 0 { path.push('/'); }
+            if i > 0 {
+                path.push('/');
+            }
             path.push('a');
         }
         assert_eq!(path.len(), 511); // 256 chars + 255 separators
@@ -1026,7 +1037,9 @@ mod tests {
         // Build a path that exceeds 512 chars
         let mut path = String::new();
         for i in 0..257 {
-            if i > 0 { path.push('/'); }
+            if i > 0 {
+                path.push('/');
+            }
             path.push('a');
         }
         // 257 chars + 256 separators = 513
@@ -1120,14 +1133,20 @@ mod tests {
     fn resolve_safe_file_path_simple() {
         let result = resolve_safe_file_path("/data/static", "sites", "index.html");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PathBuf::from("/data/static/sites/index.html"));
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/data/static/sites/index.html")
+        );
     }
 
     #[test]
     fn resolve_safe_file_path_nested() {
         let result = resolve_safe_file_path("/data/static", "sites", "docs/readme.md");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PathBuf::from("/data/static/sites/docs/readme.md"));
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/data/static/sites/docs/readme.md")
+        );
     }
 
     #[test]
@@ -1164,7 +1183,10 @@ mod tests {
     fn resolve_safe_file_path_with_curdir() {
         let result = resolve_safe_file_path("/data/static", "sites", "./index.html");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PathBuf::from("/data/static/sites/index.html"));
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/data/static/sites/index.html")
+        );
     }
 
     #[test]

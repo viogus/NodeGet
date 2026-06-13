@@ -20,11 +20,10 @@ pub mod rpc;
 
 #[cfg(feature = "server")]
 pub use auth::{
-    KvNamespaceListPermission, check_kv_create_permission,
-    check_kv_delete_namespace_permission, check_kv_delete_permission,
-    check_kv_list_keys_permission, check_kv_read_permission, check_kv_read_permission_with_pattern,
-    check_kv_write_permission, resolve_kv_list_namespace_permission,
-    validate_key, validate_key_pattern,
+    KvNamespaceListPermission, check_kv_create_permission, check_kv_delete_namespace_permission,
+    check_kv_delete_permission, check_kv_list_keys_permission, check_kv_read_permission,
+    check_kv_read_permission_with_pattern, check_kv_write_permission,
+    resolve_kv_list_namespace_permission, validate_key, validate_key_pattern,
 };
 
 #[cfg(feature = "server")]

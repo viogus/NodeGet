@@ -400,7 +400,11 @@ allow_task_type = ["ping", "tcp_ping", "version"]
         assert_eq!(servers[1].name, "dev");
         assert_eq!(
             servers[1].allow_task_type,
-            Some(vec!["ping".to_owned(), "tcp_ping".to_owned(), "version".to_owned()])
+            Some(vec![
+                "ping".to_owned(),
+                "tcp_ping".to_owned(),
+                "version".to_owned()
+            ])
         );
     }
 
@@ -432,9 +436,18 @@ ip_provider = "ipinfo"
 agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.dynamic_report_interval_ms_or_default(), DEFAULT_DYNAMIC_REPORT_INTERVAL_MS);
-        assert_eq!(config.dynamic_summary_report_interval_ms_or_default(), DEFAULT_DYNAMIC_SUMMARY_REPORT_INTERVAL_MS);
-        assert_eq!(config.static_report_interval_ms_or_default(), DEFAULT_STATIC_REPORT_INTERVAL_MS);
+        assert_eq!(
+            config.dynamic_report_interval_ms_or_default(),
+            DEFAULT_DYNAMIC_REPORT_INTERVAL_MS
+        );
+        assert_eq!(
+            config.dynamic_summary_report_interval_ms_or_default(),
+            DEFAULT_DYNAMIC_SUMMARY_REPORT_INTERVAL_MS
+        );
+        assert_eq!(
+            config.static_report_interval_ms_or_default(),
+            DEFAULT_STATIC_REPORT_INTERVAL_MS
+        );
     }
 
     #[test]
@@ -444,7 +457,10 @@ agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 connect_timeout_ms = 5000
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.connect_timeout_duration(), Duration::from_millis(5000));
+        assert_eq!(
+            config.connect_timeout_duration(),
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
@@ -453,7 +469,10 @@ connect_timeout_ms = 5000
 agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.connect_timeout_duration(), Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
+        assert_eq!(
+            config.connect_timeout_duration(),
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS)
+        );
     }
 
     #[test]
@@ -462,7 +481,10 @@ agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.exec_max_character_or_default(), DEFAULT_EXEC_MAX_CHARACTER);
+        assert_eq!(
+            config.exec_max_character_or_default(),
+            DEFAULT_EXEC_MAX_CHARACTER
+        );
     }
 
     #[test]
@@ -480,7 +502,10 @@ agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(config.ip_provider_or_default(), IpProvider::Cloudflare));
+        assert!(matches!(
+            config.ip_provider_or_default(),
+            IpProvider::Cloudflare
+        ));
     }
 
     #[test]

@@ -97,7 +97,9 @@ pub async fn ensure_crontab_payload_write_permission(
             .into());
         }
 
-        let is_allowed = checker.check_token_limit(token_or_auth, scopes, permissions).await?;
+        let is_allowed = checker
+            .check_token_limit(token_or_auth, scopes, permissions)
+            .await?;
         if is_allowed {
             return Ok(());
         }
@@ -111,7 +113,9 @@ pub async fn ensure_crontab_payload_write_permission(
 
     // Server 类型：仅保留 Crontab::Write，无需 Task::Create
     permissions.retain(|perm| matches!(perm, Permission::Crontab(CrontabPermission::Write)));
-    let has_crontab_write = checker.check_token_limit(token_or_auth, scopes, permissions).await?;
+    let has_crontab_write = checker
+        .check_token_limit(token_or_auth, scopes, permissions)
+        .await?;
     if !has_crontab_write {
         warn!(target: "crontab", "crontab write permission denied in global scope");
         return Err(NodegetError::PermissionDenied(
@@ -173,7 +177,9 @@ pub async fn ensure_crontab_scope_permission(
         scopes
     };
     let checker = require_permission_checker()?;
-    let is_allowed = checker.check_token_limit(token_or_auth, scopes, vec![permission]).await?;
+    let is_allowed = checker
+        .check_token_limit(token_or_auth, scopes, vec![permission])
+        .await?;
 
     if is_allowed {
         Ok(())

@@ -445,7 +445,8 @@ pub fn init_global_pool() -> &'static Arc<JsRuntimePool> {
     if !CLEANUP_LOOP_STARTED.swap(true, Ordering::AcqRel) {
         let pool_for_task = Arc::clone(pool);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(CLEANUP_INTERVAL_MS));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_millis(CLEANUP_INTERVAL_MS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 ticker.tick().await;
@@ -582,7 +583,11 @@ fn worker_loop(
 /// 8. 若被硬超时打断：丢弃整个 RuntimeState（残留未清理的 promise 会影响后续执行）
 /// 9. 等待 `rt.idle()` 确保 `QuickJS` GC 完成（100ms 超时兜底）
 /// 10. drain I/O 清理窗口（10ms），让 hyper 连接 task 处理关闭信号
-#[allow(clippy::future_not_send, clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(
+    clippy::future_not_send,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 async fn execute_on_worker(
     runtime_state: &mut Option<RuntimeState>,
     script_name: &str,

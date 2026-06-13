@@ -230,7 +230,10 @@ async fn handle_agent(
     // 不能跨 .await 持有，因此先在同步块内完成插入判定，再在外面处理错误。
     let insert_ok = {
         use std::collections::hash_map::Entry;
-        let mut sessions = state.sessions.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sessions = state
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match sessions.entry(session_key.clone()) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -246,9 +249,7 @@ async fn handle_agent(
     if !insert_ok {
         let error_json = generate_error_message(
             108,
-            &format!(
-                "Invalid Input: terminal_id '{terminal_id}' is already active for this agent"
-            ),
+            &format!("Invalid Input: terminal_id '{terminal_id}' is already active for this agent"),
         );
         if let Err(e) = socket
             .send(Message::Text(Utf8Bytes::from(error_json.to_string())))
@@ -286,7 +287,10 @@ async fn handle_agent(
 
     // 清理会话映射：remove 本身幂等，无需先 contains_key 再删
     {
-        let mut sessions = state.sessions.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sessions = state
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sessions.remove(&session_key);
     }
     info!(target: "terminal", agent_uuid = %agent_uuid, terminal_id = %terminal_id, "Agent terminal disconnected");
@@ -332,8 +336,11 @@ async fn handle_user(
         warn!(target: "terminal", "User connection rejected: missing token");
         let _ = socket
             .send(Message::Text(Utf8Bytes::from(
-                generate_error_message(108, "Invalid Input: Missing token for user terminal connection")
-                    .to_string(),
+                generate_error_message(
+                    108,
+                    "Invalid Input: Missing token for user terminal connection",
+                )
+                .to_string(),
             )))
             .await;
         return;
@@ -367,7 +374,10 @@ async fn handle_user(
             agent_uuid: parsed_uuid,
             terminal_id,
         };
-        let mut sessions = state.sessions.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sessions = state
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(slots) = sessions.get_mut(&session_key) {
             if let Some(rx) = slots.rx_from_agent.take() {
                 SlotResult::Got(slots.tx_to_agent.clone(), rx)
@@ -399,8 +409,7 @@ async fn handle_user(
             warn!(target: "terminal", agent_uuid = %agent_uuid, terminal_id = %terminal_id, "Terminal session not found");
             let _ = socket
                 .send(Message::Text(Utf8Bytes::from(
-                    generate_error_message(108, "Terminal session not found")
-                        .to_string(),
+                    generate_error_message(108, "Terminal session not found").to_string(),
                 )))
                 .await;
             return;

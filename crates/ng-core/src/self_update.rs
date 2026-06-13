@@ -334,9 +334,11 @@ pub fn restart_process_with_exec_v() -> ! {
 
     let c_args: Vec<CString> = std::env::args()
         .filter_map(|s| {
-            CString::new(s).map_err(|_| {
-                tracing::warn!("Skipping argument with NUL byte");
-            }).ok()
+            CString::new(s)
+                .map_err(|_| {
+                    tracing::warn!("Skipping argument with NUL byte");
+                })
+                .ok()
         })
         .collect();
 

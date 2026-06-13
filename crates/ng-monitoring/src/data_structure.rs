@@ -670,10 +670,10 @@ mod tests {
     use super::{
         DiskKind, DynamicCPUData, DynamicLoadData, DynamicMonitoringData,
         DynamicMonitoringSummaryData, DynamicNetworkData, DynamicPerDiskData,
-        DynamicPerNetworkInterfaceData, DynamicRamData, DynamicSystemData,
-        StaticCPUData, StaticGpuData, StaticMonitoringData, StaticSystemData,
-        is_excluded_file_system, is_excluded_mount, is_excluded_summary_disk,
-        is_virtual_interface, scale_cpu_percent_to_i16, scale_load_to_i16,
+        DynamicPerNetworkInterfaceData, DynamicRamData, DynamicSystemData, StaticCPUData,
+        StaticGpuData, StaticMonitoringData, StaticSystemData, is_excluded_file_system,
+        is_excluded_mount, is_excluded_summary_disk, is_virtual_interface,
+        scale_cpu_percent_to_i16, scale_load_to_i16,
     };
     use std::sync::Arc;
 
@@ -1078,15 +1078,15 @@ mod tests {
 
     #[test]
     fn from_trait_uses_default_exclusion() {
-        let data = monitoring_data(vec![
-            disk("/", "ext4", 100),
-            disk("/run", "tmpfs", 50),
-        ]);
+        let data = monitoring_data(vec![disk("/", "ext4", 100), disk("/run", "tmpfs", 50)]);
         // From trait = from_with_filter(None, None)
         let summary_from = DynamicMonitoringSummaryData::from(&data);
         let summary_with_filter = DynamicMonitoringSummaryData::from_with_filter(&data, None, None);
         assert_eq!(summary_from.total_space, summary_with_filter.total_space);
-        assert_eq!(summary_from.available_space, summary_with_filter.available_space);
+        assert_eq!(
+            summary_from.available_space,
+            summary_with_filter.available_space
+        );
     }
 
     #[test]

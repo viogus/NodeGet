@@ -102,7 +102,11 @@ mod tests {
         assert_eq!(h.len(), 64, "hex-encoded SHA256 must be 64 chars");
         // Verify it matches hash_to_bytes round-trip
         let bytes = hash_to_bytes("test");
-        assert_eq!(h, hex::encode(bytes), "hash_string must equal hex::encode(hash_to_bytes)");
+        assert_eq!(
+            h,
+            hex::encode(bytes),
+            "hash_string must equal hex::encode(hash_to_bytes)"
+        );
     }
 
     #[test]

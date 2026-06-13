@@ -87,7 +87,9 @@ pub enum ResolvedCondition {
 pub async fn resolve_conditions(
     conditions: &[QueryCondition],
 ) -> anyhow::Result<Vec<ResolvedCondition>> {
-    let cache = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?;
+    let cache = MonitoringUuidCache::global().ok_or_else(|| {
+        NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+    })?;
     let mut resolved = Vec::new();
 
     for cond in conditions {

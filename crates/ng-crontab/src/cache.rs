@@ -77,9 +77,7 @@ impl DbBackedCache for CrontabCache {
     fn build_cache(models: Vec<Self::Model>) -> Self {
         let by_id = Self::build_maps(models);
         Self {
-            inner: RwLock::new(CrontabCacheInner {
-                by_id,
-            }),
+            inner: RwLock::new(CrontabCacheInner { by_id }),
             last_run_times: RwLock::new(HashMap::new()),
         }
     }
@@ -176,10 +174,7 @@ impl CrontabCache {
     /// - `model_last` - 数据库模型中的 last_run_time（毫秒时间戳）
     pub fn get_last_run_time(&self, id: i64, model_last: Option<i64>) -> Option<i64> {
         let guard = recover_read(&self.last_run_times);
-        guard
-            .get(&id)
-            .copied()
-            .or(model_last)
+        guard.get(&id).copied().or(model_last)
     }
 
     /// 更新指定定时任务的 last_run_time 到覆盖映射。

@@ -11,7 +11,8 @@
 ```json
 {
   "token": "demo_token",
-  "target_uuid": "AGENT_UUID_HERE", // 指定的 Agent UUID
+  "target_uuid": "AGENT_UUID_HERE",
+  // 指定的 Agent UUID
   "task_type": {
     // 任务主体，该结构体参考 Task 总览
   }
@@ -35,7 +36,8 @@
 
 ```json
 {
-  "id": 4 // 数据库中的 ID 字段，可通过该字段作为条件查询
+  "id": 4
+  // 数据库中的 ID 字段，可通过该字段作为条件查询
 }
 ```
 
@@ -81,8 +83,10 @@
     "target_uuid": "AGENT_UUID_HERE",
     "task_type": {
       "web_shell": {
-        "url": "wss://YOUR_SERVER/auto_gen",                   // WebSocket URL
-        "terminal_id": "4c8d1cba-244e-4baf-9b65-c881f86ca60a" // 随机 UUID
+        "url": "wss://YOUR_SERVER/auto_gen",
+        // WebSocket URL
+        "terminal_id": "4c8d1cba-244e-4baf-9b65-c881f86ca60a"
+        // 随机 UUID
       }
     }
   },
@@ -101,8 +105,13 @@
     "target_uuid": "AGENT_UUID_HERE",
     "task_type": {
       "execute": {
-        "cmd": "ls",       // 命令名，不能为空字符串
-        "args": ["-1", "tmp"] // 参数列表
+        "cmd": "ls",
+        // 命令名，不能为空字符串
+        "args": [
+          "-1",
+          "tmp"
+        ]
+        // 参数列表
       }
     }
   },
@@ -123,13 +132,18 @@
     "target_uuid": "AGENT_UUID_HERE",
     "task_type": {
       "http_request": {
-        "url": "https://example.com",              // 完整 URL
-        "method": "POST",                          // HTTP 方法
-        "headers": {                               // 请求头
+        "url": "https://example.com",
+        // 完整 URL
+        "method": "POST",
+        // HTTP 方法
+        "headers": {
+          // 请求头
           "content-type": "application/json"
         },
-        "body": "{\"hello\":\"world\"}",           // 与 body_base64 互斥
-        "ip": "ipv4 auto"                          // 指定出口 IP，可选
+        "body": "{\"hello\":\"world\"}",
+        // 与 body_base64 互斥
+        "ip": "ipv4 auto"
+        // 指定出口 IP，可选
       }
     }
   },
@@ -147,7 +161,8 @@
     "token": "demo_token",
     "target_uuid": "AGENT_UUID_HERE",
     "task_type": {
-      "self_update": "v0.0.14"    // 目标版本号，格式 vX.Y.Z，支持升级和降级
+      "self_update": "v0.0.14"
+      // 目标版本号，格式 vX.Y.Z，支持升级和降级
     }
   },
   "id": 1
@@ -185,7 +200,8 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
   "task_type": {
     // 任务主体，与 task_create_task 完全一致
   },
-  "timeout_ms": 5000 // 超时时间（毫秒）
+  "timeout_ms": 5000
+  // 超时时间（毫秒）
 }
 ```
 
@@ -281,7 +297,9 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
     "task_type": {
       "execute": {
         "cmd": "uname",
-        "args": ["-a"]
+        "args": [
+          "-a"
+        ]
       }
     },
     "timeout_ms": 30000
@@ -353,18 +371,24 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 ```json
 [
   {
-    "cron_source": "daily_check",       // 若由 crontab 创建则为 cron name，否则为 null
-    "error_message": null,              // 若 success 为 false 则包含错误信息
-    "success": true,                    // 是否成功
+    "cron_source": "daily_check",
+    // 若由 crontab 创建则为 cron name，否则为 null
+    "error_message": null,
+    // 若 success 为 false 则包含错误信息
+    "success": true,
+    // 是否成功
     "task_event_result": {
       // 任务回报结构体，该结构体参考 Task 总览
     },
     "task_event_type": {
       // 任务主体，该结构体参考 Task 总览
     },
-    "task_id": 6,                       // 数据库中的 ID 字段
-    "timestamp": 1769341269012,         // 毫秒时间戳
-    "uuid": "42e89a61-39de-4569-b6ef-e86bc3ed8f82" // Agent UUID
+    "task_id": 6,
+    // 数据库中的 ID 字段
+    "timestamp": 1769341269012,
+    // 毫秒时间戳
+    "uuid": "42e89a61-39de-4569-b6ef-e86bc3ed8f82"
+    // Agent UUID
   }
   // 该字段为 Vec<_>，可返回多条
 ]
@@ -458,9 +482,12 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 
 ```json
 {
-  "success": true,        // 是否成功
-  "deleted": 12,          // 删除的记录数
-  "condition_count": 2    // 条件数量
+  "success": true,
+  // 是否成功
+  "deleted": 12,
+  // 删除的记录数
+  "condition_count": 2
+  // 条件数量
 }
 ```
 

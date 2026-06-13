@@ -41,7 +41,11 @@ pub async fn list_all_agent_uuids(token: String) -> RpcResult<Box<RawValue>> {
         }
         debug!(target: "rpc", "list_all_agent_uuids: permission check passed");
 
-        let uuids = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?.list_all();
+        let uuids = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
+            .list_all();
 
         serde_json::value::to_raw_value(&uuids)
             .map_err(|e| NodegetError::SerializationError(e.to_string()).into())

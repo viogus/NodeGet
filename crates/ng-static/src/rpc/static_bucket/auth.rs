@@ -17,9 +17,10 @@ pub async fn check_super_token(token: &str) -> anyhow::Result<bool> {
         warn!(target: "static_bucket", "权限拒绝: Token 解析失败: {e}");
         NodegetError::ParseError(format!("Failed to parse token: {e}"))
     })?;
-    let checker = ng_core::permission::permission_checker::get_permission_checker().ok_or_else(|| {
-        NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned())
-    })?;
+    let checker =
+        ng_core::permission::permission_checker::get_permission_checker().ok_or_else(|| {
+            NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned())
+        })?;
     let result = checker
         .check_super_token(&token_or_auth)
         .await

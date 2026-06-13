@@ -28,6 +28,6 @@ pub mod rpc;
 
 #[cfg(feature = "server")]
 pub use rpc::{
-    MonitoringUuidProvider, TaskManager, monitoring_uuid_provider,
-    rpc_module, set_monitoring_uuid_provider,
+    MonitoringUuidProvider, TaskManager, monitoring_uuid_provider, rpc_module,
+    set_monitoring_uuid_provider,
 };

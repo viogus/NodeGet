@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Documentation
 
-| File / Directory | Purpose |
-|------------------|---------|
-| `README.md` | Project overview and entry point |
-| `CLAUDE.md` | Architecture, conventions, and workflow guide for Claude Code (this file) |
-| `CONTRIBUTING.md` | Contribution guidelines, code style, and module conventions |
-| `docs/` | VitePress user and developer documentation |
-| `rp.md` | 技术全解：comprehensive technical reference for Rust developers |
+| File / Directory  | Purpose                                                                   |
+|-------------------|---------------------------------------------------------------------------|
+| `README.md`       | Project overview and entry point                                          |
+| `CLAUDE.md`       | Architecture, conventions, and workflow guide for Claude Code (this file) |
+| `CONTRIBUTING.md` | Contribution guidelines, code style, and module conventions               |
+| `docs/`           | VitePress user and developer documentation                                |
+| `rp.md`           | 技术全解：comprehensive technical reference for Rust developers                |
 
 ## Build & Run
 
@@ -122,12 +122,12 @@ methods. Used by: TokenCache, CrontabCache, StaticCache, MonitoringUuidCache, Mo
 Business crates use OnceLock-based trait injection to break circular dependencies. Server binary registers concrete
 implementations at startup in `serve.rs`:
 
-| Injected Trait           | Defining Crate                              | Methods                                                          | Server Implementation                   |
-|--------------------------|---------------------------------------------|------------------------------------------------------------------|-----------------------------------------|
-| `PermissionChecker`      | ng-core                                     | `check_token_limit`, `check_super_token`, `get_token`            | `ServerPermissionChecker`               |
-| `JsWorkerService`        | ng-js-runtime                               | `run_inline_call_and_record_result`, `get_rpc_module`            | `JsWorkerServiceImpl`                   |
-| `JsWorkerScheduler`      | ng-crontab                                  | `enqueue_run`                                                    | `CronJsWorkerScheduler`                 |
-| `MonitoringUuidProvider` | ng-task                                     | `get_or_insert`, `reload`                                        | `TaskMonitoringUuidProvider`            |
+| Injected Trait           | Defining Crate | Methods                                               | Server Implementation        |
+|--------------------------|----------------|-------------------------------------------------------|------------------------------|
+| `PermissionChecker`      | ng-core        | `check_token_limit`, `check_super_token`, `get_token` | `ServerPermissionChecker`    |
+| `JsWorkerService`        | ng-js-runtime  | `run_inline_call_and_record_result`, `get_rpc_module` | `JsWorkerServiceImpl`        |
+| `JsWorkerScheduler`      | ng-crontab     | `enqueue_run`                                         | `CronJsWorkerScheduler`      |
+| `MonitoringUuidProvider` | ng-task        | `get_or_insert`, `reload`                             | `TaskMonitoringUuidProvider` |
 
 All implementations ultimately delegate to `ng_token` functions.
 

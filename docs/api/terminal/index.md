@@ -5,7 +5,7 @@ WebShell 是 Task 任务系统下的一个特殊功能，也叫「网页 SSH」/
 > ## Terminal 不是 JSON-RPC 命名空间
 >
 > Terminal 没有对应的 JSON-RPC 方法，也不属于任何 JSON-RPC 命名空间。它通过 **HTTP WebSocket 路由**
-> 工作，Server  exposes 且仅 exposes 一个端点：
+> 工作，Server exposes 且仅 exposes 一个端点：
 >
 > ```
 > /terminal
@@ -38,7 +38,8 @@ ws(s)://HOST(:PORT)/terminal?agent_uuid={agent_uuid}&task_id={task_id}&task_toke
 
 Agent 支持以 `ws(s)://HOST(:PORT)/auto_gen` 作为 `web_shell` Task 的 `url` 字段值，但这不是 Server 的 URL。
 
-- `/auto_gen` 由 **Agent 端**（`agent/src/tasks/pty.rs`）在本地解析，并根据当前 Agent 配置自动生成 `/terminal` 的完整连接 URL。
+- `/auto_gen` 由 **Agent 端**（`agent/src/tasks/pty.rs`）在本地解析，并根据当前 Agent 配置自动生成 `/terminal` 的完整连接
+  URL。
 - Server 真实接收并处理的终端端点只有 `/terminal`。
 
 因此：

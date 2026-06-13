@@ -6,7 +6,7 @@
 
 use crate::data_structure::DynamicMonitoringData;
 use crate::monitoring_buffer;
-use crate::monitoring_last_cache::{build_dynamic_value, MonitoringLastCache};
+use crate::monitoring_last_cache::{MonitoringLastCache, build_dynamic_value};
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use jsonrpsee::core::RpcResult;
 use ng_core::error::NodegetError;
@@ -60,7 +60,10 @@ pub async fn report_dynamic(
         }
         debug!(target: "monitoring", agent_uuid = %agent_uuid, "report_dynamic: permission check passed");
 
-        let uuid_id = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?
+        let uuid_id = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
             .get_or_insert(agent_uuid)
             .await
             .map_err(|e| NodegetError::DatabaseError(format!("UUID cache error: {e}")))?;
@@ -98,10 +101,18 @@ pub async fn report_dynamic(
 
         debug!(target: "monitoring", agent_uuid = %dynamic_monitoring_data.uuid, "Received dynamic data, sending to buffer");
 
-        monitoring_buffer::get().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned()))?.dynamic_mon.send(in_data);
+        monitoring_buffer::get()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned())
+            })?
+            .dynamic_mon
+            .send(in_data);
 
         let cache_value = build_dynamic_value(agent_uuid, timestamp, &dynamic_monitoring_data);
-        MonitoringLastCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned()))?
+        MonitoringLastCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned())
+            })?
             .update_dynamic_prebuilt(agent_uuid, cache_value);
 
         debug!(target: "monitoring", agent_uuid = %dynamic_monitoring_data.uuid, "Dynamic data buffered successfully");

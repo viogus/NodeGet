@@ -114,10 +114,22 @@ mod tests {
 
     #[test]
     fn condition_status_flags() {
-        assert_eq!(JsResultQueryCondition::IsSuccess, JsResultQueryCondition::IsSuccess);
-        assert_eq!(JsResultQueryCondition::IsFailure, JsResultQueryCondition::IsFailure);
-        assert_eq!(JsResultQueryCondition::IsRunning, JsResultQueryCondition::IsRunning);
-        assert_ne!(JsResultQueryCondition::IsSuccess, JsResultQueryCondition::IsFailure);
+        assert_eq!(
+            JsResultQueryCondition::IsSuccess,
+            JsResultQueryCondition::IsSuccess
+        );
+        assert_eq!(
+            JsResultQueryCondition::IsFailure,
+            JsResultQueryCondition::IsFailure
+        );
+        assert_eq!(
+            JsResultQueryCondition::IsRunning,
+            JsResultQueryCondition::IsRunning
+        );
+        assert_ne!(
+            JsResultQueryCondition::IsSuccess,
+            JsResultQueryCondition::IsFailure
+        );
     }
 
     #[test]

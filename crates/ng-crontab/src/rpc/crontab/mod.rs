@@ -25,10 +25,15 @@ mod set_enable;
 /// 采用黑名单模式：仅禁止路径分隔符和控制字符，其余（含空格、emoji、中文等）均允许。
 fn validate_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
-        return Err(ng_core::error::NodegetError::InvalidInput("name cannot be empty".to_owned()).into());
+        return Err(
+            ng_core::error::NodegetError::InvalidInput("name cannot be empty".to_owned()).into(),
+        );
     }
     if name.chars().count() > 128 {
-        return Err(ng_core::error::NodegetError::InvalidInput("name too long (max 128 chars)".to_owned()).into());
+        return Err(ng_core::error::NodegetError::InvalidInput(
+            "name too long (max 128 chars)".to_owned(),
+        )
+        .into());
     }
     let invalid = name.chars().any(|c| {
         // 禁止：路径分隔符、控制字符（含 null）
@@ -36,7 +41,8 @@ fn validate_name(name: &str) -> anyhow::Result<()> {
     });
     if invalid {
         return Err(ng_core::error::NodegetError::InvalidInput(
-            "name contains invalid characters (path separators and control characters not allowed)".to_owned(),
+            "name contains invalid characters (path separators and control characters not allowed)"
+                .to_owned(),
         )
         .into());
     }

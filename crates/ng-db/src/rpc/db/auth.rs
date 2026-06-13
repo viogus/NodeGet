@@ -26,8 +26,10 @@ pub async fn check_db_permission(
     let token_or_auth = TokenOrAuth::from_full_token(token)
         .map_err(|e| NodegetError::ParseError(format!("Failed to parse token: {e}")))?;
 
-    let provider = ng_core::permission::permission_checker::get_permission_checker()
-        .ok_or_else(|| NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned()))?;
+    let provider =
+        ng_core::permission::permission_checker::get_permission_checker().ok_or_else(|| {
+            NodegetError::ConfigNotFound("PermissionChecker not initialized".to_owned())
+        })?;
 
     let is_allowed = provider
         .check_token_limit(
@@ -170,7 +172,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let nodeget_err = err.downcast_ref::<NodegetError>().unwrap();
-        assert!(matches!(nodeget_err, NodegetError::InvalidInput(msg) if msg.contains("'.'") || msg.contains("'..'")));
+        assert!(
+            matches!(nodeget_err, NodegetError::InvalidInput(msg) if msg.contains("'.'") || msg.contains("'..'"))
+        );
     }
 
     #[test]
@@ -208,9 +212,15 @@ mod tests {
 
     #[test]
     fn validate_db_name_rejects_special_chars() {
-        for ch in ['!', '@', '#', '$', '%', '&', '(', ')', '=', '+', '[', ']', '{', '}', '|', ';', ':', '\'', '"', '<', '>', ',', '?', ' ', '/', '\\'] {
+        for ch in [
+            '!', '@', '#', '$', '%', '&', '(', ')', '=', '+', '[', ']', '{', '}', '|', ';', ':',
+            '\'', '"', '<', '>', ',', '?', ' ', '/', '\\',
+        ] {
             let name = format!("a{ch}b");
-            assert!(validate_db_name(&name).is_err(), "expected rejection for char '{ch}'");
+            assert!(
+                validate_db_name(&name).is_err(),
+                "expected rejection for char '{ch}'"
+            );
         }
     }
 

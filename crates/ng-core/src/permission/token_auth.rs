@@ -89,14 +89,20 @@ mod tests {
     fn from_full_token_key_secret() {
         let result = TokenOrAuth::from_full_token("key:secret");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), TokenOrAuth::Token("key".into(), "secret".into()));
+        assert_eq!(
+            result.unwrap(),
+            TokenOrAuth::Token("key".into(), "secret".into())
+        );
     }
 
     #[test]
     fn from_full_token_user_password() {
         let result = TokenOrAuth::from_full_token("user|password");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), TokenOrAuth::Auth("user".into(), "password".into()));
+        assert_eq!(
+            result.unwrap(),
+            TokenOrAuth::Auth("user".into(), "password".into())
+        );
     }
 
     #[test]
@@ -135,7 +141,10 @@ mod tests {
     fn from_full_token_empty_key() {
         let result = TokenOrAuth::from_full_token(":secret");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), TokenOrAuth::Token("".into(), "secret".into()));
+        assert_eq!(
+            result.unwrap(),
+            TokenOrAuth::Token("".into(), "secret".into())
+        );
     }
 
     #[test]
@@ -149,7 +158,10 @@ mod tests {
     fn from_full_token_empty_username() {
         let result = TokenOrAuth::from_full_token("|password");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), TokenOrAuth::Auth("".into(), "password".into()));
+        assert_eq!(
+            result.unwrap(),
+            TokenOrAuth::Auth("".into(), "password".into())
+        );
     }
 
     #[test]
@@ -225,9 +237,15 @@ mod tests {
     fn serde_renames_to_snake_case() {
         let t = TokenOrAuth::Token("k".into(), "s".into());
         let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("\"token\""), "expected snake_case variant: {json}");
+        assert!(
+            json.contains("\"token\""),
+            "expected snake_case variant: {json}"
+        );
         let a = TokenOrAuth::Auth("u".into(), "p".into());
         let json = serde_json::to_string(&a).unwrap();
-        assert!(json.contains("\"auth\""), "expected snake_case variant: {json}");
+        assert!(
+            json.contains("\"auth\""),
+            "expected snake_case variant: {json}"
+        );
     }
 }

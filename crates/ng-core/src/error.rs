@@ -120,7 +120,7 @@ pub fn anyhow_to_nodeget_error(err: &anyhow::Error) -> NodegetError {
 
 #[cfg(test)]
 mod tests {
-    use super::{anyhow_to_nodeget_error, NodegetError};
+    use super::{NodegetError, anyhow_to_nodeget_error};
 
     // ── Variant constructions + Display ─────────────────────────────
 
@@ -195,7 +195,10 @@ mod tests {
     #[test]
     fn error_code_parse_serialization_io_share_101() {
         assert_eq!(NodegetError::ParseError("".into()).error_code(), 101);
-        assert_eq!(NodegetError::SerializationError("".into()).error_code(), 101);
+        assert_eq!(
+            NodegetError::SerializationError("".into()).error_code(),
+            101
+        );
         assert_eq!(NodegetError::IoError("".into()).error_code(), 101);
     }
 
@@ -211,7 +214,10 @@ mod tests {
 
     #[test]
     fn error_code_agent_connection_104() {
-        assert_eq!(NodegetError::AgentConnectionError("".into()).error_code(), 104);
+        assert_eq!(
+            NodegetError::AgentConnectionError("".into()).error_code(),
+            104
+        );
     }
 
     #[test]
@@ -311,6 +317,10 @@ mod tests {
         ];
         // ParseError/SerializationError/IoError share 101, so exclude those
         let unique: std::collections::HashSet<i128> = codes.iter().copied().collect();
-        assert_eq!(unique.len(), codes.len(), "all non-101-group error codes should be distinct");
+        assert_eq!(
+            unique.len(),
+            codes.len(),
+            "all non-101-group error codes should be distinct"
+        );
     }
 }

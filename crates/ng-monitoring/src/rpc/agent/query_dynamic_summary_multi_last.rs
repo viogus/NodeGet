@@ -128,7 +128,9 @@ pub async fn dynamic_summary_multi_last_query(
         debug!(target: "monitoring", uuids_count = deduped_uuids.len(), fields_count = fields.len(), "Dynamic summary multi-last query permission check passed");
 
         let db = AgentRpcImpl::get_db()?;
-        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?;
+        let uuid_cache = MonitoringUuidCache::global().ok_or_else(|| {
+            NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+        })?;
 
         // Resolve UUIDs to uuid_ids
         let mut uuid_id_pairs: Vec<(Uuid, i16)> = Vec::with_capacity(deduped_uuids.len());
@@ -142,7 +144,9 @@ pub async fn dynamic_summary_multi_last_query(
         }
 
         // Fast path: in-memory last-cache (partial hit merge)
-        let last_cache = MonitoringLastCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned()))?;
+        let last_cache = MonitoringLastCache::global().ok_or_else(|| {
+            NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned())
+        })?;
         let mut results: Vec<Option<SummaryResult>> = vec![None; uuid_id_pairs.len()];
         let mut misses: Vec<(usize, i16)> = Vec::new();
         for (idx, (uuid, uuid_id)) in uuid_id_pairs.iter().enumerate() {
@@ -193,9 +197,10 @@ pub async fn dynamic_summary_multi_last_query(
                 SummaryResult::Value(v) => {
                     if let Err(e) = serde_json::to_writer(&mut output_buffer, &v) {
                         error!(target: "monitoring", error = %e, "Result serialization failed");
-                        return Err(
-                            NodegetError::SerializationError(format!("Serialization failed: {e}")).into(),
-                        );
+                        return Err(NodegetError::SerializationError(format!(
+                            "Serialization failed: {e}"
+                        ))
+                        .into());
                     }
                 }
             }

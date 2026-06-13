@@ -317,12 +317,12 @@ pub async fn run(config: &ServerConfig) {
                         return serve_static_file(&model.path, &path, model.cors, &method).await;
                     }
                     rpc_service.call(req).await.unwrap_or_else(|e| {
-                            tracing::error!(target: "server", error = %e, "RPC call failed");
-                            axum::http::Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(jsonrpsee::server::HttpBody::from("Internal Server Error"))
-                                .expect("Failed to build error response")
-                        })
+                        tracing::error!(target: "server", error = %e, "RPC call failed");
+                        axum::http::Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(jsonrpsee::server::HttpBody::from("Internal Server Error"))
+                            .expect("Failed to build error response")
+                    })
                 }
             }));
 

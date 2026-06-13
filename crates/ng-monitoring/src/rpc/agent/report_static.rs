@@ -9,7 +9,7 @@
 
 use crate::data_structure::StaticMonitoringData;
 use crate::monitoring_buffer;
-use crate::monitoring_last_cache::{build_static_value, MonitoringLastCache};
+use crate::monitoring_last_cache::{MonitoringLastCache, build_static_value};
 use crate::monitoring_uuid_cache::MonitoringUuidCache;
 use crate::rpc::agent::AgentRpcImpl;
 use crate::static_hash_cache::StaticHashCache;
@@ -71,7 +71,10 @@ pub async fn report_static(
         }
         debug!(target: "monitoring", agent_uuid = %agent_uuid, "report_static: permission check passed");
 
-        let uuid_id = MonitoringUuidCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned()))?
+        let uuid_id = MonitoringUuidCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringUuidCache not initialized".to_owned())
+            })?
             .get_or_insert(agent_uuid)
             .await
             .map_err(|e| NodegetError::DatabaseError(format!("UUID cache error: {e}")))?;
@@ -86,14 +89,25 @@ pub async fn report_static(
             .map_err(|e| NodegetError::SerializationError(format!("gpu_data: {e}")))?;
 
         let cache_value = build_static_value(agent_uuid, timestamp, &static_monitoring_data);
-        MonitoringLastCache::global().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned()))?.update_static_prebuilt(agent_uuid, cache_value);
+        MonitoringLastCache::global()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringLastCache not initialized".to_owned())
+            })?
+            .update_static_prebuilt(agent_uuid, cache_value);
 
         // Fast path: check in-memory hash cache first to avoid DB query
-        let hash_cache = StaticHashCache::global().ok_or_else(|| NodegetError::ConfigNotFound("StaticHashCache not initialized".to_owned()))?;
+        let hash_cache = StaticHashCache::global().ok_or_else(|| {
+            NodegetError::ConfigNotFound("StaticHashCache not initialized".to_owned())
+        })?;
         if hash_cache.is_duplicate(uuid_id, &static_monitoring_data.data_hash) {
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash cached as duplicate, skipping");
             return Ok(CACHED_SKIPPED
-                .get_or_init(|| RawValue::from_string(r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned()).unwrap())
+                .get_or_init(|| {
+                    RawValue::from_string(
+                        r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned(),
+                    )
+                    .unwrap()
+                })
                 .clone());
         }
 
@@ -113,7 +127,12 @@ pub async fn report_static(
             hash_cache.update(uuid_id, &static_monitoring_data.data_hash);
             debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Static data hash already exists, skipping");
             return Ok(CACHED_SKIPPED
-                .get_or_init(|| RawValue::from_string(r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned()).unwrap())
+                .get_or_init(|| {
+                    RawValue::from_string(
+                        r#"{"status":"skipped","reason":"duplicate_hash"}"#.to_owned(),
+                    )
+                    .unwrap()
+                })
                 .clone());
         }
 
@@ -131,7 +150,12 @@ pub async fn report_static(
 
         debug!(target: "monitoring", agent_uuid = %static_monitoring_data.uuid, "Received static data, sending to buffer");
 
-        monitoring_buffer::get().ok_or_else(|| NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned()))?.static_mon.send(in_data);
+        monitoring_buffer::get()
+            .ok_or_else(|| {
+                NodegetError::ConfigNotFound("MonitoringBuffers not initialized".to_owned())
+            })?
+            .static_mon
+            .send(in_data);
 
         hash_cache.update(uuid_id, &data_hash);
 

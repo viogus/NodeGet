@@ -34,15 +34,28 @@
 ```json
 [
   {
-    "id": 1,                              // 记录 ID
-    "js_worker_id": 10,                   // 关联的 JsWorker ID
-    "js_worker_name": "demo_worker",      // 关联的 JsWorker 名称
-    "run_type": "call",                   // 执行类型
-    "start_time": 1775000000000,          // 毫秒时间戳，开始时间；记录创建后、脚本实际启动前可能为 null
-    "finish_time": 1775000000123,         // 毫秒时间戳，结束时间，运行中为 null
-    "param": { "hello": "world" },        // 执行参数，可为 null
-    "result": { "ok": true },             // 执行结果，运行中或失败时为 null
-    "error_message": null                 // 错误信息，成功或运行中时为 null
+    "id": 1,
+    // 记录 ID
+    "js_worker_id": 10,
+    // 关联的 JsWorker ID
+    "js_worker_name": "demo_worker",
+    // 关联的 JsWorker 名称
+    "run_type": "call",
+    // 执行类型
+    "start_time": 1775000000000,
+    // 毫秒时间戳，开始时间；记录创建后、脚本实际启动前可能为 null
+    "finish_time": 1775000000123,
+    // 毫秒时间戳，结束时间，运行中为 null
+    "param": {
+      "hello": "world"
+    },
+    // 执行参数，可为 null
+    "result": {
+      "ok": true
+    },
+    // 执行结果，运行中或失败时为 null
+    "error_message": null
+    // 错误信息，成功或运行中时为 null
   }
   // 该字段为 Vec<_>，可返回多条
 ]
@@ -177,9 +190,12 @@
 
 ```json
 {
-  "success": true,        // 是否成功
-  "deleted": 8,           // 删除的记录数
-  "condition_count": 3    // 条件数量
+  "success": true,
+  // 是否成功
+  "deleted": 8,
+  // 删除的记录数
+  "condition_count": 3
+  // 条件数量
 }
 ```
 

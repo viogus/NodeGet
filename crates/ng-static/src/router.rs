@@ -41,7 +41,10 @@ fn dav_handler_cache() -> &'static RwLock<HashMap<String, DavHandler>> {
 /// since cached handlers embed the old disk path.
 pub fn clear_dav_handler_cache() {
     if let Some(cache) = DAV_HANDLER_CACHE.get() {
-        cache.write().expect("DAV handler cache lock poisoned").clear();
+        cache
+            .write()
+            .expect("DAV handler cache lock poisoned")
+            .clear();
     }
 }
 
@@ -280,7 +283,10 @@ async fn static_webdav_handler(req: axum::extract::Request) -> axum::response::R
 
     // 1. Look up bucket
     let Some(cache) = StaticCache::global() else {
-        return build_webdav_error(StatusCode::INTERNAL_SERVER_ERROR, "StaticCache not initialized");
+        return build_webdav_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "StaticCache not initialized",
+        );
     };
     let Some(model) = cache.get_by_name(name) else {
         warn!(target: "webdav", method = %method, uri = %uri_path, bucket = %name, "bucket not found");
@@ -362,7 +368,10 @@ async fn static_webdav_handler(req: axum::extract::Request) -> axum::response::R
         }
         None => {
             error!(target: "webdav", bucket = %name, "PermissionChecker not initialized");
-            return build_webdav_error(StatusCode::INTERNAL_SERVER_ERROR, "PermissionChecker not initialized");
+            return build_webdav_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PermissionChecker not initialized",
+            );
         }
     };
 

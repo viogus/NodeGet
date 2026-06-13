@@ -15,9 +15,11 @@ fn main() {
 /// 通过弱符号提供 getrandom() 实现：如果 glibc 已有此函数则被覆盖，无副作用。
 fn needs_getrandom_shim(target: &str) -> bool {
     // MIPS 系列 (tier 3)：无预编译 std，cross Docker 镜像 glibc 较旧
-    let is_mips_gnu = target.starts_with("mips") && target.contains("linux") && target.contains("gnu");
+    let is_mips_gnu =
+        target.starts_with("mips") && target.contains("linux") && target.contains("gnu");
     // ARMv5TE (tier 3)：同上
-    let is_armv5te_gnu = target.contains("armv5te") && target.contains("linux") && target.contains("gnu");
+    let is_armv5te_gnu =
+        target.contains("armv5te") && target.contains("linux") && target.contains("gnu");
     // PowerPC 32-bit (tier 3)：同上
     let is_powerpc_gnu = target == "powerpc-unknown-linux-gnu";
 

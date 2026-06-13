@@ -94,9 +94,9 @@ mod tests {
             version: Some(3),
             token_limit: vec![Limit {
                 scopes: vec![Scope::KvNamespace("ns".into())],
-                permissions: vec![Permission::Kv(
-                    crate::permission::data_structure::Kv::Read("ns".into()),
-                )],
+                permissions: vec![Permission::Kv(crate::permission::data_structure::Kv::Read(
+                    "ns".into(),
+                ))],
             }],
         };
         let json = serde_json::to_string(&req).unwrap();

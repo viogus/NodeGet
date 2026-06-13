@@ -169,9 +169,7 @@ mod tests {
 
     #[test]
     fn task_data_query_empty_conditions() {
-        let query = TaskDataQuery {
-            condition: vec![],
-        };
+        let query = TaskDataQuery { condition: vec![] };
         let json = serde_json::to_string(&query).unwrap();
         let parsed: TaskDataQuery = serde_json::from_str(&json).unwrap();
         assert_eq!(query.condition.len(), 0);

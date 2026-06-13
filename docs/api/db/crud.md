@@ -182,7 +182,8 @@ pub enum Db {
 
 ### 权限说明
 
-`db_update` 会同时校验原数据库名 `name` 和新数据库名 `new_name` 两个作用域的 `Db::Update` 权限。Token 必须对这两个数据库实例都拥有更新权限，重命名才会被执行。
+`db_update` 会同时校验原数据库名 `name` 和新数据库名 `new_name` 两个作用域的 `Db::Update` 权限。Token
+必须对这两个数据库实例都拥有更新权限，重命名才会被执行。
 
 ---
 
@@ -281,7 +282,7 @@ pub enum Db {
 | `id`              | i64           | db_registry 表中的主键 ID                                                                                  |
 | `name`            | String        | 数据库名称                                                                                                 |
 | `file_path`       | String        | SQLite 文件在磁盘上的路径（相对于工作目录）                                                                             |
-| `db_connections`  | `Option<i32>` | 连接引用计数：创建时初始化为 `1`，每次 `create_conn` 递增；不是当前活跃连接数                                          |
+| `db_connections`  | `Option<i32>` | 连接引用计数：创建时初始化为 `1`，每次 `create_conn` 递增；不是当前活跃连接数                                                      |
 | `max_lifetime_ms` | `Option<i64>` | 连接空闲超时时间（毫秒），null=永不超时                                                                                |
 | `created_at`      | i64           | 创建时间戳（毫秒）                                                                                             |
 | `is_active`       | bool          | 是否正在连接池中：创建后为 true，`get_conn()` 连接成功后为 true，超过 `max_lifetime_ms` 未被访问变为 false，为 false 时下次调用会自动重建启动连接池 |
@@ -292,7 +293,9 @@ pub enum Db {
 
 对指定本地数据库执行原始 SQL 语句。支持参数化查询（SQL 中使用 `$1`, `$2` 占位符，SQLite 和 PostgreSQL 都支持该格式）。
 
-SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行（最多返回 `10,000` 行，超出时结果中附带 `"truncated": true`）；其余语句（INSERT / UPDATE / DELETE / DDL / PRAGMA 写操作等）返回空数组，`row_count` 为 `rows.len()`，因此不带 `RETURNING` 的 DML 返回 `0`，不是受影响的行数。
+SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行（最多返回 `10,000` 行，超出时结果中附带 `"truncated": true`
+）；其余语句（INSERT / UPDATE / DELETE / DDL / PRAGMA 写操作等）返回空数组，`row_count` 为 `rows.len()`，因此不带 `RETURNING`的
+DML 返回 `0`，不是受影响的行数。
 
 ### 注意事项
 
@@ -311,7 +314,9 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行（最多返回 `10,
     "token": "TOKEN",
     "name": "my_database",
     "sql": "SELECT * FROM users WHERE age > $1",
-    "params": [18]
+    "params": [
+      18
+    ]
   },
   "id": 1
 }
@@ -344,7 +349,8 @@ SELECT / PRAGMA / EXPLAIN / WITH 语句自动返回结果行（最多返回 `10,
 }
 ```
 
-对于 DML 操作 (INSERT/UPDATE/DELETE/DDL)，`data` 为空数组，`row_count` 为 `0`（因未使用 `RETURNING`）。要获取受影响行数，请使用 `RETURNING *` 等返回行的写法:
+对于 DML 操作 (INSERT/UPDATE/DELETE/DDL)，`data` 为空数组，`row_count` 为 `0`（因未使用 `RETURNING`）。要获取受影响行数，请使用
+`RETURNING *` 等返回行的写法:
 
 ```json
 {

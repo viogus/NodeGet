@@ -4,11 +4,11 @@
 //! `for-server` feature 下额外导出 `error_message` 与 `server_json` 子模块。
 
 use crate::error::{NodegetError, Result};
+use portable_atomic::{AtomicI64, Ordering};
 use rand::distr::Alphanumeric;
 use rand::{RngExt, rng};
 use serde::Deserialize;
 use serde::Serialize;
-use portable_atomic::{AtomicI64, Ordering};
 
 #[cfg(feature = "for-server")]
 pub mod error_message;
@@ -84,7 +84,10 @@ pub fn generate_random_string(len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_random_string, get_local_timestamp_ms, get_local_timestamp_ms_i64, set_ntp_offset_ms, JsonError};
+    use super::{
+        JsonError, generate_random_string, get_local_timestamp_ms, get_local_timestamp_ms_i64,
+        set_ntp_offset_ms,
+    };
 
     // ── JsonError ───────────────────────────────────────────────────
 
@@ -121,8 +124,10 @@ mod tests {
     #[test]
     fn random_string_alphanumeric_only() {
         let s = generate_random_string(256);
-        assert!(s.chars().all(|c| c.is_ascii_alphanumeric()),
-            "all chars must be alphanumeric: {s}");
+        assert!(
+            s.chars().all(|c| c.is_ascii_alphanumeric()),
+            "all chars must be alphanumeric: {s}"
+        );
     }
 
     #[test]
@@ -155,7 +160,10 @@ mod tests {
         set_ntp_offset_ms(1_000_000); // +1000 seconds
         let after = get_local_timestamp_ms_i64().unwrap();
         // Should be at least 999_000 ms larger (allowing some clock drift)
-        assert!(after > before + 999_000, "NTP offset should add to timestamp: before={before}, after={after}");
+        assert!(
+            after > before + 999_000,
+            "NTP offset should add to timestamp: before={before}, after={after}"
+        );
         // Reset to zero so other tests are not affected
         set_ntp_offset_ms(0);
     }
