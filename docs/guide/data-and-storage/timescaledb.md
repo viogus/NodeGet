@@ -3,7 +3,7 @@
 NodeGet 的数据主体是每秒一条的监控时序数据（`dynamic_monitoring`、`dynamic_monitoring_summary`）。
 当数据库是安装了 **timescaledb** 扩展的 PostgreSQL 时，NodeGet 会在**启动时自动**完成时序优化，无需改业务代码：
 
-1. 把上述时序表转换为 **hypertable**（含存量数据自动迁移 `migrate_data`）；
+1. 把上述时序表转换为 **hypertable**（含存量数据自动迁移 `migrate_data`；首次转换会随存量数据量拉长启动时间，属一次性成本）；
 2. 注册整数时间 now() 函数（`set_integer_now_func`）；
 3. 对 `compress_after_days` 天前的 chunk 启用 **zstd 列式压缩**（监控 JSON 数据通常可压缩 90% 以上）；
 4. 当配置 `retention_days > 0` 时，注册**自动保留策略**（`drop_chunks`），超过该天数的数据由后台 job 自动删除，磁盘占用从此有上界。
@@ -12,9 +12,16 @@ NodeGet 的数据主体是每秒一条的监控时序数据（`dynamic_monitorin
 > 仅当连接的是安装 timescaledb 扩展的 PostgreSQL 时生效；普通 PostgreSQL / SQLite 部署完全不受影响。
 > 未安装扩展时启动日志会显示 `timescaledb extension not installed; skipping timescale setup`，直接跳过。
 
+> [!WARNING]
+> **hypertable 转换不可逆**：转换后表结构（主键从 `(id)` 变为 `(id, timestamp)`）依赖 timescaledb 扩展，
+> 普通 PostgreSQL（无扩展）无法读取。降级/回退需要先用 TimescaleDB 官方迁移工具 `untable`
+> 转换回普通表，或提前做好备份。
+> 另外，**主键契约发生变化**：`id` 不再是唯一约束列（仍为自增且全局唯一）。现有业务代码不受影响，
+> 但转换后 `REFERENCES <table>(id)` 外键或 `ON CONFLICT (id)` 语句将不再合法，需改用 `(id, timestamp)`。
+
 ## 前置条件
 
-- PostgreSQL 17（推荐）或 16，安装 `timescaledb` 扩展。Docker 直接用官方镜像 `timescale/timescaledb:latest-pg17`。
+- PostgreSQL 17（推荐）或 16，安装 `timescaledb` 扩展。Docker 直接用官方镜像 `timescale/timescaledb:2.29.1-pg17`（固定版本，便于复现与升级管理）。
 - NodeGet Server 二进制需包含本功能（见下方构建）。
 
 ## 一、构建含 TimescaleDB 支持的镜像
@@ -41,7 +48,7 @@ name: nodeget-timescale
 
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb:2.29.1-pg17
     restart: unless-stopped
     environment:
       POSTGRES_DB: nodeget
@@ -92,8 +99,8 @@ retention policy applied
 
 > 中国大陆服务器拉取 Docker Hub 镜像超时时，可使用镜像加速器，例如：
 > ```bash
-> docker pull docker.m.daocloud.io/timescale/timescaledb:latest-pg17
-> docker tag docker.m.daocloud.io/timescale/timescaledb:latest-pg17 timescale/timescaledb:latest-pg17
+> docker pull docker.m.daocloud.io/timescale/timescaledb:2.29.1-pg17
+> docker tag docker.m.daocloud.io/timescale/timescaledb:2.29.1-pg17 timescale/timescaledb:2.29.1-pg17
 > ```
 > 你自己的镜像同样处理（把 `timescale/timescaledb` 换成 `yourname/nodeget`）。
 
@@ -104,7 +111,7 @@ retention policy applied
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `chunk_interval_days` | `1` | hypertable 分块间隔（天），影响 chunk 数量与压缩/删除粒度 |
-| `compress_after_days` | `7` | 距离当前时间超过该天数的 chunk 启用 zstd 列式压缩 |
+| `compress_after_days` | `7` | 距离当前时间超过该天数的 chunk 启用 zstd 列式压缩；**`0` = 所有数据立即可压缩**（含实时数据，压缩 job 会频繁执行，一般不建议） |
 | `retention_days` | `0` | 超过该天数的数据自动删除；**默认 0 = 不启用**（避免误删历史数据），需显式配置 |
 
 Docker 部署时通过 entrypoint 生成配置（镜像内的 `docker/entrypoint.sh`），环境变量：
@@ -175,6 +182,10 @@ WHERE hypertable_name = 'dynamic_monitoring';
 ## 常见问题
 
 - **Q：普通 PostgreSQL 上会有什么影响？** 无影响。未安装 timescaledb 扩展时整个模块跳过。
+- **Q：hypertable 转换可逆吗？** 不可逆。转换后表依赖 timescaledb 扩展，普通 PostgreSQL 无法读取；回退需用 TimescaleDB 官方 `untable` 工具或提前备份。启用前请确认规划。
+- **Q：转换会影响现有代码吗？** 现有按 `id` 增删改查的代码不受影响（`id` 仍全局唯一）；但表主键实际变为 `(id, timestamp)`，此后新增 `REFERENCES <table>(id)` 外键或 `ON CONFLICT (id)` 语句不再合法，需要包含 `timestamp` 列。
+- **Q：首次启动为什么变慢？** `migrate_data => true` 会把存量数据迁入 hypertable，数据量越大耗时越长（一次性成本，后续启动不重复迁移）。
 - **Q：`set_integer_now_func` 报错？** 已内置幂等检查（已设置则跳过），正常不会报错。
 - **Q：为什么默认不启用 `retention_days`？** 自动删除会立即作用于存量数据，默认关闭以保护历史数据，需要时显式开启。
 - **Q：压缩为什么没立即生效？** 压缩策略只处理 `compress_after_days` 之前的 chunk（默认 7 天），新数据需要时间自然过期；也可手动 `CALL run_job(<job_id>)` 提前压缩。
+- **Q：初始化部分失败会怎样？** 单表转换/策略失败不阻断服务启动（以普通表继续运行），但启动日志会输出醒目的失败横幅，请按提示检查修复后重启；只有扩展检测或 now() 函数创建失败才会阻断启动。
