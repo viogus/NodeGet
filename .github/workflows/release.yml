@@ -530,7 +530,9 @@ jobs:
       packages: write
     env:
       REGISTRY: docker.io
-      IMAGE_NAME: genshinmc/nodeget
+      # fork-local: 推送到 viogus 的 Docker Hub（上游为 genshinmc/nodeget）。
+      # 向上游提 PR 时请剔除本行改动。
+      IMAGE_NAME: viogus/nodeget
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
