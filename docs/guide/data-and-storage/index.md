@@ -44,6 +44,8 @@ retention_days = 30        # 超过该天数的数据自动删除；默认 0 = �
 > 从普通 PostgreSQL 迁移：停服后 `pg_dump` 导出，恢复到 TimescaleDB 容器即可，存量数据会在首次启动时
 > 由 hypertable 转换自动迁移。
 
+完整部署指南（构建镜像、Docker Compose、配置、迁移、验证）见 [TimescaleDB 部署指南](./timescaledb.md)。
+
 为了支持用户储存自定义的数据到 NodeGet，通过 SQL 储存模拟实现了一个 Kv 数据库。
 
 这在很多场景都会用到，比如 Js Worker 储存，扩展应用的静态文件储存等等。
