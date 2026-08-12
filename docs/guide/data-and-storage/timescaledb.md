@@ -114,6 +114,10 @@ retention policy applied
 | `compress_after_days` | `7` | 距离当前时间超过该天数的 chunk 启用 zstd 列式压缩；**`0` = 所有数据立即可压缩**（含实时数据，压缩 job 会频繁执行，一般不建议） |
 | `retention_days` | `0` | 超过该天数的数据自动删除；**默认 0 = 不启用**（避免误删历史数据），需显式配置 |
 
+> [!NOTE]
+> 若 `retention_days < compress_after_days`，数据会在压缩策略生效**之前**就被保留策略删除
+> （删除优先于压缩）。如希望"先压缩保留、到期再删"，请保持 `retention_days > compress_after_days`。
+
 Docker 部署时通过 entrypoint 生成配置（镜像内的 `docker/entrypoint.sh`），环境变量：
 
 ```bash

@@ -103,6 +103,16 @@ fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// 构造 Timescale 的 `regclass` 文本参数：`'"schema"."name"'`。
+///
+/// 与 `quote_ident` 一致对标识符加双引号并转义，使含大写/特殊字符的
+/// `schema`（`current_schema()` 为运行时值）也能被 `PostgreSQL` 正确解析，
+/// 文本内的单引号转义为 `''`。
+fn regclass_literal(schema: &str, name: &str) -> String {
+    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(name));
+    format!("'{}'", qualified.replace('\'', "''"))
+}
+
 /// 初始化 `TimescaleDB` 时序优化（幂等）。
 ///
 /// 仅在 `PostgreSQL` 且安装 `timescaledb` 扩展时执行；否则静默跳过，
@@ -183,9 +193,9 @@ async fn setup_table(
     // compress_segmentby 接受列名字符串字面量（非标识符），列名为编译期常量。
     let seg_literal = format!("'{}'", table.segment_by);
     // Timescale 的 regclass 文本参数（create_hypertable / 策略函数），
-    // 显式带 schema；schema 来自 current_schema()，表名/函数名为编译期常量。
-    let table_regclass = format!("'{schema}.{}'", table.name);
-    let now_regclass = format!("'{schema}.{NOW_FUNC}'");
+    // 用 quote_ident 限定 schema（含大写/特殊字符的 schema 也能正确解析）。
+    let table_regclass = regclass_literal(schema, table.name);
+    let now_regclass = regclass_literal(schema, NOW_FUNC);
 
     if !is_hypertable(db, table.name).await? {
         // 防御性检查：timestamp 列在迁移定义中为 NOT NULL，正常情况下
@@ -208,6 +218,9 @@ async fn setup_table(
         // hypertable 要求所有唯一索引（含主键）包含分区列 timestamp，
         // 因此先把主键从 (id) 调整为 (id, timestamp)。
         // id 仍为自增 identity 且全局唯一，SeaORM 的按 id 删除不受影响。
+        // 注意：pk_name 依赖 SeaORM 建表时生成的默认约束名 `<table>_pkey`；
+        // 若主键约束曾被手工改名，此 DROP 不命中、下方 ADD PRIMARY KEY 会
+        // 因主键已存在而失败（错误信息会提示，需按实际约束名调整）。
         // 注意：此 DDL 与下方 create_hypertable 分属两个隐式事务，进程
         // 间隙被杀时表会短暂无主键（下次启动可自愈，因为再跑会先检查
         // is_hypertable 再重建主键）。
@@ -376,6 +389,22 @@ mod tests {
         assert_eq!(quote_ident("dynamic_monitoring"), "\"dynamic_monitoring\"");
         assert_eq!(quote_ident("a\"b"), "\"a\"\"b\"");
         assert_eq!(quote_ident(""), "\"\"");
+    }
+
+    #[test]
+    fn regclass_literal_quotes_schema_and_escapes() {
+        // 普通 schema：双引号包裹后 PG 解析等价
+        assert_eq!(
+            regclass_literal("public", "dynamic_monitoring"),
+            "'\"public\".\"dynamic_monitoring\"'"
+        );
+        // 含大写/空格/特殊字符的 schema（current_schema() 运行时值）必须被正确解析
+        assert_eq!(
+            regclass_literal("My Schema", "Tbl"),
+            "'\"My Schema\".\"Tbl\"'"
+        );
+        // 单引号转义为 ''
+        assert_eq!(regclass_literal("a'b", "t"), "'\"a''b\".\"t\"'");
     }
 
     #[tokio::test]
