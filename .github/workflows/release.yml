@@ -59,6 +59,27 @@ jobs:
           echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: test
+
+      # 默认 features：全 workspace 测试（server 专属代码不编译）
+      - name: Test workspace
+        run: cargo test --workspace
+
+      # server feature：编译并运行 ng-db 的 timescale 单元测试
+      # （非 PG 跳过 / 溢出拒绝 / quote_ident / regclass_literal）
+      - name: Test ng-db with server feature
+        run: cargo test -p ng-db --features server timescale
+
   build-linux-server:
     name: Build Server - ${{ matrix.platform.release_for }}
     needs: prepare
@@ -530,7 +551,9 @@ jobs:
       packages: write
     env:
       REGISTRY: docker.io
-      IMAGE_NAME: genshinmc/nodeget
+      # fork-local: 推送到 viogus 的 Docker Hub（上游为 genshinmc/nodeget）。
+      # 向上游提 PR 时请剔除本行改动。
+      IMAGE_NAME: viogus/nodeget
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
