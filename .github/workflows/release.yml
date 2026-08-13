@@ -519,7 +519,7 @@ jobs:
       - build-linux-agent
       - build-windows-agent
       - build-macos-agent
-    if: needs.prepare.outputs.publish == 'true'
+    if: always() && needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
