@@ -73,8 +73,16 @@ pub async fn generate_and_store_token(
     // (冒号优先 Token 模式,管道 Auth 模式)。含分隔符的 username 会导致
     // `username|password` 登录时被误解析为 Token 模式而认证失败(非安全漏洞,
     // 但用户无法正常登录)。fail-fast 在创建时拒绝。
+    // 例外：NodeGet-board（官方 dash 前端）生成的 agent token 用户名固定为
+    // `[agent]:<uuid>`，board 依赖该格式做按用户名删除/重建（token_delete 等）。
+    // 此类 token 只走 key:secret 认证、不走 username|password 登录，放行无安全
+    // 影响（仅无法用 username|password 登录，fail-safe）。上游 board 若改格式可移除例外。
+    let is_board_agent_token = username
+        .as_deref()
+        .map_or(false, |u| u.starts_with("[agent]:"));
     if let Some(ref username) = username
         && (username.contains(':') || username.contains('|'))
+        && !is_board_agent_token
     {
         return Err(NodegetError::InvalidInput(
             "Username cannot contain ':' or '|' characters".to_owned(),
@@ -86,8 +94,11 @@ pub async fn generate_and_store_token(
     // TokenOrAuth::from_full_token 会因冒号优先而把 `username|password前段` 误判为
     // Token 模式（token_key），导致认证失败（fail-safe，非 bypass，但用户无法登录）。
     // 见 REVIEW L27。
+    // 例外：board 的 agent token 密码字符集本身含 `:` / `|`（lib/password.ts），
+    // 与上面的 `[agent]:` 用户名成对出现，同样只影响 username|password 登录，放行。
     if let Some(ref pw) = password
         && (pw.contains(':') || pw.contains('|'))
+        && !is_board_agent_token
     {
         return Err(NodegetError::InvalidInput(
             "Password cannot contain ':' or '|' characters".to_owned(),
