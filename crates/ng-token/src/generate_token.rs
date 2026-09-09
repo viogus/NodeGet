@@ -15,6 +15,16 @@ use crate::cache::TokenCache;
 use crate::hash_string;
 use crate::super_token::check_super_token;
 
+/// 判断用户名是否由官方 dashboard（NodeGet-board）以 agent token 形式生成。
+///
+/// board 创建 agent token 时用户名固定为 `[agent]:<uuid>`（`generateToken.ts` 的
+/// `makeTokenObject`），并依赖该格式按用户名删除/重建令牌（`token_delete`）。
+/// 此类令牌只走 `key:secret` 认证，不使用 `username|password` 登录，
+/// 因此可以豁免 `:` / `|` 分隔符校验，见 [`generate_and_store_token`] 中的注释。
+fn is_board_agent_token(username: Option<&str>) -> bool {
+    username.is_some_and(|u| u.starts_with("[agent]:"))
+}
+
 /// 根据父级令牌权限生成并存储新令牌。
 ///
 /// - `father_token_or_auth`：父级令牌或认证信息（必须是超级令牌）
@@ -77,9 +87,7 @@ pub async fn generate_and_store_token(
     // `[agent]:<uuid>`，board 依赖该格式做按用户名删除/重建（token_delete 等）。
     // 此类 token 只走 key:secret 认证、不走 username|password 登录，放行无安全
     // 影响（仅无法用 username|password 登录，fail-safe）。上游 board 若改格式可移除例外。
-    let is_board_agent_token = username
-        .as_deref()
-        .map_or(false, |u| u.starts_with("[agent]:"));
+    let is_board_agent_token = is_board_agent_token(username.as_deref());
     if let Some(ref username) = username
         && (username.contains(':') || username.contains('|'))
         && !is_board_agent_token
@@ -146,4 +154,17 @@ pub async fn generate_and_store_token(
     }
 
     Ok((token_key, token_secret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_board_agent_token;
+
+    #[test]
+    fn detects_board_agent_token_username() {
+        assert!(is_board_agent_token(Some("[agent]:6f1c1e0a")));
+        assert!(!is_board_agent_token(Some("admin")));
+        assert!(!is_board_agent_token(Some("[agent]6f1c1e0a")));
+        assert!(!is_board_agent_token(None));
+    }
 }
