@@ -15,7 +15,7 @@ use ng_js_runtime::RunType;
 use ng_task::{TaskEvent, TaskEventType, TaskManager};
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tokio::task::JoinSet;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 use uuid::Uuid;
 
 // ── JsWorkerScheduler trait 注入 ─────────────────────────────────────
@@ -55,15 +55,49 @@ pub fn js_worker_scheduler() -> Option<&'static std::sync::Arc<dyn JsWorkerSched
     JS_WORKER_SCHEDULER.get()
 }
 
+// ── 派发策略注入 ──────────────────────────────────────────────────
+
+/// Agent 定时任务的派发策略，由 Server 二进制在启动时通过 [`set_dispatch_policy`] 注入。
+#[derive(Debug, Clone, Copy)]
+pub struct DispatchPolicy {
+    /// `crontab_result` 的成功行是否按「每次运行一条汇总行」写入。
+    ///
+    /// `true`（默认）时一次派发只写一条 `relative_id = NULL` 的成功行，记录成功下发的
+    /// Agent 数；`false` 时回退为每个 Agent 一条成功行。失败行始终逐个 Agent 记录。
+    pub aggregate_success_result: bool,
+}
+
+impl Default for DispatchPolicy {
+    fn default() -> Self {
+        Self {
+            aggregate_success_result: true,
+        }
+    }
+}
+
+/// 全局派发策略单例，启动时由 Server 二进制通过 `set_dispatch_policy` 注入。
+static DISPATCH_POLICY: std::sync::OnceLock<DispatchPolicy> = std::sync::OnceLock::new();
+
+/// 设置全局派发策略（启动时调用一次）。
+pub fn set_dispatch_policy(policy: DispatchPolicy) {
+    let _ = DISPATCH_POLICY.set(policy);
+}
+
+/// 获取全局派发策略；未注入时使用 [`DispatchPolicy::default`]。
+pub fn dispatch_policy() -> DispatchPolicy {
+    DISPATCH_POLICY.get().copied().unwrap_or_default()
+}
+
 // ── Agent 任务下发 ────────────────────────────────────────────────
 
 /// 向指定 Agent UUID 列表批量下发定时任务。
 ///
-/// 1. 一次性序列化 `task_event_type`，批量构建所有 task ActiveModel
-/// 2. 单次 `insert_many` + `exec_with_returning` 写入 task 记录，用 RETURNING 取回每行真实 id
-/// 3. 并发发送 TaskEvent 到各 Agent（JoinSet 替代逐个 await）
-/// 4. 批量回滚发送失败的 task 记录
-/// 5. 单次 `insert_many` 写入 crontab_result
+/// 1. 先剔除离线 Agent（`TaskManager::connected_uuids`），避免必然失败的派发
+/// 2. 一次性序列化 `task_event_type`，批量构建所有 task ActiveModel
+/// 3. 单次 `insert_many` + `exec_with_returning` 写入 task 记录，用 RETURNING 取回每行真实 id
+/// 4. 并发发送 TaskEvent 到各 Agent（JoinSet 替代逐个 await）
+/// 5. 批量回滚发送失败的 task 记录
+/// 6. 单次 `insert_many` 写入 crontab_result（成功行按 [`DispatchPolicy`] 决定是否聚合）
 ///
 /// - `cron_id` - 定时任务 ID
 /// - `cron_name` - 定时任务名称
@@ -94,13 +128,33 @@ pub async fn crontab_task(
             }
         };
 
+        let requested_count = uuids.len();
+        if requested_count == 0 {
+            return;
+        }
+
+        // 派发前剔除离线 Agent：对未连接的 Agent 下发必然返回 104，除了一次无意义的
+        // task INSERT + DELETE，还会写一条失败的 crontab_result 并刷 WARN 日志。
+        // 生产实测：单个离线 Agent 在 6 条 20 秒周期的 cron 下每天产生约 2.6 万行无效记录。
+        // 离线期间的补偿由 Agent 重连后的 check-online-status / base-worker 逻辑负责，
+        // 不依赖这里的失败重试（原实现也从不重试）。
+        let uuids = TaskManager::global().connected_uuids(&uuids).await;
         let agent_count = uuids.len();
+        let skipped_offline = requested_count - agent_count;
         if agent_count == 0 {
+            info!(
+                target: "crontab",
+                requested_count,
+                skipped_offline,
+                task_type = ?task_event_type,
+                "all target agents offline, task dispatch skipped"
+            );
             return;
         }
         info!(
             target: "crontab",
             agent_count,
+            skipped_offline,
             task_type = ?task_event_type,
             "dispatching task to agents"
         );
@@ -118,7 +172,10 @@ pub async fn crontab_task(
             }
         };
 
-        // 批量构建 task ActiveModel（每个 uuid 一条，token 各自随机）
+        // 批量构建 task ActiveModel（每个 uuid 一条，token 各自随机）。
+        // `created_at` 在派发时写入，供保留期清理按「写入时间」判断过期；
+        // `timestamp` 是 Agent 回传结果时写入的时间，pending 行该列为 NULL，不能用于清理。
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let task_models: Vec<task::ActiveModel> = uuids
             .iter()
             .map(|uuid| {
@@ -133,6 +190,7 @@ pub async fn crontab_task(
                     error_message: Set(None),
                     task_event_type: task_event_type_value.clone(),
                     task_event_result: Set(None),
+                    created_at: Set(Some(now_ms)),
                 }
             })
             .collect();
@@ -176,6 +234,10 @@ pub async fn crontab_task(
         // 收集发送结果
         let mut crontab_results: Vec<crontab_result::ActiveModel> = Vec::with_capacity(agent_count);
         let mut failed_task_ids: Vec<i64> = Vec::new();
+        let aggregate_success = dispatch_policy().aggregate_success_result;
+        let mut success_count: u64 = 0;
+        // 仅在非聚合模式下逐 Agent 记录成功行；聚合模式下不构造这些字符串，避免无谓分配
+        let mut success_rows: Vec<crontab_result::ActiveModel> = Vec::new();
 
         while let Some(res) = send_set.join_next().await {
             let (uuid, task_id, send_result) = match res {
@@ -188,18 +250,21 @@ pub async fn crontab_task(
 
             match send_result {
                 Ok(()) => {
-                    info!(target: "crontab", agent_uuid = %uuid, task_id, "task event sent to agent");
-                    crontab_results.push(crontab_result::ActiveModel {
-                        id: ActiveValue::NotSet,
-                        cron_id: Set(cron_id),
-                        cron_name: Set(cron_name.clone()),
-                        relative_id: Set(Some(task_id)),
-                        run_time: Set(Some(chrono::Utc::now().timestamp_millis())),
-                        success: Set(Some(true)),
-                        message: Set(Some(format!(
-                            "任务下发成功，Agent：[{uuid}]，relative_id：{task_id}"
-                        ))),
-                    });
+                    debug!(target: "crontab", agent_uuid = %uuid, task_id, "task event sent to agent");
+                    success_count += 1;
+                    if !aggregate_success {
+                        success_rows.push(crontab_result::ActiveModel {
+                            id: ActiveValue::NotSet,
+                            cron_id: Set(cron_id),
+                            cron_name: Set(cron_name.clone()),
+                            relative_id: Set(Some(task_id)),
+                            run_time: Set(Some(now_ms)),
+                            success: Set(Some(true)),
+                            message: Set(Some(format!(
+                                "任务下发成功，Agent：[{uuid}]，relative_id：{task_id}"
+                            ))),
+                        });
+                    }
                 }
                 Err(e) => {
                     warn!(
@@ -215,7 +280,7 @@ pub async fn crontab_task(
                         cron_id: Set(cron_id),
                         cron_name: Set(cron_name.clone()),
                         relative_id: Set(None),
-                        run_time: Set(Some(chrono::Utc::now().timestamp_millis())),
+                        run_time: Set(Some(now_ms)),
                         success: Set(Some(false)),
                         message: Set(Some(format!(
                             "任务下发失败，Agent：[{uuid}]，错误：{}",
@@ -224,6 +289,29 @@ pub async fn crontab_task(
                     });
                 }
             }
+        }
+
+        // 成功结果按策略写入：默认「每次运行一条汇总行」。
+        // 一次运行 = 一次批量派发（生产上 23 个 Agent），逐 Agent 记成功行会把
+        // crontab_result 撑到约 59 万行/天，而 UI 只需要「本次运行成功下发了几个 Agent」。
+        // 需要逐 Agent 明细时把 `[crontab] aggregate_success_result` 设为 false 回退。
+        // 失败行始终逐 Agent 记录，不受该策略影响。
+        if aggregate_success {
+            if success_count > 0 {
+                crontab_results.push(crontab_result::ActiveModel {
+                    id: ActiveValue::NotSet,
+                    cron_id: Set(cron_id),
+                    cron_name: Set(cron_name.clone()),
+                    relative_id: Set(None),
+                    run_time: Set(Some(now_ms)),
+                    success: Set(Some(true)),
+                    message: Set(Some(format!(
+                        "任务下发成功，Agent 数：{success_count}/{requested_count}"
+                    ))),
+                });
+            }
+        } else {
+            crontab_results.append(&mut success_rows);
         }
 
         // 批量回滚发送失败的 task 记录
@@ -285,6 +373,7 @@ mod tests {
             error_message: None,
             task_event_type: Json::Null,
             task_event_result: None,
+            created_at: None,
         }
     }
 
@@ -328,7 +417,10 @@ mod tests {
             vec![7_u64, 3, 12, 1, 9]
         );
         assert_eq!(
-            dispatch.iter().map(|(_, _, t)| t.as_str()).collect::<Vec<_>>(),
+            dispatch
+                .iter()
+                .map(|(_, _, t)| t.as_str())
+                .collect::<Vec<_>>(),
             vec!["tok0", "tok1", "tok2", "tok3", "tok4"]
         );
     }
@@ -344,6 +436,14 @@ mod tests {
         let models = vec![make_model(42, uuid, "solo")];
         let dispatch = pair_task_ids(&models);
         assert_eq!(dispatch, vec![(42, uuid, "solo".to_owned())]);
+    }
+
+    /// 默认派发策略：成功行按「每次运行一条汇总行」写入。
+    /// 未注入时 `dispatch_policy()` 必须回落到该默认值，否则线上会退回逐 Agent 写成功行。
+    #[test]
+    fn dispatch_policy_defaults_to_aggregate_success() {
+        assert!(super::DispatchPolicy::default().aggregate_success_result);
+        assert!(super::dispatch_policy().aggregate_success_result);
     }
 
     /// 长度守恒：N 个 model → N 个元组。
@@ -369,7 +469,9 @@ mod tests {
     async fn insert_many_exec_with_returning_works_on_sqlite() {
         use sea_orm::{ActiveValue, ConnectionTrait, Database, FromQueryResult, Set, Statement};
 
-        let db = Database::connect("sqlite::memory:").await.expect("connect in-memory sqlite");
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
 
         // 运行时 SQLite 版本必须 ≥ 3.35（RETURNING 子句最低要求）。
         // sqlx 的 `sqlite` feature 默认带 bundled，理论上捆绑 3.50.x；此处实跑确认，
@@ -411,7 +513,8 @@ mod tests {
                 "success" boolean,
                 "error_message" text,
                 "task_event_type" blob NOT NULL,
-                "task_event_result" blob
+                "task_event_result" blob,
+                "created_at" bigint
             )"#,
         )
         .await
@@ -430,6 +533,7 @@ mod tests {
                 error_message: Set(None),
                 task_event_type: Set(serde_json::Value::Null),
                 task_event_result: Set(None),
+                created_at: Set(Some(i)),
             })
             .collect();
 
@@ -441,10 +545,17 @@ mod tests {
         // 返回行数 == 插入数；id 由 DB 分配（连续与否不重要，关键是真实回读）
         assert_eq!(inserted.len() as i64, N, "RETURNING 应返回全部 {N} 行");
         let ids: Vec<i64> = inserted.iter().map(|m| m.id).collect();
-        assert_eq!(ids, (1..=N).collect::<Vec<_>>(), "SQLite 单条多值 INSERT rowid 连续递增");
+        assert_eq!(
+            ids,
+            (1..=N).collect::<Vec<_>>(),
+            "SQLite 单条多值 INSERT rowid 连续递增"
+        );
         // token 顺序与写入一致（dispatch[i] ↔ uuids[i] 配对正确性）
         assert_eq!(
-            inserted.iter().map(|m| m.token.as_str()).collect::<Vec<_>>(),
+            inserted
+                .iter()
+                .map(|m| m.token.as_str())
+                .collect::<Vec<_>>(),
             (0..N).map(|i| format!("tok{i}")).collect::<Vec<_>>()
         );
     }

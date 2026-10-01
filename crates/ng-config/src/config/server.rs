@@ -37,6 +37,12 @@ pub struct ServerConfig {
     /// 监控数据缓冲写入配置（可选）
     pub monitoring_buffer: Option<MonitoringBufferConfig>,
 
+    /// 数据库保留期清理配置（可选，不填等价于 dry-run）
+    pub retention: Option<RetentionConfig>,
+
+    /// crontab 派发行为配置（可选）
+    pub crontab: Option<CrontabConfig>,
+
     /// JSON-RPC 最大请求体大小（字节），默认 10485760（10MB）
     pub max_request_body_size: Option<u32>,
 
@@ -68,6 +74,33 @@ pub struct MonitoringBufferConfig {
     pub max_batch_size: Option<usize>,
     /// Channel 容量，默认 10000
     pub channel_capacity: Option<usize>,
+}
+
+/// 数据库保留期清理配置。
+///
+/// 清理 `task` / `crontab_result` / `js_result` 三张表的过期数据。保留期取值仍然由
+/// 数据库内的 `database_limit_*`（UI 可改）决定，本配置只控制「是否真正删除」与执行节奏。
+///
+/// 默认 `enabled = false`，即 dry-run：只统计并打日志、不删除任何行，便于先核对数量。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RetentionConfig {
+    /// 是否真正执行删除，默认 `false`（dry-run，只打日志）
+    pub enabled: Option<bool>,
+    /// 清理间隔（秒），默认 3600
+    pub interval_secs: Option<u64>,
+    /// 启动后首次清理的延迟（秒），默认 30
+    pub initial_delay_secs: Option<u64>,
+    /// 历史行（`created_at IS NULL`）的 id 安全边界，默认 100000
+    pub legacy_id_margin: Option<i64>,
+}
+
+/// crontab 派发行为配置。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CrontabConfig {
+    /// `crontab_result` 的成功行是否按「每次运行一条汇总行」写入，默认 `true`。
+    ///
+    /// 置 `false` 回退为「每个 Agent 一条成功行」。失败行始终逐个 Agent 记录。
+    pub aggregate_success_result: Option<bool>,
 }
 
 /// 日志配置。
@@ -196,6 +229,8 @@ database_url = "sqlite://./db/nodeget.db"
         assert!(config.enable_unix_socket.is_none());
         assert!(config.logging.is_none());
         assert!(config.monitoring_buffer.is_none());
+        assert!(config.retention.is_none());
+        assert!(config.crontab.is_none());
         assert!(config.max_request_body_size.is_none());
         assert!(config.max_response_body_size.is_none());
         assert!(config.tls_cert.is_none());
@@ -283,6 +318,45 @@ max_batch_size = 500
         let config: MonitoringBufferConfig = toml::from_str(toml_str).unwrap();
         assert!(config.flush_interval_ms.is_none());
         assert!(config.max_batch_size.is_none());
+    }
+
+    #[test]
+    fn retention_config_defaults_to_dry_run() {
+        let config = RetentionConfig::default();
+        assert!(config.enabled.is_none());
+        assert!(config.interval_secs.is_none());
+        assert!(config.initial_delay_secs.is_none());
+        assert!(config.legacy_id_margin.is_none());
+    }
+
+    #[test]
+    fn server_config_parses_retention_and_crontab_sections() {
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[retention]
+enabled = true
+interval_secs = 1800
+
+[crontab]
+aggregate_success_result = false
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+
+        let retention = config.retention.unwrap();
+        assert_eq!(retention.enabled, Some(true));
+        assert_eq!(retention.interval_secs, Some(1800));
+        assert!(retention.initial_delay_secs.is_none());
+        assert!(retention.legacy_id_margin.is_none());
+
+        assert_eq!(
+            config.crontab.unwrap().aggregate_success_result,
+            Some(false)
+        );
     }
 
     #[test]
