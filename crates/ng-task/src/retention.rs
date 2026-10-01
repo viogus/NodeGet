@@ -34,6 +34,8 @@
 //!   `SOFT_DELETE_GRACE_MS`（60 秒）宽限，避免删掉仍在途的任务行。
 //! - 时间列本身为 NULL 的 `crontab_result` / `js_result` 行不会被清理：没有可用的时间
 //!   基准，删除它们可能误伤刚写入的记录。
+//! - 每轮清扫开始前对三张目标表执行 `ANALYZE`，避免新增列缺少统计信息时规划器退化成
+//!   全表扫描（详见 `refresh_statistics`）。
 //!
 //! ## 运行方式
 //!
@@ -46,8 +48,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -134,6 +136,27 @@ impl SweepReport {
     }
 }
 
+/// 刷新清理目标表的统计信息。
+///
+/// PostgreSQL 的规划器依赖统计信息挑索引；`task.created_at` 这类**新增列**在首次清扫时
+/// 没有任何统计，规划器会因此低估选择性、退化成按主键的全表索引扫描（生产实测单次查询
+/// 8.45 秒、`shared hit=367916`；`ANALYZE` 后同一查询 3 个 buffer、0.073 毫秒）。
+/// 每轮清扫前刷新一次代价很小（采样分析），却能让分块分页稳定走索引。
+///
+/// 失败只记 `debug!`：统计信息不属于正确性，刷新不了也不该中断清理。
+async fn refresh_statistics(db: &DatabaseConnection) {
+    for table in ["task", "crontab_result", "js_result"] {
+        if let Err(err) = db.execute_unprepared(&format!("ANALYZE {table}")).await {
+            debug!(
+                target: "retention",
+                table,
+                %err,
+                "analyze failed, keeping existing statistics"
+            );
+        }
+    }
+}
+
 /// 执行一次清理。
 ///
 /// `dry_run = true` 时只统计、不删除。`legacy_id_margin` 见模块文档。
@@ -148,6 +171,7 @@ pub async fn sweep_once(
     legacy_id_margin: i64,
 ) -> Result<SweepReport, DbErr> {
     let now_ms = crate::now_millis();
+    refresh_statistics(db).await;
     let limits = load_limits(db).await?;
     let global_task = limit_for(&limits, GLOBAL_NAMESPACE, "task");
     let mut report = SweepReport::default();
