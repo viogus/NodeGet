@@ -28,6 +28,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260708_000000_drop_redundant_indexes::Migration),
             Box::new(m20260708_000001_drop_db_connections_column::Migration),
             Box::new(m20260708_000002_static_file_enable_not_null::Migration),
+            Box::new(m20261001_000000_add_created_at_to_task::Migration),
+            Box::new(m20261001_000001_drop_unused_task_indexes::Migration),
         ]
     }
 }
@@ -53,3 +55,5 @@ mod m20260608_000000_add_indexes;
 mod m20260708_000000_drop_redundant_indexes;
 mod m20260708_000001_drop_db_connections_column;
 mod m20260708_000002_static_file_enable_not_null;
+mod m20261001_000000_add_created_at_to_task;
+mod m20261001_000001_drop_unused_task_indexes;

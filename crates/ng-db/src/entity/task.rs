@@ -18,6 +18,13 @@ pub struct Model {
     pub task_event_type: Json,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub task_event_result: Option<Json>,
+    /// 记录创建时间（epoch 毫秒），任务**派发**时写入。
+    ///
+    /// 与 `timestamp` 的区别：`timestamp` 在任务完成时由结果上传回填，派发后没有回传的
+    /// 行永远为 NULL，无法用于保留期判断；`created_at` 一定在派发时写入。
+    /// 本列为 `m20261001_000000_add_created_at_to_task` 新增，历史行为 NULL，
+    /// 由 `ng_task::retention` 按 id 安全边界回收。
+    pub created_at: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

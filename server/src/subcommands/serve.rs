@@ -110,6 +110,21 @@ pub async fn run(config: &ServerConfig) {
     ng_crontab::task::set_js_worker_scheduler(std::sync::Arc::new(CronJsWorkerScheduler));
     debug!(target: "server", "ng-crontab JsWorkerScheduler registered");
 
+    // ng-crontab：注入派发策略（成功结果是否按「每次运行一条汇总行」写入 crontab_result）
+    let aggregate_success_result = config
+        .crontab
+        .as_ref()
+        .and_then(|crontab| crontab.aggregate_success_result)
+        .unwrap_or(true);
+    ng_crontab::set_dispatch_policy(ng_crontab::DispatchPolicy {
+        aggregate_success_result,
+    });
+    debug!(
+        target: "server",
+        aggregate_success_result,
+        "ng-crontab dispatch policy registered"
+    );
+
     let rpc_module = get_modules();
 
     let (stop_handle, _server_handle) = jsonrpsee::server::stop_channel();
@@ -369,6 +384,34 @@ pub async fn run(config: &ServerConfig) {
 
     ng_crontab::init_crontab_worker();
     debug!(target: "server", "Crontab worker initialized");
+
+    // 数据库保留期清理：默认 dry-run（只统计并打 `warn!` 日志，不删任何行），
+    // 在 config.toml 里设置 `[retention] enabled = true` 后才真正删除。
+    if let Some(db) = ng_db::get_db() {
+        let retention = config.retention.clone().unwrap_or_default();
+        let options = ng_task::retention::RetentionOptions {
+            enabled: retention.enabled.unwrap_or(false),
+            interval: std::time::Duration::from_secs(
+                retention
+                    .interval_secs
+                    .unwrap_or(ng_task::retention::DEFAULT_INTERVAL_SECS),
+            ),
+            initial_delay: std::time::Duration::from_secs(
+                retention
+                    .initial_delay_secs
+                    .unwrap_or(ng_task::retention::DEFAULT_INITIAL_DELAY_SECS),
+            ),
+            legacy_id_margin: retention
+                .legacy_id_margin
+                .unwrap_or(ng_task::retention::DEFAULT_LEGACY_ID_MARGIN),
+        };
+        ng_task::retention::spawn_worker(db, options);
+    } else {
+        warn!(
+            target: "server",
+            "database connection not initialized, retention sweeper not started"
+        );
+    }
 
     #[cfg(not(target_os = "windows"))]
     let mut unix_server_task: Option<tokio::task::JoinHandle<()>> = None;
