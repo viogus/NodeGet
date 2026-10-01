@@ -31,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260927_000000_create_traffic_tables::Migration),
             Box::new(m20261001_000000_add_created_at_to_task::Migration),
             Box::new(m20261001_000001_drop_unused_task_indexes::Migration),
+            Box::new(m20261001_000002_tune_autovacuum::Migration),
         ]
     }
 }
@@ -59,3 +60,4 @@ mod m20260708_000002_static_file_enable_not_null;
 mod m20260927_000000_create_traffic_tables;
 mod m20261001_000000_add_created_at_to_task;
 mod m20261001_000001_drop_unused_task_indexes;
+mod m20261001_000002_tune_autovacuum;
