@@ -480,6 +480,21 @@ impl TaskManager {
         }
     }
 
+    /// 过滤出当前已连接的 Agent UUID，保持传入顺序。
+    ///
+    /// 用于派发前预筛：对未连接的 Agent 下发任务必然返回 104，除了一次无意义的
+    /// INSERT/UPDATE/DELETE，还会写一条失败的 `crontab_result` 并刷 WARN 日志
+    /// （生产实测：单个离线 Agent 在 6 条 20 秒周期的 cron 下每天产生约 2.6 万行无效记录）。
+    pub async fn connected_uuids(&self, candidates: &[Uuid]) -> Vec<Uuid> {
+        // 单次读锁内完成全部判断，避免逐 Agent 取锁。
+        let peers = self.peers.read().await;
+        candidates
+            .iter()
+            .copied()
+            .filter(|uuid| peers.contains_key(uuid))
+            .collect()
+    }
+
     /// 注册一个 blocking waiter，等待指定 `task_id` 的结果
     pub fn register_blocking_waiter(
         &self,
