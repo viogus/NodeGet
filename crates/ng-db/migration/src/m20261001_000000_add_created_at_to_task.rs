@@ -54,7 +54,9 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
-            .execute_unprepared(&format!(r#"DROP INDEX IF EXISTS "{INDEX_UUID_CREATED_AT}""#))
+            .execute_unprepared(&format!(
+                r#"DROP INDEX IF EXISTS "{INDEX_UUID_CREATED_AT}""#
+            ))
             .await?;
         manager
             .alter_table(
