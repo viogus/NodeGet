@@ -42,7 +42,8 @@
 //! [`spawn_worker`] 起一个后台循环，默认每 [`DEFAULT_INTERVAL_SECS`] 秒执行一次。
 //! **默认是 dry-run**（`RetentionOptions::enabled = false`）：只统计并打日志、不删除任何行，
 //! 便于先核对将要删除的数量；确认后再由配置打开真正删除。
-//! dry-run 的汇总行用 `warn!` 输出，因为在生产上 `log_filter = "warn"`，INFO 级看不到。
+//! 启动行与每轮汇总行统一用 `warn!`（dry-run 与真删都一样）：生产默认 `log_filter = "warn"`，
+//! INFO 级看不见——真删是否在跑、这一轮删了多少，都属于运维必须看到的信息。
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -51,7 +52,7 @@ use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use ng_db::entity::{crontab_result, js_result, kv, monitoring_uuid, task};
@@ -266,7 +267,8 @@ pub async fn sweep_once(
 /// 起一个后台清理循环：延迟 [`RetentionOptions::initial_delay`] 后清理一次，
 /// 之后每 [`RetentionOptions::interval`] 重复。
 ///
-/// dry-run（`enabled = false`）时用 `warn!` 输出汇总，保证在生产 `log_filter = "warn"` 下可见。
+/// dry-run（`enabled = false`）与真删模式的启动行、每轮汇总行都用 `warn!` 输出，
+/// 保证在生产 `log_filter = "warn"` 下都可见。
 pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) {
     let dry_run = !options.enabled;
     if dry_run {
@@ -279,12 +281,12 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
              set `retention.enabled = true` in config to actually purge"
         );
     } else {
-        info!(
+        warn!(
             target: "retention",
             interval_secs = options.interval.as_secs(),
             initial_delay_secs = options.initial_delay.as_secs(),
             legacy_id_margin = options.legacy_id_margin,
-            "retention sweeper started"
+            "retention sweeper started in ENFORCE mode: expired rows will be deleted"
         );
     }
 
@@ -305,7 +307,7 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
                     total = report.total(),
                     "retention sweep (DRY-RUN) finished: these rows would be deleted"
                 ),
-                Ok(report) => info!(
+                Ok(report) => warn!(
                     target: "retention",
                     dry_run = false,
                     task_active = report.task_active,
@@ -316,7 +318,7 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
                     crontab_result = report.crontab_result,
                     js_result = report.js_result,
                     total = report.total(),
-                    "retention sweep finished"
+                    "retention sweep finished: rows deleted"
                 ),
                 Err(e) => error!(
                     target: "retention",
