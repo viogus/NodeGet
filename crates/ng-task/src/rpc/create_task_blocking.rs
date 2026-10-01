@@ -93,6 +93,8 @@ pub async fn create_task_blocking(
             task_event_type: crate::rpc::TaskRpcImpl::try_set_json(task_type.clone())
                 .map_err(|e| NodegetError::SerializationError(e.to_string()))?,
             task_event_result: Set(None),
+            // 派发时间，供保留期清理判断过期（`timestamp` 是结果回传时间，pending 行为 NULL）
+            created_at: Set(Some(crate::now_millis())),
         };
 
         let result = task::Entity::insert(in_data).exec(db).await.map_err(|e| {
