@@ -79,6 +79,16 @@ pub async fn create_task_blocking(
                 .into());
         }
 
+        // 派发前在线预检：见 TaskManager::is_connected。离线时不注册 waiter、不写库，
+        // 直接返回可区分的 AgentOffline，避免「INSERT + waiter + 回滚」的无效开销。
+        if !manager.is_connected(&target_uuid).await {
+            debug!(target: "task", uuid = %target_uuid, "create_task_blocking skipped: agent offline");
+            return Err(NodegetError::AgentOffline(format!(
+                "Agent {target_uuid} is not connected"
+            ))
+            .into());
+        }
+
         let db = crate::rpc::TaskRpcImpl::get_db()?;
         let task_token = generate_random_string(10);
 
@@ -140,8 +150,20 @@ pub async fn create_task_blocking(
                     true
                 }
             };
-            error!(target: "task", error = %e.1, "Error sending task event");
-            let mut msg = format!("Error sending task event: {}", e.1);
+            let detail = e.message();
+            if e.is_not_connected() {
+                // 预检通过后仍失败 = 检查与发送之间掉线的窄竞态（见 create_task）
+                warn!(target: "task", uuid = %target_uuid, task_id = task_id_u64, "agent disconnected between precheck and send");
+                let mut msg = format!("Agent {target_uuid} is not connected");
+                if rollback_failed {
+                    msg.push_str(
+                        "; rollback also failed, see logs (task row may need manual cleanup)",
+                    );
+                }
+                return Err(NodegetError::AgentOffline(msg).into());
+            }
+            error!(target: "task", error = %detail, "Error sending task event");
+            let mut msg = format!("Error sending task event: {detail}");
             if rollback_failed {
                 msg.push_str("; rollback also failed, see logs (task row may need manual cleanup)");
             }

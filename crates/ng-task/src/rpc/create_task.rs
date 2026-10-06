@@ -79,6 +79,17 @@ pub async fn create_task(
             .into());
         }
 
+        // 派发前在线预检：对离线 Agent 下发必然在 send_event 阶段失败，白付一次
+        // task 行的 INSERT + 回滚 DELETE，并让调用方（尤其是 JS worker 的批量下发）
+        // 拿到一个可区分「离线」的明确错误。语义说明见 TaskManager::is_connected。
+        if !manager.is_connected(&target_uuid).await {
+            debug!(target: "task", uuid = %target_uuid, "create_task skipped: agent offline");
+            return Err(NodegetError::AgentOffline(format!(
+                "Agent {target_uuid} is not connected"
+            ))
+            .into());
+        }
+
         let db = crate::rpc::TaskRpcImpl::get_db()?;
         let token = generate_random_string(10);
 
@@ -126,7 +137,7 @@ pub async fn create_task(
                 RawValue::from_string(json_str)
                     .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
             }
-            Err(e) => {
+            Err(send_err) => {
                 // 回滚刚创建的 task 行。回滚失败对调用方原本不可见（错误被 let _ = 丢弃），
                 // 现把回滚失败信息附进错误消息，便于运维据消息定位需手动清理的残留 task 行。
                 let rollback_failed = match task::Entity::delete_by_id(task_id).exec(db).await {
@@ -141,8 +152,21 @@ pub async fn create_task(
                         true
                     }
                 };
-                error!(target: "task", error = %e.1, "Error sending task event");
-                let mut msg = format!("Error sending task event: {}", e.1);
+                let detail = send_err.message();
+                if send_err.is_not_connected() {
+                    // 预检通过后仍失败 = 检查与发送之间掉线的窄竞态。属于预期内的
+                    // 离线，记 warn 便于观察竞态频率，但不升级为 error。
+                    warn!(target: "task", uuid = %target_uuid, task_id, "agent disconnected between precheck and send");
+                    let mut msg = format!("Agent {target_uuid} is not connected");
+                    if rollback_failed {
+                        msg.push_str(
+                            "; rollback also failed, see logs (task row may need manual cleanup)",
+                        );
+                    }
+                    return Err(NodegetError::AgentOffline(msg).into());
+                }
+                error!(target: "task", error = %detail, "Error sending task event");
+                let mut msg = format!("Error sending task event: {detail}");
                 if rollback_failed {
                     msg.push_str(
                         "; rollback also failed, see logs (task row may need manual cleanup)",

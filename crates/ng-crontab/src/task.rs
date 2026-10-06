@@ -233,9 +233,13 @@ pub async fn crontab_task(
 
         // 收集发送结果
         let mut crontab_results: Vec<crontab_result::ActiveModel> = Vec::with_capacity(agent_count);
-        let mut failed_task_ids: Vec<i64> = Vec::new();
+        // 未送达的 task 行 id：包括「离线跳过」与「队列满失败」两类，最后统一删除。
+        // 两者都需要清理（任务从未到达 Agent），但只有后者写失败行。
+        let mut undelivered_task_ids: Vec<i64> = Vec::new();
         let aggregate_success = dispatch_policy().aggregate_success_result;
         let mut success_count: u64 = 0;
+        // 预检通过后仍离线而跳过的 Agent 数（预期内，不记失败）
+        let mut skipped_offline: u64 = 0;
         // 仅在非聚合模式下逐 Agent 记录成功行；聚合模式下不构造这些字符串，避免无谓分配
         let mut success_rows: Vec<crontab_result::ActiveModel> = Vec::new();
 
@@ -266,27 +270,41 @@ pub async fn crontab_task(
                         });
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        target: "crontab",
-                        agent_uuid = %uuid,
-                        task_id,
-                        error = %e.1,
-                        "failed to send task event to agent"
-                    );
-                    failed_task_ids.push(task_id);
-                    crontab_results.push(crontab_result::ActiveModel {
-                        id: ActiveValue::NotSet,
-                        cron_id: Set(cron_id),
-                        cron_name: Set(cron_name.clone()),
-                        relative_id: Set(None),
-                        run_time: Set(Some(now_ms)),
-                        success: Set(Some(false)),
-                        message: Set(Some(format!(
-                            "任务下发失败，Agent：[{uuid}]，错误：{}",
-                            e.1
-                        ))),
-                    });
+                Err(send_err) => {
+                    undelivered_task_ids.push(task_id);
+                    if send_err.is_not_connected() {
+                        // 预检（connected_uuids）通过后、发送前掉线的窄竞态：属于预期内的
+                        // 离线，只清理 task 行、不写失败行、不打 WARN（6 条 ping/tcping
+                        // cron 每秒同发，一次抖动会连刷 5~6 行，历史上一晚能刷上千行）。
+                        debug!(
+                            target: "crontab",
+                            agent_uuid = %uuid,
+                            task_id,
+                            "agent went offline between precheck and send, task skipped"
+                        );
+                        skipped_offline += 1;
+                    } else {
+                        // 队列满等真正的发送失败：保留 WARN 与失败行
+                        let detail = send_err.message();
+                        warn!(
+                            target: "crontab",
+                            agent_uuid = %uuid,
+                            task_id,
+                            error = %detail,
+                            "failed to send task event to agent"
+                        );
+                        crontab_results.push(crontab_result::ActiveModel {
+                            id: ActiveValue::NotSet,
+                            cron_id: Set(cron_id),
+                            cron_name: Set(cron_name.clone()),
+                            relative_id: Set(None),
+                            run_time: Set(Some(now_ms)),
+                            success: Set(Some(false)),
+                            message: Set(Some(format!(
+                                "任务下发失败，Agent：[{uuid}]，错误：{detail}"
+                            ))),
+                        });
+                    }
                 }
             }
         }
@@ -298,6 +316,12 @@ pub async fn crontab_task(
         // 失败行始终逐 Agent 记录，不受该策略影响。
         if aggregate_success {
             if success_count > 0 {
+                // 离线跳过数只在非零时附注，保持既有文案前缀不变（UI/机器人按前缀展示）
+                let offline_note = if skipped_offline > 0 {
+                    format!("，离线跳过：{skipped_offline}")
+                } else {
+                    String::new()
+                };
                 crontab_results.push(crontab_result::ActiveModel {
                     id: ActiveValue::NotSet,
                     cron_id: Set(cron_id),
@@ -306,7 +330,7 @@ pub async fn crontab_task(
                     run_time: Set(Some(now_ms)),
                     success: Set(Some(true)),
                     message: Set(Some(format!(
-                        "任务下发成功，Agent 数：{success_count}/{requested_count}"
+                        "任务下发成功，Agent 数：{success_count}/{requested_count}{offline_note}"
                     ))),
                 });
             }
@@ -314,14 +338,14 @@ pub async fn crontab_task(
             crontab_results.append(&mut success_rows);
         }
 
-        // 批量回滚发送失败的 task 记录
-        if !failed_task_ids.is_empty()
+        // 批量清理未送达的 task 记录（离线跳过 + 发送失败）
+        if !undelivered_task_ids.is_empty()
             && let Err(e) = task::Entity::delete_many()
-            .filter(task::Column::Id.is_in(failed_task_ids))
+            .filter(task::Column::Id.is_in(undelivered_task_ids))
             .exec(db)
             .await
         {
-            error!(target: "crontab", error = %e, "failed to batch delete failed task records");
+            error!(target: "crontab", error = %e, "failed to batch delete undelivered task records");
         }
 
         // 批量写入 crontab_result（单次 DB 往返）
