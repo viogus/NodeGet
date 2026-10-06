@@ -343,7 +343,9 @@ globalThis.nodeget = async (...args) => {
         const id = args.length >= 3 ? args[2] : globalThis.randomUUID();
         input = JSON.stringify({ jsonrpc: "2.0", method, params, id });
     }
-    const raw = await globalThis.__nodeget_rpc_raw(input);
+    // 第二个参数是发起调用的 Worker 名，仅用于服务端审计（不参与鉴权）。
+    // 用传参而不是 Rust 侧捕获：runtime_pool 会复用 JS context，捕获会拿到过期的名字。
+    const raw = await globalThis.__nodeget_rpc_raw(input, globalThis.__nodeget_current_script_name ?? null);
     return JSON.parse(raw);
 };
 globalThis.__nodeget_inline_call = async (name, paramsJson, timeoutSec, caller) => {

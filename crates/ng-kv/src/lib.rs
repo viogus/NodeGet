@@ -29,7 +29,8 @@ pub use auth::{
 #[cfg(feature = "server")]
 pub use db::{
     NAMESPACE_MARKER_KEY, create_kv, delete_key_from_kv, delete_kv, get_keys_from_kv, get_kv_store,
-    get_kv_store_optional, get_or_create_kv, get_v_from_kv, list_all_namespaces, set_v_to_kv,
+    get_kv_store_optional, get_or_create_kv, get_v_from_kv, get_v_from_kv_lenient,
+    list_all_namespaces, set_v_to_kv,
 };
 
 #[cfg(feature = "server")]
