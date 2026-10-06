@@ -25,7 +25,7 @@ use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{RwLock, mpsc, oneshot};
-use tracing::{Instrument, debug, trace, warn};
+use tracing::{Instrument, debug, trace};
 use uuid::Uuid;
 
 /// 转义 SQL LIKE 特殊字符，防止注入攻击。
@@ -376,6 +376,47 @@ type BlockingWaiters =
 /// 全局 TaskManager 单例，延迟初始化
 static GLOBAL_TASK_MANAGER: OnceLock<Arc<TaskManager>> = OnceLock::new();
 
+/// 任务事件发送失败的原因。
+///
+/// 调用方据此区分两种语义完全不同的情况：
+/// - [`TaskSendError::NotConnected`]：Agent 离线。时间敏感任务（ping / IP 查询等）
+///   跳过即可，不应记录为失败；RPC 路径应返回 `NodegetError::AgentOffline`。
+/// - [`TaskSendError::QueueFull`]：Agent 在线但任务队列已满，属可重试的繁忙状态，
+///   应记为失败并保留告警。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskSendError {
+    /// 目标 Agent 无活动任务会话（离线，或发送瞬间断连）
+    NotConnected(Uuid),
+    /// 目标 Agent 任务队列（容量 32）已满
+    QueueFull(Uuid),
+}
+
+impl TaskSendError {
+    /// 目标 Agent UUID
+    #[must_use]
+    pub const fn uuid(&self) -> Uuid {
+        match self {
+            Self::NotConnected(uuid) | Self::QueueFull(uuid) => *uuid,
+        }
+    }
+
+    /// 是否为「离线」类失败（可跳过）
+    #[must_use]
+    pub const fn is_not_connected(&self) -> bool {
+        matches!(self, Self::NotConnected(_))
+    }
+
+    /// 人类可读消息。文案与历史版本保持一致，避免客户端按文本匹配失效。
+    #[must_use]
+    pub fn message(&self) -> String {
+        let uuid = self.uuid();
+        match self {
+            Self::NotConnected(_) => format!("Agent {uuid} is not connected"),
+            Self::QueueFull(_) => format!("Agent {uuid} task queue is full"),
+        }
+    }
+}
+
 /// 任务广播管理器，负责 Agent 会话注册、任务事件分发和 blocking waiter 管理
 ///
 /// 每个 Agent 通过 WebSocket 订阅 `register_task`，在此注册一个 mpsc Sender；
@@ -444,12 +485,16 @@ impl TaskManager {
     /// - `uuid` — 目标 Agent UUID
     /// - `event` — 任务事件
     ///
-    /// 返回错误码：(103, 发送失败消息) 或 (104, Agent 未连接)
+    /// 失败原因由 [`TaskSendError`] 区分：`NotConnected`（离线，可跳过）与
+    /// `QueueFull`（在线但忙，应重试）。此前两者共用错误码 104，调用方无法区分。
+    ///
+    /// 本函数不写日志：级别由调用方按场景决定（crontab 对离线记 debug、对队列满
+    /// 记 warn；RPC 路径对离线返回 `AgentOffline`）。
     pub async fn send_event(
         &self,
         uuid: Uuid,
         event: crate::types::TaskEvent,
-    ) -> Result<(), (i32, String)> {
+    ) -> Result<(), TaskSendError> {
         trace!(target: "task", uuid = %uuid, "sending task event");
         // 锁内仅 clone 廉价的 Sender，drop 读锁后再 await send，
         // 避免持锁期间 await send 导致 add_session/remove_session 的写锁被队头阻塞。
@@ -457,10 +502,7 @@ impl TaskManager {
             let peers = self.peers.read().await;
             match peers.get(&uuid) {
                 Some((_, tx)) => tx.clone(),
-                None => {
-                    warn!(target: "task", uuid = %uuid, "agent not connected");
-                    return Err((104, format!("Agent {uuid} is not connected")));
-                }
+                None => return Err(TaskSendError::NotConnected(uuid)),
             }
         };
 
@@ -470,14 +512,21 @@ impl TaskManager {
         match tx.try_send(event) {
             Ok(()) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                warn!(target: "task", uuid = %uuid, "agent task queue full (cap 32)");
-                Err((104, format!("Agent {uuid} task queue is full")))
+                Err(TaskSendError::QueueFull(uuid))
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                warn!(target: "task", uuid = %uuid, "agent disconnected during send");
-                Err((104, format!("Agent {uuid} is not connected")))
+                Err(TaskSendError::NotConnected(uuid))
             }
         }
+    }
+
+    /// 判断指定 Agent 当前是否有活动任务会话（在线）。
+    ///
+    /// 用于派发前预检，避免对离线目标走「写库 → 发送失败 → 回滚」的路径。
+    /// 语义是「有活动任务订阅会话」，不是「机器存活」：进程僵死或 TCP 半开时仍返回
+    /// `true`，那种情况只能靠 `send_event` 的失败兜底。
+    pub async fn is_connected(&self, uuid: &Uuid) -> bool {
+        self.peers.read().await.contains_key(uuid)
     }
 
     /// 过滤出当前已连接的 Agent UUID，保持传入顺序。
@@ -544,4 +593,143 @@ pub fn rpc_module() -> jsonrpsee::RpcModule<TaskRpcImpl> {
         manager: TaskManager::global().clone(),
     }
     .into_rpc()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TaskManager, TaskSendError};
+    use crate::types::{TaskEvent, TaskEventType};
+    use uuid::Uuid;
+
+    fn event(task_id: u64) -> TaskEvent {
+        TaskEvent {
+            task_id,
+            task_token: "tok".to_owned(),
+            task_event_type: TaskEventType::Ip,
+        }
+    }
+
+    #[tokio::test]
+    async fn is_connected_reflects_session_lifecycle() {
+        let manager = TaskManager::new();
+        let uuid = Uuid::new_v4();
+        let reg_id = Uuid::new_v4();
+
+        assert!(!manager.is_connected(&uuid).await, "no session yet");
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        manager.add_session(uuid, reg_id, tx).await;
+        assert!(manager.is_connected(&uuid).await, "session registered");
+
+        // reg_id 不匹配时不应误删新会话
+        manager.remove_session(&uuid, &Uuid::new_v4()).await;
+        assert!(
+            manager.is_connected(&uuid).await,
+            "mismatched reg_id keeps session"
+        );
+
+        manager.remove_session(&uuid, &reg_id).await;
+        assert!(!manager.is_connected(&uuid).await, "session removed");
+    }
+
+    #[tokio::test]
+    async fn send_event_reports_not_connected_without_session() {
+        let manager = TaskManager::new();
+        let uuid = Uuid::new_v4();
+
+        let err = manager
+            .send_event(uuid, event(1))
+            .await
+            .expect_err("send without session must fail");
+
+        assert!(err.is_not_connected());
+        assert_eq!(err.uuid(), uuid);
+        assert_eq!(err.message(), format!("Agent {uuid} is not connected"));
+    }
+
+    #[tokio::test]
+    async fn send_event_delivers_to_registered_session() {
+        let manager = TaskManager::new();
+        let uuid = Uuid::new_v4();
+        let reg_id = Uuid::new_v4();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+        manager.add_session(uuid, reg_id, tx).await;
+        manager.send_event(uuid, event(42)).await.expect("send");
+
+        let received = rx.recv().await.expect("event delivered");
+        assert_eq!(received.task_id, 42);
+    }
+
+    #[tokio::test]
+    async fn send_event_reports_queue_full_when_agent_is_busy() {
+        let manager = TaskManager::new();
+        let uuid = Uuid::new_v4();
+        let reg_id = Uuid::new_v4();
+        // 容量 1：塞满后再发即触发 QueueFull（与真实 agent 队列容量 32 的行为一致）
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        manager.add_session(uuid, reg_id, tx).await;
+        manager
+            .send_event(uuid, event(1))
+            .await
+            .expect("first send");
+        let err = manager
+            .send_event(uuid, event(2))
+            .await
+            .expect_err("second send must fail");
+
+        assert!(
+            !err.is_not_connected(),
+            "queue full is not an offline condition"
+        );
+        assert_eq!(err.uuid(), uuid);
+        assert_eq!(err.message(), format!("Agent {uuid} task queue is full"));
+    }
+
+    #[tokio::test]
+    async fn send_event_reports_not_connected_when_receiver_dropped() {
+        let manager = TaskManager::new();
+        let uuid = Uuid::new_v4();
+        let reg_id = Uuid::new_v4();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+
+        manager.add_session(uuid, reg_id, tx).await;
+        drop(rx); // agent 断开但会话尚未清理
+
+        let err = manager
+            .send_event(uuid, event(1))
+            .await
+            .expect_err("closed channel must fail");
+        assert!(err.is_not_connected());
+        assert_eq!(err.message(), format!("Agent {uuid} is not connected"));
+    }
+
+    #[test]
+    fn connected_uuids_preserves_order_and_filters_offline() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let manager = TaskManager::new();
+            let online = Uuid::new_v4();
+            let offline = Uuid::new_v4();
+            let (tx, _rx) = tokio::sync::mpsc::channel(4);
+            manager.add_session(online, Uuid::new_v4(), tx).await;
+
+            let filtered = manager.connected_uuids(&[offline, online]).await;
+            assert_eq!(filtered, vec![online]);
+        });
+    }
+
+    #[test]
+    fn task_send_error_message_keeps_legacy_wording() {
+        let uuid = Uuid::new_v4();
+        assert_eq!(
+            TaskSendError::NotConnected(uuid).message(),
+            format!("Agent {uuid} is not connected")
+        );
+        assert_eq!(
+            TaskSendError::QueueFull(uuid).message(),
+            format!("Agent {uuid} task queue is full")
+        );
+    }
 }
