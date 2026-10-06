@@ -20,7 +20,9 @@ server = [
     "dep:tracing",
     "dep:anyhow",
     "dep:ng-db",
+    "dep:ng-kv",
     "ng-infra/server",
+    "ng-kv/server",
 ]
 
 [dependencies]
@@ -42,4 +44,6 @@ tracing = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 ng-db = { workspace = true, optional = true }
 ng-infra = { workspace = true, optional = true }
+# JS→RPC 审计结果落盘到 KV（观察模式），无循环依赖：ng-kv 不依赖 ng-js-runtime
+ng-kv = { workspace = true, optional = true }
 

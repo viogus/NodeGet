@@ -43,6 +43,26 @@ where
         .map_err(|e| format!("server runtime task failed: {e}"))
 }
 
+/// 在服务器 Runtime 上分离地 spawn 一个后台任务，**不等待其完成**。
+///
+/// 与 [`spawn_on_server_runtime`] 的区别：后者等待任务结束（且外层取消时 abort 子任务），
+/// 适合「借用服务器资源完成一次调用」；本函数用于长生命周期任务（如 JS 审计的
+/// flush 循环），它在 JS Worker 的短生命周期 Runtime 结束后仍需继续运行。
+///
+/// # Errors
+///
+/// 若服务器 Runtime Handle 尚未初始化，返回错误字符串。
+pub fn spawn_detached_on_server_runtime<F>(future: F) -> Result<(), String>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = SERVER_RUNTIME_HANDLE
+        .get()
+        .ok_or_else(|| "server runtime handle is not initialized".to_owned())?;
+    handle.spawn(future);
+    Ok(())
+}
+
 /// Drop 时自动 abort 尚未完成的 JoinHandle，防止泄露后台 task。
 struct AbortOnDrop<T> {
     /// JoinHandle，drop 时自动 abort
