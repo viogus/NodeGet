@@ -39,7 +39,8 @@ pub struct TimescaleConfig {
     /// 置 `false` 时完全跳过 `TimescaleDB` 初始化：不转换 hypertable、不动压缩与
     /// 保留策略。注意转换是**不可逆**的（主键会被加宽为 `(id, 时间列)`），所以
     /// 只是"库里恰好装了扩展"并不等于想启用它，可以用这个开关关掉。
-    #[serde(default)]
+    /// 也接受 `enable` 拼写（仓库里的上游草案用的是这个键名），避免照抄草案时直接报错。
+    #[serde(default, alias = "enable")]
     pub enabled: Option<bool>,
     /// `hypertable` 分块间隔（小时），默认 [`DEFAULT_CHUNK_INTERVAL_HOURS`]。
     /// 优先于已废弃的 `chunk_interval_days`。
