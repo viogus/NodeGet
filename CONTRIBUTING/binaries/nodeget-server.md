@@ -9,6 +9,8 @@ server/
 ├── build.rs                          # 32-bit ARM 目标链接 libatomic（QuickJS 64-bit 原子操作）
 ├── src/
 │   ├── main.rs                       # 进程入口；Tokio runtime；CLI 分发；热重载外层循环；进程退出码
+│   ├── fork_ext.rs                   # fork 专属启动钩子；serve.rs 只留一行调用，减少同步上游的冲突
+│   ├── docker_tunnel.rs              # Docker 隧道（fork，仅 Unix；每 Agent 一个 unix socket + TCP 入口）
 │   ├── logging/mod.rs                # 四层 tracing 日志（console / JSON 文件 / 内存环 / 实时流）
 │   ├── rpc_nodeget.rs                # nodeget-server RPC 命名空间实现；合并所有 ng-* RPC 模块
 │   ├── rpc_timing.rs                 # RPC 计时中间件（call / batch / notification）
@@ -186,6 +188,27 @@ loop {
 | `parse_level_filter`                | 744  | 大小写不敏感 `off/error/warn/info/debug/trace` → `LevelFilter`；未知返回 `None`（静默忽略）。                                                                                                               |
 | `StreamLogFilter`                   | 768  | Per-layer `Filter<S>`，`enabled()` 返回 `manager.has_subscribers()`。**必须**作为 per-layer filter，不可作为全局 filter。                                                                                  |
 | `StreamLogLayer`                    | 795  | `on_event`：无订阅者快速返回；加载 `Arc<HashMap>` 快照；通过 `filter.is_enabled` 收集感兴趣的 Sender；用 `serde_json::json!` 序列化**一次**（注意：此路径仍用 `json!` 宏，与 `MemoryLogLayer` 不同）；`tx.try_send` 非阻塞广播（满则丢弃）。           |
+
+### fork_ext.rs（fork 专属）
+
+fork 相对上游多出的功能要嵌进启动流程，但上游 `serve.rs` 一直在重构（初始化顺序、路由拼装、收尾流程都改过）。
+把 hook 散写在 `serve.rs` 里，每次同步上游都要在同一批位置反复解冲突，因此统一收进本模块，
+`serve.rs` 只保留对 `crate::fork_ext` 的 4 行调用。
+
+| 项                                  | 说明                                                                                                                                   |
+|-------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| `inject_rpc_policies`               | 注册 fork 的策略（crontab 派发策略）。**必须**在 `rpc_nodeget::get_modules()` 之前调用：策略是全局状态，晚了第一轮请求会读到默认值。      |
+| `spawn_background_workers`          | 拉起保留期清理 worker（默认 dry-run，`[retention] enabled = true` 才真删）+ Docker 隧道监听。每轮 `serve` 启动调用一次，**必须可重复调用**。 |
+| `docker_tunnel_router`              | 合并 `/docker-tunnel` 路由；调用方须接在主 Router 的 `.fallback()` 之前。                                                                  |
+| `stop`                              | 收尾 Docker 隧道监听器（关监听、清 socket 文件与待认领表），挂在 `graceful_shutdown` 里。                                                 |
+
+**约定**：以后 fork 新增功能所需的启动钩子一律加在 `fork_ext`，不要直接改 `serve.rs`。
+
+### docker_tunnel.rs（fork 专属）
+
+仅 Unix 实现，Windows 上 `main.rs` 里是同签名的空实现（空 Router / 空 `start`、`stop`），保证跨平台编译。
+每个启用隧道的 Agent 一个 unix socket（D1-A），另提供 TCP 入口（D1-B）；`start` 幂等（内部先 `stop` 再重建），
+因此可直接挂在配置热重载流程里。
 
 ### rpc_nodeget.rs
 

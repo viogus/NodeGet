@@ -90,6 +90,12 @@ allow_http_ping = true
 # 是否允许通用 HTTP 请求，危险操作，谨慎开启
 allow_http_request = true
 
+# 是否允许 Docker 隧道，极度危险，谨慎开启
+# 开启后 Server 可在本机绑定一个 unix socket 并把它与本机 Docker socket 对接，
+# 等价于把宿主机 root 权限交给能访问该 socket 的管理端（如 Arcane）
+# 默认关闭；即使开启，仍需在 Server 侧配置 [docker_tunnel] 与 agents 才会建立
+allow_docker_tunnel = false
+
 # 是否允许 Web Shell，极度危险，谨慎开启
 allow_web_shell = true
 
@@ -125,7 +131,7 @@ allow_self_update = false
 # 若指定此列表且非空，则单独的任务开关（如 allow_icmp_ping / allow_tcp_ping / allow_http_ping / allow_execute 等）全部失效
 # 以本列表为准，未列出的任务类型一律拒绝
 # 值为 task_name，可选值包括：ping / tcp_ping / http_ping / dns / execute / http_request
-# / web_shell / read_config / edit_config / ip / version / self_update
+# / docker_tunnel / web_shell / read_config / edit_config / ip / version / self_update
 # allow_task_type = ["ping", "tcp_ping", "dns", "ip"]
 
 # 是否忽略服务端 TLS 证书校验，默认关闭
@@ -177,3 +183,31 @@ ws_url = "ws://nodeget-secondary.example.com:2211/nodeget/rpc"
 - 服务器只有部分磁盘需要监控（如只关注数据盘而排除系统盘）
 - 云服务器有多张网卡，只希望统计特定网卡的流量（如只统计公网网卡，不计入内网专线）
 - 默认排除规则过滤了你实际想监控的项（如自定义命名的虚拟网卡）
+
+## Docker 隧道（`[docker_tunnel]`）
+
+Docker 隧道让 Server 端在不暴露 Docker API 到网络的前提下，把 Agent 所在机器的 Docker
+socket 中继给管理端（典型场景：Arcane 以 `unix:///run/nodeget/docker/<agent_uuid>.sock`
+纳管该机器）。
+
+前置条件（三者缺一不可）：
+
+1. **Server 侧**：`[docker_tunnel] enable = true` 且 `agents` 中列出该 Agent UUID；
+2. **Agent 侧**：对应 `[[server]]` 的 `allow_docker_tunnel = true`（或用 `allow_task_type`
+   白名单包含 `docker_tunnel`）；
+3. **运行 Agent 的用户**必须能读写 Docker socket（通常在 `docker` 组内）。
+
+```toml
+[docker_tunnel]
+
+# Agent 本机 Docker socket 路径，默认 /var/run/docker.sock
+# socket_path = "/var/run/docker.sock"
+
+# 本机同时活跃的 Docker 隧道上限，默认 4；0 表示不限制
+# 超过上限时新的隧道任务会立即失败上报（不排队）
+# max_sessions = 4
+```
+
+> **安全提示**：Docker socket 等价于宿主机 root 权限。仅在确实需要远程管理 Docker 时
+> 开启，并配合 Server 侧 `socket_file_mode` / `socket_file_uid` / `socket_file_gid`
+> 把 socket 文件限制给特定用户或组访问。

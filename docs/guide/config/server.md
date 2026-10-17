@@ -150,3 +150,49 @@ curl -k \
   -X POST https://127.0.0.1:2211/ \
   -d '{"jsonrpc":"2.0","method":"nodeget-server_hello","params":[],"id":1}'
 ```
+
+## Docker 隧道说明（`[docker_tunnel]`）
+
+`[docker_tunnel]` 让 Server 为每个启用了隧道的 Agent 在本机绑定一个 unix socket
+（`<socket_dir>/<agent_uuid>.sock`）。管理端（如 Arcane）把这个 socket 当作本机 Docker
+daemon 使用，Server 只做裸字节中继，因此 Docker API 的 keep-alive、chunked 与
+hijack（attach/exec）都可用。
+
+- 仅在非 Unix 平台无效（Windows 使用 named pipe，暂不支持）。
+- **默认关闭**：`enable = false`，必须显式开启并在 `agents` 中逐个列出 Agent UUID。
+- 每条本地连接会触发一次 `docker_tunnel` 任务下发给对应 Agent，Agent 连回后开始对拷。
+- 连接空闲超过 `idle_timeout_secs`（双向均无流量）会被回收。
+- 配置热重载会重建全部监听器（`start()` 内部先停止旧监听并清理 socket 文件）。
+
+```toml
+[docker_tunnel]
+
+# 总开关，默认 false
+enable = true
+
+# socket 目录，默认 /run/nodeget/docker
+# 每个 Agent 对应 <socket_dir>/<agent_uuid>.sock
+# socket_dir = "/run/nodeget/docker"
+
+# 允许建立隧道的 Agent UUID 列表；为空表示不启用任何 Agent
+agents = [
+    "00000000-0000-0000-0000-000000000000",
+]
+
+# socket 文件权限（八进制字符串），默认 "0600"
+# 管理端与 Server 不同用户运行时，需要放宽到 0660 并配合 socket_file_gid
+# socket_file_mode = "0600"
+
+# socket 文件属主 UID / 属组 GID（仅在以 root 运行时生效）
+# socket_file_uid = 1000
+# socket_file_gid = 1000
+
+# 单条隧道的空闲回收时间（秒），默认 300；0 表示不回收
+# idle_timeout_secs = 300
+
+# 单个 Agent 的并发隧道上限，默认 4；0 表示不限制
+# max_tunnels = 4
+```
+
+> **安全边界**：unix socket 等价于宿主机 root 权限。请务必用 `socket_file_mode`
+> 与属主/属组把它限制给必要的管理端进程，并只在可信网络中开启。
