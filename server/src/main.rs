@@ -22,6 +22,8 @@ use crate::stop_signal::StopSignal;
 use crate::subcommands::serve::ServeExit;
 
 // 服务器专属模块（不属于任何 ng-* crate）
+// fork 专属的启动注入点（详见模块文档）
+mod fork_ext;
 mod logging;
 mod rpc_nodeget;
 mod rpc_timing;
