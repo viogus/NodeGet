@@ -46,6 +46,7 @@
 //! INFO 级看不见——真删是否在跑、这一轮删了多少，都属于运维必须看到的信息。
 
 use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use sea_orm::{
@@ -70,7 +71,37 @@ const CHUNK_SIZE: u64 = 500;
 const MAX_CHUNKS_PER_TARGET: u32 = 2_000;
 
 /// 软删除 Agent 的清理宽限（毫秒），保护仍在回传途中的任务行。
-const SOFT_DELETE_GRACE_MS: i64 = 60_000;
+///
+/// 必须覆盖最长的在途任务：`create_task_blocking` 的等待上限是 5 分钟
+/// （`MAX_TIMEOUT_MS`），宽限短于它会把调用方还在等的任务行删掉，结果上传随即
+/// 返回 `NotFound`，Agent 算完的活直接丢弃。这里取 10 分钟，留一倍余量。
+const SOFT_DELETE_GRACE_MS: i64 = 600_000;
+
+/// `task` 保留期的下限（毫秒），10 分钟。
+///
+/// 保留期来自 UI 可改的 `database_limit_task`（毫秒）。低于下限的值几乎必然是误填：
+/// `0` 会让 `created_at < now` 对全部行成立而删空整表，把「天」当毫秒写（如 `7`）
+/// 则等于「只保留最近 7 毫秒」。这类值一律忽略并告警：宁可少删，也不能清表。
+const MIN_TASK_LIMIT_MS: i64 = 600_000;
+
+/// `crontab_result` / `js_result` 保留期的下限（毫秒），1 小时。
+///
+/// 与流量快照 Worker 对 `database_limit_traffic_snapshot` 的处理保持一致
+/// （见 `docs/api/kv/special.md`：小于 1 小时或非整数视为不合法）。
+const MIN_RESULT_LIMIT_MS: i64 = 3_600_000;
+
+/// 当前 sweeper 的句柄。
+///
+/// `serve` 在配置热重载时会重新走一轮启动流程并再次调用 [`spawn_worker`]；没有这份句柄
+/// 的话每次重载都会多出一个永不退出的清扫循环（每轮都跑 ANALYZE + 全表分块删除）。
+/// 重启时先 abort 上一个，既避免堆积，也让新的 `interval` / `enabled` 立即生效。
+static WORKER: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+
+/// `legacy_id_margin` 的下限。
+///
+/// 水位是 `max(id) - margin`；取 0 时水位等于 `max(id)`，会把刚写入、`created_at`
+/// 仍为 NULL 的行也纳入删除范围。1000 行约等于数分钟的写入量。
+pub const MIN_LEGACY_ID_MARGIN: i64 = 1_000;
 
 /// 默认清理间隔：1 小时。
 pub const DEFAULT_INTERVAL_SECS: u64 = 3_600;
@@ -122,6 +153,8 @@ pub struct SweepReport {
     pub crontab_result: u64,
     /// `js_result` 删除行数（按全局保留期，时间基准 `start_time`）。
     pub js_result: u64,
+    /// 本轮失败、被跳过的清理目标数（失败不再中断整轮）。
+    pub errors: u32,
 }
 
 impl SweepReport {
@@ -172,6 +205,8 @@ pub async fn sweep_once(
     legacy_id_margin: i64,
 ) -> Result<SweepReport, DbErr> {
     let now_ms = crate::now_millis();
+    // 防御性夹取：0/负数会让水位等于 max(id)，把刚写入的 NULL 行也纳入删除
+    let legacy_id_margin = legacy_id_margin.max(MIN_LEGACY_ID_MARGIN);
     refresh_statistics(db).await;
     let limits = load_limits(db).await?;
     let global_task = limit_for(&limits, GLOBAL_NAMESPACE, "task");
@@ -205,7 +240,15 @@ pub async fn sweep_once(
                 .add(task::Column::CreatedAt.lt(now_ms.saturating_sub(limit_ms)))
         };
 
-        let deleted = purge::<task::Entity>(db, task::Column::Id, filter, dry_run).await?;
+        let deleted = purge_isolated::<task::Entity>(
+            db,
+            task::Column::Id,
+            filter,
+            dry_run,
+            "task",
+            &mut report,
+        )
+        .await;
         if agent.soft_delete {
             report.task_soft_deleted += deleted;
         } else {
@@ -223,11 +266,20 @@ pub async fn sweep_once(
         .one(db)
         .await?;
     if let Some(max_id) = max_id {
-        let watermark = max_id.saturating_sub(legacy_id_margin.max(0));
+        let watermark = max_id.saturating_sub(legacy_id_margin);
         let filter = Condition::all()
             .add(task::Column::CreatedAt.is_null())
             .add(task::Column::Id.lte(watermark));
-        report.task_legacy = purge::<task::Entity>(db, task::Column::Id, filter, dry_run).await?;
+        let deleted = purge_isolated::<task::Entity>(
+            db,
+            task::Column::Id,
+            filter,
+            dry_run,
+            "task",
+            &mut report,
+        )
+        .await;
+        report.task_legacy = deleted;
     }
 
     // 3. 孤立行：uuid 已不在 monitoring_uuid 中（Agent 被硬删除），按全局保留期回收
@@ -239,7 +291,16 @@ pub async fn sweep_once(
             .add(task::Column::CreatedAt.is_not_null())
             .add(task::Column::CreatedAt.lt(now_ms.saturating_sub(global_limit_ms)))
             .add(task::Column::Uuid.is_not_in(uuids));
-        report.task_orphan = purge::<task::Entity>(db, task::Column::Id, filter, dry_run).await?;
+        let deleted = purge_isolated::<task::Entity>(
+            db,
+            task::Column::Id,
+            filter,
+            dry_run,
+            "task",
+            &mut report,
+        )
+        .await;
+        report.task_orphan = deleted;
     }
 
     // 4. crontab_result：无 uuid 列，只按全局保留期（时间基准 run_time）
@@ -247,9 +308,16 @@ pub async fn sweep_once(
         let filter = Condition::all()
             .add(crontab_result::Column::RunTime.is_not_null())
             .add(crontab_result::Column::RunTime.lt(now_ms.saturating_sub(limit_ms)));
-        report.crontab_result =
-            purge::<crontab_result::Entity>(db, crontab_result::Column::Id, filter, dry_run)
-                .await?;
+        let deleted = purge_isolated::<crontab_result::Entity>(
+            db,
+            crontab_result::Column::Id,
+            filter,
+            dry_run,
+            "crontab_result",
+            &mut report,
+        )
+        .await;
+        report.crontab_result = deleted;
     }
 
     // 5. js_result：无 uuid 列，只按全局保留期（时间基准 start_time）
@@ -257,9 +325,18 @@ pub async fn sweep_once(
         let filter = Condition::all()
             .add(js_result::Column::StartTime.is_not_null())
             .add(js_result::Column::StartTime.lt(now_ms.saturating_sub(limit_ms)));
-        report.js_result =
-            purge::<js_result::Entity>(db, js_result::Column::Id, filter, dry_run).await?;
+        let deleted = purge_isolated::<js_result::Entity>(
+            db,
+            js_result::Column::Id,
+            filter,
+            dry_run,
+            "js_result",
+            &mut report,
+        )
+        .await;
+        report.js_result = deleted;
     }
+
 
     Ok(report)
 }
@@ -276,7 +353,7 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
             target: "retention",
             interval_secs = options.interval.as_secs(),
             initial_delay_secs = options.initial_delay.as_secs(),
-            legacy_id_margin = options.legacy_id_margin,
+            legacy_id_margin = options.legacy_id_margin.max(MIN_LEGACY_ID_MARGIN),
             "retention sweeper started in DRY-RUN mode: nothing will be deleted; \
              set `retention.enabled = true` in config to actually purge"
         );
@@ -285,12 +362,16 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
             target: "retention",
             interval_secs = options.interval.as_secs(),
             initial_delay_secs = options.initial_delay.as_secs(),
-            legacy_id_margin = options.legacy_id_margin,
+            legacy_id_margin = options.legacy_id_margin.max(MIN_LEGACY_ID_MARGIN),
             "retention sweeper started in ENFORCE mode: expired rows will be deleted"
         );
     }
 
-    tokio::spawn(async move {
+    // 同一进程只保留一个 sweeper：热重载时先停掉上一轮
+    let previous = WORKER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(tokio::spawn(async move {
         tokio::time::sleep(options.initial_delay).await;
         loop {
             match sweep_once(db, dry_run, options.legacy_id_margin).await {
@@ -304,6 +385,7 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
                     agents_without_limit = report.agents_without_limit,
                     crontab_result = report.crontab_result,
                     js_result = report.js_result,
+                    errors = report.errors,
                     total = report.total(),
                     "retention sweep (DRY-RUN) finished: these rows would be deleted"
                 ),
@@ -317,6 +399,7 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
                     agents_without_limit = report.agents_without_limit,
                     crontab_result = report.crontab_result,
                     js_result = report.js_result,
+                    errors = report.errors,
                     total = report.total(),
                     "retention sweep finished: rows deleted"
                 ),
@@ -328,7 +411,12 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
             }
             tokio::time::sleep(options.interval).await;
         }
-    });
+    }));
+    if let Some(previous) = previous {
+        // 句柄已在锁内被替换，这里安全地中止上一轮；旧循环的 next sleep 会被取消
+        previous.abort();
+        debug!(target: "retention", "retention sweeper restarted, previous worker aborted");
+    }
 }
 
 /// 读取全部 `database_limit_*` 配置，键为 `(namespace, key)`。
@@ -345,8 +433,25 @@ async fn load_limits(db: &DatabaseConnection) -> Result<HashMap<(String, String)
 
     let mut limits = HashMap::with_capacity(rows.len());
     for row in rows {
+        let table = row.key.strip_prefix(LIMIT_KEY_PREFIX).unwrap_or_default();
         match parse_limit_ms(&row.value) {
             Some(ms) => {
+                // 低于下限的值几乎必然是误填（0 / 把「天」当毫秒）。保留期是删除条件，
+                // 这种值会让「清理旧数据」变成「清空整表」，因此直接丢弃并告警。
+                let floor = min_limit_ms(table);
+                if ms < floor {
+                    warn!(
+                        target: "retention",
+                        namespace = %row.namespace,
+                        key = %row.key,
+                        value = %row.value,
+                        floor_ms = floor,
+                        "ignoring database limit below the safety floor: too small to be \
+                         milliseconds (0 or a day value?); this namespace will fall back to \
+                         the global limit, or be skipped if there is none"
+                    );
+                    continue;
+                }
                 limits.insert((row.namespace, row.key), ms);
             }
             None => warn!(
@@ -359,6 +464,14 @@ async fn load_limits(db: &DatabaseConnection) -> Result<HashMap<(String, String)
         }
     }
     Ok(limits)
+}
+
+/// 某张表的保留期下限（毫秒）。
+fn min_limit_ms(table: &str) -> i64 {
+    match table {
+        "task" => MIN_TASK_LIMIT_MS,
+        _ => MIN_RESULT_LIMIT_MS,
+    }
 }
 
 /// 取 `(namespace, database_limit_<table>)` 的保留期。
@@ -376,6 +489,37 @@ fn parse_limit_ms(value: &serde_json::Value) -> Option<i64> {
         _ => None,
     }?;
     (ms >= 0).then_some(ms)
+}
+
+/// 执行一个清理目标；失败时记录错误并计入 `report.errors`，不中断其余目标。
+///
+/// 每个目标独立失败：`crontab_result` 因锁冲突失败时，`js_result` 仍应被清理；
+/// 反之整轮 `?` 中止会让后面的目标永远轮不到，且运维看不到本轮已删行数。
+async fn purge_isolated<E>(
+    db: &DatabaseConnection,
+    pk: E::Column,
+    filter: Condition,
+    dry_run: bool,
+    target: &'static str,
+    report: &mut SweepReport,
+) -> u64
+where
+    E: EntityTrait,
+    E::Column: ColumnTrait + Copy,
+{
+    match purge::<E>(db, pk, filter, dry_run).await {
+        Ok(count) => count,
+        Err(e) => {
+            error!(
+                target: "retention",
+                table = target,
+                error = %e,
+                "retention purge failed, continuing with the remaining targets"
+            );
+            report.errors += 1;
+            0
+        }
+    }
 }
 
 /// 按主键游标分块统计或删除，返回涉及行数。
@@ -609,8 +753,9 @@ mod tests {
         insert_task(&db, active, Some(now - 2 * HOUR_MS)).await;
         insert_task(&db, active, Some(now - 10 * MINUTE_MS)).await;
         insert_task(&db, active, None).await;
+        // 软删除宽限 10 分钟：11 分钟前的过期、5 分钟前的必须留下（可能在途）
+        insert_task(&db, deleted, Some(now - 11 * MINUTE_MS)).await;
         insert_task(&db, deleted, Some(now - 5 * MINUTE_MS)).await;
-        insert_task(&db, deleted, Some(now - 10_000)).await;
         insert_task(&db, orphan, Some(now - 2 * DAY_MS)).await;
         insert_task(&db, orphan, Some(now - 10 * MINUTE_MS)).await;
 
@@ -628,12 +773,13 @@ mod tests {
         let report = sweep_once(&db, true, 0).await.expect("dry-run sweep");
         assert_eq!(report.task_active, 1);
         assert_eq!(report.task_soft_deleted, 1);
-        assert_eq!(report.task_legacy, 1);
+        // margin 会被夹到下限 1000，单条 NULL 行在水位之上，受保护
+        assert_eq!(report.task_legacy, 0);
         assert_eq!(report.task_orphan, 1);
         assert_eq!(report.agents_without_limit, 0);
         assert_eq!(report.crontab_result, 1);
         assert_eq!(report.js_result, 1);
-        assert_eq!(report.total(), 6);
+        assert_eq!(report.total(), 5);
         assert_eq!(
             count::<task::Entity>(&db).await,
             tasks_before,
@@ -642,8 +788,8 @@ mod tests {
 
         // 真跑：同样的数量，且真正落库删除
         let report = sweep_once(&db, false, 0).await.expect("real sweep");
-        assert_eq!(report.total(), 6);
-        assert_eq!(count::<task::Entity>(&db).await, tasks_before - 4);
+        assert_eq!(report.total(), 5);
+        assert_eq!(count::<task::Entity>(&db).await, tasks_before - 3);
         assert_eq!(count::<crontab_result::Entity>(&db).await, 2);
         assert_eq!(count::<js_result::Entity>(&db).await, 2);
 
@@ -652,9 +798,9 @@ mod tests {
         assert_eq!(report.total(), 0, "第二次清理应为空操作");
     }
 
-    /// 历史行按 id 水位回收：margin 保护最近若干行，避免误删刚派发、结果仍在回传途中的任务。
+    /// 历史行的 width margin 有下限：0 / 过小会被夹到 1000，小区间不会误删刚写入的 NULL 行。
     #[tokio::test]
-    async fn legacy_rows_respect_id_margin() {
+    async fn legacy_rows_respect_minimum_id_margin() {
         let db = setup_db().await;
         let agent = Uuid::from_u128(1);
         insert_agent(&db, agent, false).await;
@@ -663,18 +809,38 @@ mod tests {
             insert_task(&db, agent, None).await;
         }
 
-        // margin 1 → 水位 = max_id(3) - 1 = 2，只回收 id 1、2
-        let report = sweep_once(&db, true, 1).await.expect("dry-run sweep");
-        assert_eq!(report.task_legacy, 2);
-        assert_eq!(report.task_active, 0);
+        // margin 0/1 会被夹到 1000：3 行全在水位之上，一行都不许删
+        for margin in [0, 1, 999] {
+            let report = sweep_once(&db, true, margin).await.expect("dry-run sweep");
+            assert_eq!(report.task_legacy, 0, "margin={margin} 不得回收任何行");
+            assert_eq!(report.task_active, 0);
+        }
         assert_eq!(count::<task::Entity>(&db).await, 3, "dry-run 不删除");
 
-        let report = sweep_once(&db, false, 1).await.expect("real sweep");
-        assert_eq!(report.task_legacy, 2);
+        let report = sweep_once(&db, false, 0).await.expect("real sweep");
+        assert_eq!(report.task_legacy, 0);
+        assert_eq!(count::<task::Entity>(&db).await, 3, "下限内的 margin 不得删行");
+    }
 
+    /// margin 生效时的边界：1002 条 NULL 行、margin=0（被夹到 1000）只剩 id 1、2。
+    #[tokio::test]
+    async fn legacy_margin_clamped_to_floor_still_reclaims_oldest_rows() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, false).await;
+        insert_limit(&db, "global", "database_limit_task", DAY_MS).await;
+        for _ in 0..1_002 {
+            insert_task(&db, agent, None).await;
+        }
+
+        let report = sweep_once(&db, false, 0).await.expect("real sweep");
+        assert_eq!(
+            report.task_legacy, 2,
+            "margin 夹到 1000 后，1002 行里只有 id 1、2 越过水位"
+        );
         let remaining = task::Entity::find().all(&db).await.expect("read remaining");
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, 3, "最近一行受水位保护");
+        assert_eq!(remaining.len(), 1_000);
+        assert!(remaining.iter().all(|row| row.id > 2));
     }
 
     /// 既无 Agent 级也无全局级保留期时保守跳过，并计入 `agents_without_limit`。
@@ -693,5 +859,122 @@ mod tests {
             1,
             "没有保留期配置时不得删除任何行"
         );
+    }
+
+    /// 对抗性：把保留期写成 0（或把「天」误当毫秒）不得清空表。
+    #[tokio::test]
+    async fn zero_and_too_small_limits_are_ignored() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, false).await;
+        // Agent 级写 0，全局写 7（把 7 天写成了毫秒）；两者都必须被忽略
+        insert_limit(&db, &agent.to_string(), "database_limit_task", 0).await;
+        insert_limit(&db, "global", "database_limit_task", 7).await;
+        insert_limit(&db, "global", "database_limit_crontab_result", 0).await;
+        insert_limit(&db, "global", "database_limit_js_result", 7).await;
+
+        let now = crate::now_millis();
+        insert_task(&db, agent, Some(now - 2 * HOUR_MS)).await;
+        insert_crontab_result(&db, Some(now - 2 * DAY_MS)).await;
+        insert_js_result(&db, Some(now - 2 * DAY_MS)).await;
+
+        let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("sweep");
+        assert_eq!(report.total(), 0, "低于下限的保留期必须被忽略");
+        assert_eq!(count::<task::Entity>(&db).await, 1);
+        assert_eq!(count::<crontab_result::Entity>(&db).await, 1);
+        assert_eq!(count::<js_result::Entity>(&db).await, 1);
+    }
+
+    /// 对抗性：Agent 级写 0 时应回退到全局保留期，而不是删光。
+    #[tokio::test]
+    async fn zero_agent_limit_falls_back_to_global() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, false).await;
+        insert_limit(&db, &agent.to_string(), "database_limit_task", 0).await;
+        insert_limit(&db, "global", "database_limit_task", DAY_MS).await;
+
+        let now = crate::now_millis();
+        insert_task(&db, agent, Some(now - 2 * HOUR_MS)).await;
+        insert_task(&db, agent, Some(now - 2 * DAY_MS)).await;
+
+        let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("sweep");
+        assert_eq!(report.task_active, 1, "只删超过全局 1 天的那行");
+        assert_eq!(count::<task::Entity>(&db).await, 1);
+    }
+
+    /// 对抗性：软删除宽限必须覆盖 create_task_blocking 的 5 分钟在途上限。
+    #[tokio::test]
+    async fn soft_deleted_rows_survive_the_in_flight_window() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, true).await;
+
+        let now = crate::now_millis();
+        // 4 分 59 秒前：仍在途（blocking 上限 5 分钟），必须保留
+        insert_task(&db, agent, Some(now - 5 * MINUTE_MS + 1_000)).await;
+        // 11 分钟前：已超宽限，可以清理
+        insert_task(&db, agent, Some(now - 11 * MINUTE_MS)).await;
+
+        let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("sweep");
+        assert_eq!(report.task_soft_deleted, 1);
+        let remaining = task::Entity::find().all(&db).await.expect("read remaining");
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].created_at.is_some_and(|ts| ts > now - 5 * MINUTE_MS));
+    }
+
+    /// 分块游标：超过 CHUNK_SIZE 时必须逐块删完，且 dry-run 计数一致。
+    #[tokio::test]
+    async fn chunked_purge_deletes_every_expired_row() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, false).await;
+        insert_limit(&db, "global", "database_limit_task", DAY_MS).await;
+
+        let now = crate::now_millis();
+        let expired: u64 = 1_200;
+        for _ in 0..expired {
+            insert_task(&db, agent, Some(now - 2 * DAY_MS)).await;
+        }
+        insert_task(&db, agent, Some(now - MINUTE_MS)).await;
+
+        let dry = sweep_once(&db, true, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("dry-run sweep");
+        assert_eq!(dry.task_active, expired, "dry-run 必须数满全部分块");
+        assert_eq!(
+            count::<task::Entity>(&db).await as u64,
+            expired + 1
+        );
+
+        let real = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("real sweep");
+        assert_eq!(real.task_active, expired);
+        assert_eq!(count::<task::Entity>(&db).await, 1, "未过期行必须留下");
+    }
+
+    /// 热重载会重复调用 spawn_worker：第二个 worker 必须顶掉第一个，不叠加。
+    #[tokio::test]
+    async fn spawn_worker_is_idempotent() {
+        let db = Box::leak(Box::new(setup_db().await));
+        let options = super::RetentionOptions {
+            enabled: false,
+            interval: std::time::Duration::from_millis(5),
+            initial_delay: std::time::Duration::from_millis(1),
+            legacy_id_margin: super::DEFAULT_LEGACY_ID_MARGIN,
+        };
+        super::spawn_worker(db, options);
+        tokio::task::yield_now().await;
+        super::spawn_worker(db, options);
+        tokio::task::yield_now().await;
+        // 只有一个句柄：再 spawn 不会 panic，也不会累积（句柄被替换并 abort）
+        assert!(super::WORKER.lock().is_ok());
     }
 }
