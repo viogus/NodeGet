@@ -17,6 +17,11 @@ on:
         required: false
         default: false
         type: boolean
+      image:
+        description: "镜像仓库名（Docker Hub 上的 <namespace>/<repo>）；fork 可覆盖为自己的命名空间"
+        required: false
+        default: nodeget/nodeget
+        type: string
 
 jobs:
   publish-docker-server:
@@ -24,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY: docker.io
-      IMAGE_NAME: nodeget/nodeget
+      IMAGE_NAME: ${{ inputs.image }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:

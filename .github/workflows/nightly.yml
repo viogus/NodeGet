@@ -220,4 +220,7 @@ jobs:
     with:
       tag: nightly
       latest: false
+      # fork-local：推送到 viogus 的 Docker Hub（上游为 nodeget/nodeget）。
+      # 向上游提 PR 时请剔除本行改动。
+      image: viogus/nodeget
     secrets: inherit

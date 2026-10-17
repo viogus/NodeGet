@@ -104,6 +104,11 @@ jobs:
         run: cross +nightly build --package nodeget-agent --target ${{ matrix.platform.target }} --profile minimal --jobs 32 -Z build-std=std,panic_abort
         env:
           CROSS_NO_WARNINGS: 0
+          # 老 32 位 ARM（armv5te-musl / arm-androideabi）：代码生成引用
+          # __aeabi_uread8/uwrite8/uread4 等 libgcc runtime helper，build-std 下
+          # rustc 不自动链 libgcc（compiler-builtins 不含这些符号），显式补 -lgcc。
+          # 其它 build-std target（armv7+/mips/powerpc 等）不涉及，无需处理。
+          RUSTFLAGS: ${{ matrix.platform.link_libgcc && '-C link-arg=-lgcc' || '' }}
 
       - name: Compress binary
         if: ${{ !matrix.platform.no_upx }}

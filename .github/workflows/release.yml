@@ -58,7 +58,7 @@ jobs:
           fi
 
           # tag 带 pre-release 后缀（如 v0.6.1-rc.1、v0.6.1-beta.1）即为预发布：
-          # 不标记为 Latest，也不覆盖 Docker 的 latest 标签
+          # 不标记为 Latest，也不覆盖 Docker 的 latest 标签（对齐上游 #194）
           prerelease="false"
           if [[ "${tag}" =~ ^v[0-9.]+- ]]; then
             prerelease="true"
@@ -67,6 +67,28 @@ jobs:
           echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+  # fork-local：上游 release.yml 不含测试 job，这里保留 fork 的测试门禁
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: test
+
+      # 默认 features：全 workspace 测试（server 专属代码不编译）
+      - name: Test workspace
+        run: cargo test --workspace
+
+      # server feature：编译并运行 ng-db 的 timescale 单元测试
+      # （非 PG 跳过 / 溢出拒绝 / quote_ident / regclass_literal）
+      - name: Test ng-db with server feature
+        run: cargo test -p ng-db --features server timescale
 
   # 全平台构建，target 列表见 .github/build-matrix.json
   # Linux server 单独构建，Docker 镜像只依赖它；其余平台（agent、Windows、macOS server）在 build 里
@@ -86,7 +108,10 @@ jobs:
       - prepare
       - build-server-linux
       - build
-    if: needs.prepare.outputs.publish == 'true'
+      - test
+    # fork-local：个别平台构建失败也照常发布（上游为 needs 全部成功后发布），
+    # 但测试必须是绿的——否则「测试不过照样发版」等于没有测试门禁。
+    if: always() && needs.test.result == 'success' && needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,4 +159,7 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
       latest: ${{ needs.prepare.outputs.prerelease != 'true' }}
+      # fork-local：推送到 viogus 的 Docker Hub（上游为 nodeget/nodeget）。
+      # 向上游提 PR 时请剔除本行改动。
+      image: viogus/nodeget
     secrets: inherit
