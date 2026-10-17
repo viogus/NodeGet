@@ -84,7 +84,7 @@ services:
     environment:
       NODEGET_SERVER_UUID: "换成你的固定 uuid"   # 必须固定，否则容器重建 server_uuid 变化导致全部 agent 掉线
       NODEGET_PORT: "2211"
-      # 双写：官方 entrypoint.sh 只认 NODEGET_DATABASE_URL；ghcr entrypoint.c 两者都认
+      # 官方 entrypoint.sh 只读 NODEGET_DATABASE_URL；DATABASE_URL 仅为兼容旧 ghcr 镜像保留
       NODEGET_DATABASE_URL: postgresql://nodeget_user:换成强密码@127.0.0.1:5432/nodeget_db
       DATABASE_URL: postgresql://nodeget_user:换成强密码@127.0.0.1:5432/nodeget_db
       # TimescaleDB：30 天自动删除（磁盘封顶）
@@ -177,19 +177,27 @@ retention policy applied
 > 该保留策略同样作用于流量快照 `traffic_snapshot`；快照数据还受 worker 侧 Kv
 > `database_limit_traffic_snapshot`（默认 365 天）约束，两个阈值中**更早到期者先生效**。
 
-Docker 部署时通过 entrypoint 在**首次启动**生成 `config.toml`；环境变量仍以**天**为单位
-（写入的是上面两个已废弃的天级键，NodeGet 会按 ×24 换算成小时）：
+Docker 部署时通过 entrypoint 在**首次启动**生成 `config.toml`。天级与小时级环境变量都支持，
+小时级键优先：
 
 ```bash
+# 天级（历史配置，NodeGet 按 ×24 换算成小时）
 NODEGET_TIMESCALE_CHUNK_INTERVAL_DAYS
 NODEGET_TIMESCALE_COMPRESS_AFTER_DAYS
 NODEGET_TIMESCALE_RETENTION_DAYS
+# 小时级（优先于上面的天级键）
+NODEGET_TIMESCALE_CHUNK_INTERVAL_HOURS
+NODEGET_TIMESCALE_COMPRESS_AFTER_HOURS
+# 保留期清理器（fork 功能）：默认 false = dry-run，只统计不删除
+NODEGET_RETENTION_ENABLED
+NODEGET_RETENTION_INTERVAL_SECS
 ```
 
 > [!NOTE]
-> 环境变量只在容器首次启动生成配置时生效，配置文件已存在时一律以文件为准。
-> 想用小时级粒度：直接编辑已生成的 `config.toml`（加 `chunk_interval_hours` /
-> `compress_after_hours`，新键优先于天级旧键）后重启容器。
+> - 环境变量只在容器**首次启动**生成配置时生效；配置文件已存在时一律以文件为准。
+> - entrypoint 按 `NODEGET_CONFIG` → `/etc/nodeget/config.toml` → `/nodeget/config.toml`
+>   的顺序选配置；挂载 `/etc/nodeget`（官方 compose 的约定）会被自动沿用。
+> - 数值类环境变量必须是整数，`30d` 这类值会在启动前直接报错，不会再变成难懂的 TOML 解析失败。
 
 ## 五、数据迁移（从普通 PostgreSQL）
 
