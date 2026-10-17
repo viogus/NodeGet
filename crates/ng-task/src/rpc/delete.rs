@@ -48,6 +48,7 @@ pub async fn delete(
             "http_ping",
             "http_request",
             "web_shell",
+            "docker_tunnel",
             "execute",
             "read_config",
             "edit_config",

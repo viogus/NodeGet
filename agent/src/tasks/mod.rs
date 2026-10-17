@@ -130,6 +130,8 @@ const fn is_pool_managed(task_type: &TaskEventType) -> bool {
 
 /// DNS 查询模块
 mod dns;
+/// Docker 隧道模块（把 Server 与本机 Docker socket 裸字节对接）
+mod docker_tunnel;
 /// 命令执行模块
 mod execute;
 /// HTTP Request 任务模块
@@ -173,6 +175,7 @@ fn is_task_allowed(server: &ng_config::config::agent::Server, task_type: &TaskEv
         TaskEventType::EditConfig(_) => server.allow_edit_config.unwrap_or(false),
         TaskEventType::Ip => server.allow_ip.unwrap_or(false),
         TaskEventType::Dns(_) => server.allow_dns.unwrap_or(false),
+        TaskEventType::DockerTunnel => server.allow_docker_tunnel.unwrap_or(false),
         TaskEventType::Version => server.allow_version.unwrap_or(false),
         TaskEventType::SelfUpdate(_) => server.allow_self_update.unwrap_or(false),
     }
@@ -187,20 +190,20 @@ fn is_task_allowed(server: &ng_config::config::agent::Server, task_type: &TaskEv
 /// - `task_type` - 任务类型枚举
 /// - `task_id` - 任务 ID
 /// - `task_token` - 任务令牌
-/// - `ignore_cert` - 是否跳过 TLS 证书校验
+/// - `server` - 下发该任务的 Server 配置（`ignore_cert`、`ws_url` 等都从这里取）
 ///
 /// 返回任务执行结果；执行失败时返回错误。
 async fn execute_task(
     task_type: &TaskEventType,
     task_id: u64,
     task_token: &str,
-    ignore_cert: bool,
+    server: &ng_config::config::agent::Server,
 ) -> Result<TaskEventResult> {
     if is_pool_managed(task_type) {
-        return execute_task_via_pool(task_type, task_id, task_token, ignore_cert).await;
+        return execute_task_via_pool(task_type, task_id, task_token, server).await;
     }
 
-    execute_task_direct(task_type, task_id, task_token, ignore_cert).await
+    execute_task_direct(task_type, task_id, task_token, server).await
 }
 
 /// 通过全局任务池执行网络 I/O 任务（限流 + 硬超时）。
@@ -208,14 +211,15 @@ async fn execute_task_via_pool(
     task_type: &TaskEventType,
     task_id: u64,
     task_token: &str,
-    ignore_cert: bool,
+    server: &ng_config::config::agent::Server,
 ) -> Result<TaskEventResult> {
-    // 在 move 闭包中需要 owned 的 task_type 副本；caller 传入的是引用，
+    // 在 move 闭包中需要 owned 的 task_type / server 副本；caller 传入的是引用，
     // 但到此处 task_type 一定是 pool-managed 类型，clone 开销可忽略
     // （String 内含 Arc，大多数 variant 只有一个 String 或两个）。
     let task_type_owned = task_type.clone();
+    let server_owned = server.clone();
     let fut = async move {
-        execute_task_direct(&task_type_owned, task_id, task_token, ignore_cert).await
+        execute_task_direct(&task_type_owned, task_id, task_token, &server_owned).await
     };
     Box::pin(TASK_POOL.run(fut)).await.map_err(Into::into)
 }
@@ -225,7 +229,7 @@ async fn execute_task_direct(
     task_type: &TaskEventType,
     task_id: u64,
     task_token: &str,
-    ignore_cert: bool,
+    server: &ng_config::config::agent::Server,
 ) -> Result<TaskEventResult> {
     match task_type {
         TaskEventType::Ping(target) => ping::icmp::ping_target(target.clone())
@@ -262,9 +266,19 @@ async fn execute_task_direct(
         TaskEventType::WebShell(web_shell) => {
             let terminal_id = web_shell.terminal_id.to_string();
             let url = pty::parse_url(web_shell.url.clone(), task_id, task_token, &terminal_id);
-            pty::handle_pty_url(url, terminal_id, ignore_cert)
+            pty::handle_pty_url(url, terminal_id, server.ignore_cert.unwrap_or(false))
                 .await
                 .map(|()| TaskEventResult::WebShell(true))
+                .map_err(|e| NodegetError::Other(format!("{e}")).into())
+        }
+
+        TaskEventType::DockerTunnel => {
+            // 隧道同样是长驻会话：并发上限由 docker_tunnel 模块内的计数守卫控制，
+            // 因此这里不套用统一任务超时（见 `handle_task` 的分支）。
+            let url = docker_tunnel::build_tunnel_url(server, task_id, task_token);
+            docker_tunnel::handle_docker_tunnel_url(url, server.ignore_cert.unwrap_or(false))
+                .await
+                .map(|()| TaskEventResult::DockerTunnel(true))
                 .map_err(|e| NodegetError::Other(format!("{e}")).into())
         }
 
@@ -432,7 +446,7 @@ pub async fn handle_task() {
                                 task_type,
                                 json_rpc.params.result.task_id,
                                 &json_rpc.params.result.task_token,
-                                server_config.ignore_cert.unwrap_or(false),
+                                &server_config,
                             ));
                             if matches!(task_type, TaskEventType::WebShell(_)) {
                                 // WebShell 长驻会话上限：try_acquire 非阻塞，满则立即失败上报，
@@ -444,6 +458,11 @@ pub async fn handle_task() {
                                         "WebShell session limit reached (max {WEBSHELL_MAX_SESSIONS} concurrent sessions)"
                                     )).into()),
                                 }
+                            } else if matches!(task_type, TaskEventType::DockerTunnel) {
+                                // Docker 隧道与 WebShell 一样是长驻会话，生命周期由
+                                // 本地 Docker 客户端决定；并发上限在 docker_tunnel
+                                // 模块内用计数守卫控制，这里不套统一超时。
+                                fut.await
                             } else {
                                 time::timeout(TASK_MAX_TIMEOUT, fut)
                                     .await

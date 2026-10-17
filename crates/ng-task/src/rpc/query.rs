@@ -46,6 +46,7 @@ pub async fn query(token: String, task_data_query: TaskDataQuery) -> RpcResult<B
             "http_ping",
             "http_request",
             "web_shell",
+            "docker_tunnel",
             "execute",
             "read_config",
             "edit_config",

@@ -24,7 +24,7 @@ ng-crontab = { workspace = true, features = ["server"] }
 ng-terminal = { workspace = true, features = ["server"] }
 
 # 基础运行时
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["net", "io-util", "signal"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
@@ -38,6 +38,10 @@ axum = { workspace = true }
 axum-server = { workspace = true }
 rustls = { workspace = true }
 tower = { workspace = true }
+# D1-B：可控的 HTTP/1.1 编解码（keep-alive 剥前缀 + 101 升级透传）
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 
 # 解析
 serde = { workspace = true }
@@ -45,6 +49,7 @@ serde_json = { workspace = true }
 
 # HTTP Client
 reqwest = { workspace = true }
+futures-util = { workspace = true }
 
 # 日志
 tracing = { workspace = true }

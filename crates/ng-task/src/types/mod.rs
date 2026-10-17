@@ -132,6 +132,13 @@ pub enum TaskEventType {
     /// DNS 查询任务
     Dns(DnsTask),
 
+    /// Docker 隧道任务
+    ///
+    /// 不带参数：隧道端点的地址由 Agent 从自身 `ws_url` 派生，任务身份由 `task_id` /
+    /// `task_token` 承载。Agent 收到后向 server 的 `/docker-tunnel` 拨出一条专用 WebSocket，
+    /// 并与本机 Docker socket 双向对拷字节。
+    DockerTunnel,
+
     /// 读取 Agent 配置任务
     ReadConfig,
     /// 编辑 Agent 配置任务，参数为配置内容
@@ -159,6 +166,7 @@ impl TaskEventType {
             Self::Execute(_) => "execute",
             Self::HttpRequest(_) => "http_request",
             Self::Dns(_) => "dns",
+            Self::DockerTunnel => "docker_tunnel",
             Self::EditConfig(_) => "edit_config",
             Self::ReadConfig => "read_config",
             Self::Ip => "ip",
@@ -199,6 +207,7 @@ impl TaskEventType {
             Self::Execute(_) => "allow_execute",
             Self::HttpRequest(_) => "allow_http_request",
             Self::Dns(_) => "allow_dns",
+            Self::DockerTunnel => "allow_docker_tunnel",
             Self::ReadConfig => "allow_read_config",
             Self::EditConfig(_) => "allow_edit_config",
             Self::Ip => "allow_ip",
@@ -240,6 +249,9 @@ pub enum TaskEventResult {
     /// DNS 查询结果，可能包含多条记录
     Dns(Vec<DnsRecordResult>),
 
+    /// Docker 隧道结果，是否连接成功
+    DockerTunnel(bool),
+
     /// 读取 Agent 配置结果，返回配置内容字符串
     ReadConfig(String),
     /// 编辑 Agent 配置结果，是否成功
@@ -267,6 +279,7 @@ impl TaskEventResult {
             Self::Execute(_) => "execute",
             Self::HttpRequest(_) => "http_request",
             Self::Dns(_) => "dns",
+            Self::DockerTunnel(_) => "docker_tunnel",
             Self::ReadConfig(_) => "read_config",
             Self::EditConfig(_) => "edit_config",
             Self::Ip(_, _) => "ip",
@@ -363,6 +376,7 @@ mod tests {
             .task_name(),
             "dns"
         );
+        assert_eq!(TaskEventType::DockerTunnel.task_name(), "docker_tunnel");
         assert_eq!(TaskEventType::ReadConfig.task_name(), "read_config");
         assert_eq!(
             TaskEventType::EditConfig("content".to_owned()).task_name(),
@@ -382,6 +396,7 @@ mod tests {
         assert!(TaskEventType::TcpPing("8.8.8.8".to_owned()).is_ping_task());
         assert!(TaskEventType::HttpPing("https://example.com".parse().unwrap()).is_ping_task());
         assert!(!TaskEventType::Ip.is_ping_task());
+        assert!(!TaskEventType::DockerTunnel.is_ping_task());
         assert!(!TaskEventType::ReadConfig.is_ping_task());
         assert!(
             !TaskEventType::Execute(ExecuteTask {
@@ -442,6 +457,10 @@ mod tests {
             })
             .permission_field(),
             "allow_dns"
+        );
+        assert_eq!(
+            TaskEventType::DockerTunnel.permission_field(),
+            "allow_docker_tunnel"
         );
         assert_eq!(
             TaskEventType::ReadConfig.permission_field(),
@@ -524,6 +543,10 @@ mod tests {
         assert_eq!(
             TaskEventResult::Execute("output".to_owned()).task_name(),
             "execute"
+        );
+        assert_eq!(
+            TaskEventResult::DockerTunnel(true).task_name(),
+            "docker_tunnel"
         );
         assert_eq!(
             TaskEventResult::ReadConfig("config".to_owned()).task_name(),
@@ -703,6 +726,7 @@ mod tests {
                 record_types: vec![DnsRecordType::A],
                 dns_server: None,
             }),
+            TaskEventType::DockerTunnel,
             TaskEventType::ReadConfig,
             TaskEventType::EditConfig("new config".to_owned()),
             TaskEventType::Ip,
@@ -735,6 +759,7 @@ mod tests {
                 time: 15.5,
                 data: "1.2.3.4".to_owned(),
             }]),
+            TaskEventResult::DockerTunnel(true),
             TaskEventResult::ReadConfig("config content".to_owned()),
             TaskEventResult::EditConfig(true),
             TaskEventResult::Ip(Some(Ipv4Addr::new(127, 0, 0, 1)), None),

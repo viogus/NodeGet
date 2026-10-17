@@ -9,6 +9,19 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
 
+/// 默认 Docker 隧道 socket 目录（D1-A：每个 agent 一个 unix socket）
+pub const DEFAULT_DOCKER_TUNNEL_SOCKET_DIR: &str = "/run/nodeget/docker";
+/// 默认 Docker 隧道 socket 文件权限（八进制字符串，仅属主可读写）
+pub const DEFAULT_DOCKER_TUNNEL_SOCKET_FILE_MODE: &str = "0600";
+/// 默认 Docker 隧道空闲回收时间（秒）
+pub const DEFAULT_DOCKER_TUNNEL_IDLE_TIMEOUT_SECS: u64 = 300;
+/// 默认单个 agent 的并发隧道上限
+pub const DEFAULT_DOCKER_TUNNEL_MAX_TUNNELS: usize = 4;
+/// 默认 Docker 隧道 TCP 监听地址（D1-B：跨机形态；默认只监听回环）
+pub const DEFAULT_DOCKER_TUNNEL_TCP_LISTEN: &str = "127.0.0.1:23750";
+/// 默认 Docker 隧道 TCP 入口的路径前缀（D1-B）
+pub const DEFAULT_DOCKER_TUNNEL_PATH_PREFIX: &str = "/agent";
+
 /// 服务器配置结构体，定义 Server 的运行参数。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServerConfig {
@@ -42,6 +55,9 @@ pub struct ServerConfig {
 
     /// crontab 派发行为配置（可选）
     pub crontab: Option<CrontabConfig>,
+
+    /// Docker 隧道配置（可选，默认关闭）
+    pub docker_tunnel: Option<DockerTunnelConfig>,
 
     /// JSON-RPC 最大请求体大小（字节），默认 10485760（10MB）
     pub max_request_body_size: Option<u32>,
@@ -101,6 +117,160 @@ pub struct CrontabConfig {
     ///
     /// 置 `false` 回退为「每个 Agent 一条成功行」。失败行始终逐个 Agent 记录。
     pub aggregate_success_result: Option<bool>,
+}
+
+/// Docker 隧道配置（D1-A：每个启用隧道的 agent 分配一个 unix socket）。
+///
+/// Docker socket 等价于宿主机 root 权限，因此默认关闭，必须显式 `enable = true`
+/// 并在 `agents` 中逐个列出允许的 agent UUID。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerTunnelConfig {
+    /// 总开关，默认 `false`
+    pub enable: Option<bool>,
+
+    /// unix socket 目录，默认 `/run/nodeget/docker`；
+    /// 每个启用隧道的 agent 对应 `<socket_dir>/<agent_uuid>.sock`
+    pub socket_dir: Option<String>,
+
+    /// D1-B：TCP 监听地址（跨机形态），默认不监听；
+    /// 显式填写才启用，例如 `"0.0.0.0:23750"`（跨机必须监听非回环地址）
+    pub tcp_listen: Option<String>,
+
+    /// D1-B：TCP 入口的路径前缀，默认 `/agent`；
+    /// 端点形态为 `tcp://<host>:<port><path_prefix>/<agent_uuid>`
+    pub path_prefix: Option<String>,
+
+    /// D1-B：TCP 入口是否要求 `Authorization: Bearer <NodeGet token>`，默认 `true`
+    pub require_token: Option<bool>,
+
+    /// 允许建立隧道的 Agent UUID 列表；为空表示不启用任何 agent
+    pub agents: Option<Vec<String>>,
+
+    /// socket 文件权限（八进制字符串），默认 `"0600"`
+    pub socket_file_mode: Option<String>,
+
+    /// socket 文件属主 UID（仅在以 root 运行时生效，`None` 表示不改属主）
+    pub socket_file_uid: Option<u32>,
+
+    /// socket 文件属组 GID（仅在以 root 运行时生效，`None` 表示不改属组）
+    pub socket_file_gid: Option<u32>,
+
+    /// 单条隧道连接的读写空闲回收时间（秒），默认 300；`0` 表示不回收
+    pub idle_timeout_secs: Option<u64>,
+
+    /// 单个 agent 的并发隧道上限，默认 4；`0` 表示不限制
+    pub max_tunnels: Option<usize>,
+}
+
+impl DockerTunnelConfig {
+    /// 是否启用 Docker 隧道，默认 `false`
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enable.unwrap_or(false)
+    }
+
+    /// 获取 socket 目录，未配置时使用默认值（/run/nodeget/docker）
+    #[must_use]
+    pub fn socket_dir_or_default(&self) -> &str {
+        self.socket_dir
+            .as_deref()
+            .unwrap_or(DEFAULT_DOCKER_TUNNEL_SOCKET_DIR)
+    }
+
+    /// 获取 D1-B 的 TCP 监听地址；未配置或为空视为**不启用** TCP 入口
+    #[must_use]
+    pub fn tcp_listen(&self) -> Option<&str> {
+        self.tcp_listen
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// 获取 D1-B 的路径前缀，未配置时使用默认值（`/agent`）。
+    ///
+    /// 结果已归一化：以 `/` 开头、不以 `/` 结尾；配置成 `/` 时返回空串，
+    /// 表示端点就是 `tcp://<host>:<port>/<agent_uuid>`。
+    #[must_use]
+    pub fn path_prefix_or_default(&self) -> String {
+        let raw = self
+            .path_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_DOCKER_TUNNEL_PATH_PREFIX);
+        let trimmed = raw.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        if trimmed.starts_with('/') {
+            trimmed.to_owned()
+        } else {
+            format!("/{trimmed}")
+        }
+    }
+
+    /// D1-B 的 TCP 入口是否要求 Bearer Token，默认 `true`。
+    ///
+    /// 置 `false` 只应在「入口本身已被防火墙/私网限制」时使用：TCP 端点等价于
+    /// 目标主机 root，未鉴权即等于把该主机的 Docker 控制权公开出去。
+    #[must_use]
+    pub fn require_token_or_default(&self) -> bool {
+        self.require_token.unwrap_or(true)
+    }
+
+    /// 获取 socket 文件权限位，未配置或格式非法时使用默认值（0600）
+    #[must_use]
+    pub fn socket_file_mode_or_default(&self) -> u32 {
+        self.socket_file_mode
+            .as_deref()
+            .and_then(parse_socket_file_mode)
+            .unwrap_or(0o600)
+    }
+
+    /// 获取空闲回收时间（秒），未配置时使用默认值（300）
+    #[must_use]
+    pub fn idle_timeout_secs_or_default(&self) -> u64 {
+        self.idle_timeout_secs
+            .unwrap_or(DEFAULT_DOCKER_TUNNEL_IDLE_TIMEOUT_SECS)
+    }
+
+    /// 获取单个 agent 的并发隧道上限，未配置时使用默认值（4）
+    #[must_use]
+    pub fn max_tunnels_or_default(&self) -> usize {
+        self.max_tunnels
+            .unwrap_or(DEFAULT_DOCKER_TUNNEL_MAX_TUNNELS)
+    }
+
+    /// 获取允许建立隧道的 agent UUID 列表（去重，忽略空白项与非法 UUID）
+    #[must_use]
+    pub fn agent_uuids(&self) -> Vec<uuid::Uuid> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for raw in self.agents.iter().flatten() {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match uuid::Uuid::parse_str(trimmed) {
+                Ok(uuid) => {
+                    if seen.insert(uuid) {
+                        out.push(uuid);
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(value = %trimmed, "docker_tunnel.agents 中存在非法 UUID，已忽略");
+                }
+            }
+        }
+        out
+    }
+}
+
+/// 解析八进制 socket 权限字符串，支持 `"0600"` 与 `"0o600"` 两种写法。
+fn parse_socket_file_mode(raw: &str) -> Option<u32> {
+    let digits = raw.trim();
+    let digits = digits.strip_prefix("0o").unwrap_or(digits);
+    u32::from_str_radix(digits, 8).ok()
 }
 
 /// 日志配置。
@@ -403,6 +573,142 @@ database_url = "sqlite://./db/nodeget.db"
 "#;
         let result: Result<ServerConfig, _> = toml::from_str(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn docker_tunnel_config_defaults_and_parsing() {
+        // 未配置时：关闭、默认目录/权限/超时/上限
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.docker_tunnel.is_none());
+
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[docker_tunnel]
+enable = true
+socket_dir = "/tmp/nodeget-docker"
+agents = [
+    "550e8400-e29b-41d4-a716-446655440001",
+    "550e8400-e29b-41d4-a716-446655440001",
+    "  550e8400-e29b-41d4-a716-446655440002  ",
+    "not-a-uuid",
+]
+socket_file_mode = "0640"
+socket_file_uid = 1000
+socket_file_gid = 1001
+idle_timeout_secs = 60
+max_tunnels = 0
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        let tunnel = config.docker_tunnel.unwrap();
+        assert!(tunnel.enabled());
+        assert_eq!(tunnel.socket_dir_or_default(), "/tmp/nodeget-docker");
+        assert_eq!(tunnel.socket_file_mode_or_default(), 0o640);
+        assert_eq!(tunnel.idle_timeout_secs_or_default(), 60);
+        assert_eq!(tunnel.max_tunnels_or_default(), 0);
+        assert_eq!(tunnel.socket_file_uid, Some(1000));
+        assert_eq!(tunnel.socket_file_gid, Some(1001));
+        // 非法 UUID 被忽略，重复项被去重
+        assert_eq!(tunnel.agent_uuids().len(), 2);
+    }
+
+    #[test]
+    fn docker_tunnel_config_tcp_defaults_and_parsing() {
+        // 未配置 tcp_listen：不启用 D1-B，其余取默认值
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[docker_tunnel]
+enable = true
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        let tunnel = config.docker_tunnel.unwrap();
+        assert!(tunnel.tcp_listen().is_none());
+        assert_eq!(tunnel.path_prefix_or_default(), "/agent");
+        assert!(tunnel.require_token_or_default());
+
+        // 显式配置；路径前缀做归一化（补前导斜杠、去尾斜杠）
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[docker_tunnel]
+enable = true
+tcp_listen = "0.0.0.0:23750"
+path_prefix = "nodeget/docker/"
+require_token = false
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        let tunnel = config.docker_tunnel.unwrap();
+        assert_eq!(tunnel.tcp_listen(), Some("0.0.0.0:23750"));
+        assert_eq!(tunnel.path_prefix_or_default(), "/nodeget/docker");
+        assert!(!tunnel.require_token_or_default());
+
+        // 空白 tcp_listen 等价于未配置；`/` 前缀等价于空前缀
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[docker_tunnel]
+enable = true
+tcp_listen = "   "
+path_prefix = "/"
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        let tunnel = config.docker_tunnel.unwrap();
+        assert!(tunnel.tcp_listen().is_none());
+        assert_eq!(tunnel.path_prefix_or_default(), "");
+    }
+
+    #[test]
+    fn docker_tunnel_config_parses_0o_prefix_mode() {
+        let toml_str = r#"
+server_uuid = "550e8400-e29b-41d4-a716-446655440000"
+ws_listener = "0.0.0.0:3000"
+
+[database]
+database_url = "sqlite://./db/nodeget.db"
+
+[docker_tunnel]
+socket_file_mode = "0o600"
+"#;
+        let config: ServerConfig = toml::from_str(toml_str).unwrap();
+        let tunnel = config.docker_tunnel.unwrap();
+        assert!(!tunnel.enabled());
+        assert_eq!(tunnel.socket_file_mode_or_default(), 0o600);
+        assert_eq!(
+            tunnel.socket_dir_or_default(),
+            DEFAULT_DOCKER_TUNNEL_SOCKET_DIR
+        );
+        assert_eq!(
+            tunnel.idle_timeout_secs_or_default(),
+            DEFAULT_DOCKER_TUNNEL_IDLE_TIMEOUT_SECS
+        );
+        assert_eq!(
+            tunnel.max_tunnels_or_default(),
+            DEFAULT_DOCKER_TUNNEL_MAX_TUNNELS
+        );
     }
 
     #[test]

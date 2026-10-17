@@ -22,6 +22,22 @@ use crate::stop_signal::StopSignal;
 use crate::subcommands::serve::ServeExit;
 
 // 服务器专属模块（不属于任何 ng-* crate）
+#[cfg(unix)]
+mod docker_tunnel;
+// Docker 隧道依赖 unix socket，Windows 上退化为空实现
+#[cfg(not(unix))]
+mod docker_tunnel {
+    /// 非 Unix 平台不注册任何路由
+    pub fn router() -> axum::Router {
+        axum::Router::new()
+    }
+
+    /// 非 Unix 平台不支持 Docker 隧道
+    pub fn start(_config: &ng_config::config::server::ServerConfig) {}
+
+    /// 非 Unix 平台无需停止
+    pub fn stop() {}
+}
 // fork 专属的启动注入点（详见模块文档）
 mod fork_ext;
 mod logging;

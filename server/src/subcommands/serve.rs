@@ -184,6 +184,8 @@ pub async fn run(config: &ServerConfig, stop_signal: &mut StopSignal) -> ServeEx
     let app = app
         // Terminal WebSocket 路由（独立 state）
         .merge(ng_terminal::router())
+        // fork：Docker 隧道 WebSocket 路由（Agent 拨入，独立 state）
+        .merge(crate::fork_ext::docker_tunnel_router())
         .fallback(any(move |req: axum::extract::Request| {
             let mut rpc_service = jsonrpc_service.clone();
             async move {
@@ -340,6 +342,9 @@ async fn graceful_shutdown(unix_server: Option<UnixSocketServer>) {
         server.task.abort();
         cleanup_unix_socket_file(&server.path).await;
     }
+
+    // fork：收尾 fork 的后台监听器（Docker 隧道）
+    crate::fork_ext::stop();
 }
 
 /// 记录服务循环意外结束的原因

@@ -45,6 +45,9 @@ mod delete;
 mod query;
 mod upload_task_result;
 
+// 供服务器二进制内部派发复用（无权限校验，调用方自负鉴权责任），见 create_task 模块文档
+pub use create_task::create_task_internal;
+
 // ── Monitoring UUID provider trait ──────────────────────────────
 
 /// 监控 UUID 缓存操作 trait，由服务器二进制实现并注入

@@ -29,6 +29,123 @@ pub fn validate_task_type(task_type: &TaskEventType) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 创建任务记录并向目标 Agent 派发，返回任务 ID。
+///
+/// 与 [`create_task`] 的区别是**不做任何权限校验**：供 server 侧的内部派发复用
+/// （例如 Docker 隧道在本地连接到来时按需派发）。面向客户端的 `task_create_task`
+/// 必须先做权限校验，再调用本函数。
+///
+/// `on_inserted` 在数据库记录插入之后、`send_event` 之前被调用一次（参数为 task_id）。
+/// Agent 一旦收到任务就可能立刻回连 server，因此任何「服务端必须提前登记」的状态
+/// 都要在这个回调里完成，否则会出现「Agent 已回连但服务端还不认识」的竞态。
+///
+/// 失败语义与 [`create_task`] 一致：Agent 离线时不会插入记录；`send_event` 失败会
+/// 回滚刚插入的记录。
+pub async fn create_task_internal<F>(
+    manager: &Arc<TaskManager>,
+    target_uuid: Uuid,
+    task_type: TaskEventType,
+    on_inserted: F,
+) -> anyhow::Result<i64>
+where
+    F: FnOnce(i64),
+{
+    validate_task_type(&task_type)?;
+
+    // 派发前在线预检：对离线 Agent 下发必然在 send_event 阶段失败，白付一次
+    // task 行的 INSERT + 回滚 DELETE，并让调用方（尤其是 JS worker 的批量下发）
+    // 拿到一个可区分「离线」的明确错误。语义说明见 TaskManager::is_connected。
+    if !manager.is_connected(&target_uuid).await {
+        debug!(target: "task", uuid = %target_uuid, "create_task skipped: agent offline");
+        return Err(
+            NodegetError::AgentOffline(format!("Agent {target_uuid} is not connected")).into(),
+        );
+    }
+
+    let db = crate::rpc::TaskRpcImpl::get_db()?;
+    let token = generate_random_string(10);
+
+    let in_data = task::ActiveModel {
+        id: ActiveValue::default(),
+        uuid: Set(target_uuid),
+        token: Set(token.clone()),
+        cron_source: Set(None),
+        timestamp: Set(None),
+        success: Set(None),
+        error_message: Set(None),
+        task_event_type: crate::rpc::TaskRpcImpl::try_set_json(task_type.clone())
+            .map_err(|e| NodegetError::SerializationError(e.to_string()))?,
+        task_event_result: Set(None),
+        // 派发时间，供保留期清理判断过期（`timestamp` 是结果回传时间，pending 行为 NULL）
+        created_at: Set(Some(crate::now_millis())),
+    };
+
+    debug!(target: "task", uuid = %target_uuid, "Received task");
+
+    let result = task::Entity::insert(in_data).exec(db).await.map_err(|e| {
+        error!(target: "task", error = %e, "Database insert error");
+        NodegetError::DatabaseError(format!("Database insert error: {e}"))
+    })?;
+
+    let task_id = result.last_insert_id;
+    debug!(target: "task", id = task_id, "Task created");
+
+    // 必须先于 send_event 调用：见函数文档中的竞态说明
+    on_inserted(task_id);
+
+    // Ensure the uuid is registered in the monitoring_uuid table (authoritative Agent table)
+    if let Some(uuid_provider) = crate::rpc::monitoring_uuid_provider()
+        && let Err(e) = uuid_provider.get_or_insert(target_uuid).await
+    {
+        warn!(target: "task", uuid = %target_uuid, error = %e, "Failed to register monitoring_uuid; agent will re-register on next report");
+    }
+
+    let task = TaskEvent {
+        task_id: task_id.cast_unsigned(),
+        task_token: token,
+        task_event_type: task_type,
+    };
+
+    match manager.send_event(target_uuid, task).await {
+        Ok(()) => Ok(task_id),
+        Err(send_err) => {
+            // 回滚刚创建的 task 行。回滚失败对调用方原本不可见（错误被 let _ = 丢弃），
+            // 现把回滚失败信息附进错误消息，便于运维据消息定位需手动清理的残留 task 行。
+            let rollback_failed = match task::Entity::delete_by_id(task_id).exec(db).await {
+                Ok(_) => false,
+                Err(del_err) => {
+                    error!(
+                        target: "task",
+                        task_id,
+                        error = %del_err,
+                        "Database delete error during rollback (task row may need manual cleanup)"
+                    );
+                    true
+                }
+            };
+            let detail = send_err.message();
+            if send_err.is_not_connected() {
+                // 预检通过后仍失败 = 检查与发送之间掉线的窄竞态。属于预期内的
+                // 离线，记 warn 便于观察竞态频率，但不升级为 error。
+                warn!(target: "task", uuid = %target_uuid, task_id, "agent disconnected between precheck and send");
+                let mut msg = format!("Agent {target_uuid} is not connected");
+                if rollback_failed {
+                    msg.push_str(
+                        "; rollback also failed, see logs (task row may need manual cleanup)",
+                    );
+                }
+                return Err(NodegetError::AgentOffline(msg).into());
+            }
+            error!(target: "task", error = %detail, "Error sending task event");
+            let mut msg = format!("Error sending task event: {detail}");
+            if rollback_failed {
+                msg.push_str("; rollback also failed, see logs (task row may need manual cleanup)");
+            }
+            Err(NodegetError::AgentConnectionError(msg).into())
+        }
+    }
+}
+
 /// 创建任务并立即返回任务 ID
 ///
 /// - `manager` — 任务广播管理器，用于向 Agent 推送任务事件
@@ -41,10 +158,7 @@ pub fn validate_task_type(task_type: &TaskEventType) -> anyhow::Result<()> {
 /// 内部步骤：
 /// 1. 校验任务类型参数
 /// 2. 解析 Token 并检查 `Task::Create` 权限
-/// 3. 生成随机 task_token，插入数据库记录
-/// 4. 确保 Agent UUID 在 monitoring_uuid 表中注册
-/// 5. 通过 `TaskManager::send_event` 推送给 Agent
-/// 6. 发送失败则回滚数据库记录
+/// 3. 委托 [`create_task_internal`] 完成建记录与派发
 pub async fn create_task(
     manager: &Arc<TaskManager>,
     token: String,
@@ -79,102 +193,11 @@ pub async fn create_task(
             .into());
         }
 
-        // 派发前在线预检：对离线 Agent 下发必然在 send_event 阶段失败，白付一次
-        // task 行的 INSERT + 回滚 DELETE，并让调用方（尤其是 JS worker 的批量下发）
-        // 拿到一个可区分「离线」的明确错误。语义说明见 TaskManager::is_connected。
-        if !manager.is_connected(&target_uuid).await {
-            debug!(target: "task", uuid = %target_uuid, "create_task skipped: agent offline");
-            return Err(NodegetError::AgentOffline(format!(
-                "Agent {target_uuid} is not connected"
-            ))
-            .into());
-        }
+        let task_id = create_task_internal(manager, target_uuid, task_type, |_| {}).await?;
 
-        let db = crate::rpc::TaskRpcImpl::get_db()?;
-        let token = generate_random_string(10);
-
-        let in_data = task::ActiveModel {
-            id: ActiveValue::default(),
-            uuid: Set(target_uuid),
-            token: Set(token.clone()),
-            cron_source: Set(None),
-            timestamp: Set(None),
-            success: Set(None),
-            error_message: Set(None),
-            task_event_type: crate::rpc::TaskRpcImpl::try_set_json(task_type.clone())
-                .map_err(|e| NodegetError::SerializationError(e.to_string()))?,
-            task_event_result: Set(None),
-            // 派发时间，供保留期清理判断过期（`timestamp` 是结果回传时间，pending 行为 NULL）
-            created_at: Set(Some(crate::now_millis())),
-        };
-
-        debug!(target: "task", uuid = %target_uuid, "Received task");
-
-        let result = task::Entity::insert(in_data).exec(db).await.map_err(|e| {
-            error!(target: "task", error = %e, "Database insert error");
-            NodegetError::DatabaseError(format!("Database insert error: {e}"))
-        })?;
-
-        let task_id = result.last_insert_id;
-        debug!(target: "task", id = task_id, "Task created");
-
-        // Ensure the uuid is registered in the monitoring_uuid table (authoritative Agent table)
-        if let Some(uuid_provider) = crate::rpc::monitoring_uuid_provider() {
-            if let Err(e) = uuid_provider.get_or_insert(target_uuid).await {
-                warn!(target: "task", uuid = %target_uuid, error = %e, "Failed to register monitoring_uuid; agent will re-register on next report");
-            }
-        }
-
-        let task = TaskEvent {
-            task_id: task_id.cast_unsigned(),
-            task_token: token,
-            task_event_type: task_type,
-        };
-
-        match manager.send_event(target_uuid, task).await {
-            Ok(()) => {
-                let json_str = format!("{{\"id\":{task_id}}}");
-                RawValue::from_string(json_str)
-                    .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
-            }
-            Err(send_err) => {
-                // 回滚刚创建的 task 行。回滚失败对调用方原本不可见（错误被 let _ = 丢弃），
-                // 现把回滚失败信息附进错误消息，便于运维据消息定位需手动清理的残留 task 行。
-                let rollback_failed = match task::Entity::delete_by_id(task_id).exec(db).await {
-                    Ok(_) => false,
-                    Err(del_err) => {
-                        error!(
-                            target: "task",
-                            task_id,
-                            error = %del_err,
-                            "Database delete error during rollback (task row may need manual cleanup)"
-                        );
-                        true
-                    }
-                };
-                let detail = send_err.message();
-                if send_err.is_not_connected() {
-                    // 预检通过后仍失败 = 检查与发送之间掉线的窄竞态。属于预期内的
-                    // 离线，记 warn 便于观察竞态频率，但不升级为 error。
-                    warn!(target: "task", uuid = %target_uuid, task_id, "agent disconnected between precheck and send");
-                    let mut msg = format!("Agent {target_uuid} is not connected");
-                    if rollback_failed {
-                        msg.push_str(
-                            "; rollback also failed, see logs (task row may need manual cleanup)",
-                        );
-                    }
-                    return Err(NodegetError::AgentOffline(msg).into());
-                }
-                error!(target: "task", error = %detail, "Error sending task event");
-                let mut msg = format!("Error sending task event: {detail}");
-                if rollback_failed {
-                    msg.push_str(
-                        "; rollback also failed, see logs (task row may need manual cleanup)",
-                    );
-                }
-                Err(NodegetError::AgentConnectionError(msg).into())
-            }
-        }
+        let json_str = format!("{{\"id\":{task_id}}}");
+        RawValue::from_string(json_str)
+            .map_err(|e| NodegetError::SerializationError(e.to_string()).into())
     };
 
     match process_logic.await {

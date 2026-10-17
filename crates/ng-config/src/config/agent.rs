@@ -28,6 +28,10 @@ pub const DEFAULT_EXEC_MAX_CHARACTER: usize = 10_000;
 pub const DEFAULT_IP_PROVIDER: IpProvider = IpProvider::Cloudflare;
 /// 默认 NTP 服务器地址
 pub const DEFAULT_NTP_SERVER: &str = "pool.ntp.org";
+/// 默认 Docker socket 路径（Docker 隧道的本机对端）
+pub const DEFAULT_DOCKER_SOCKET_PATH: &str = "/var/run/docker.sock";
+/// 默认 Docker 隧道并发连接上限
+pub const DEFAULT_DOCKER_TUNNEL_MAX_SESSIONS: usize = 4;
 
 /// Agent 配置结构体，定义 Agent 的运行参数。
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,6 +75,9 @@ pub struct AgentConfig {
 
     /// 服务器列表，每个条目对应一个 Server 连接
     pub server: Option<Vec<Server>>,
+
+    /// Docker 隧道配置，仅在某个 `[[server]]` 允许 `docker_tunnel` 任务时生效
+    pub docker_tunnel: Option<AgentDockerTunnelConfig>,
 }
 
 /// 单个服务器连接配置，定义 Agent 连接某个 Server 的信息与权限。
@@ -106,6 +113,12 @@ pub struct Server {
     /// 是否允许 HTTP 请求任务（危险操作）
     pub allow_http_request: Option<bool>,
 
+    /// 是否允许 Docker 隧道任务（危险操作）
+    ///
+    /// 开启后，已授权的 server 可以通过隧道直接访问本机 Docker socket，
+    /// 权限等价于本机 root，务必确认对端可信。
+    pub allow_docker_tunnel: Option<bool>,
+
     /// 是否允许获取 IP 地址
     pub allow_ip: Option<bool>,
     /// 是否允许 DNS 查询
@@ -140,6 +153,7 @@ impl std::fmt::Debug for Server {
             .field("allow_edit_config", &self.allow_edit_config)
             .field("allow_execute", &self.allow_execute)
             .field("allow_http_request", &self.allow_http_request)
+            .field("allow_docker_tunnel", &self.allow_docker_tunnel)
             .field("allow_ip", &self.allow_ip)
             .field("allow_dns", &self.allow_dns)
             .field("allow_version", &self.allow_version)
@@ -148,6 +162,15 @@ impl std::fmt::Debug for Server {
             .field("allow_task_type", &self.allow_task_type)
             .finish()
     }
+}
+
+/// Agent 侧 Docker 隧道配置，定义隧道对端的本机 Docker socket 与并发上限。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AgentDockerTunnelConfig {
+    /// 本机 Docker socket 路径，默认 `/var/run/docker.sock`
+    pub socket_path: Option<String>,
+    /// 同时存在的隧道连接上限，默认 4
+    pub max_sessions: Option<usize>,
 }
 
 /// IP 地址获取服务提供商枚举。
@@ -214,6 +237,24 @@ impl AgentConfig {
     #[must_use]
     pub fn ntp_server_or_default(&self) -> &str {
         self.ntp_server.as_deref().unwrap_or(DEFAULT_NTP_SERVER)
+    }
+
+    /// 获取 Docker 隧道的本机 socket 路径，未配置时使用默认值（/var/run/docker.sock）。
+    #[must_use]
+    pub fn docker_tunnel_socket_path_or_default(&self) -> &str {
+        self.docker_tunnel
+            .as_ref()
+            .and_then(|c| c.socket_path.as_deref())
+            .unwrap_or(DEFAULT_DOCKER_SOCKET_PATH)
+    }
+
+    /// 获取 Docker 隧道并发连接上限，未配置时使用默认值（4）。
+    #[must_use]
+    pub fn docker_tunnel_max_sessions_or_default(&self) -> usize {
+        self.docker_tunnel
+            .as_ref()
+            .and_then(|c| c.max_sessions)
+            .unwrap_or(DEFAULT_DOCKER_TUNNEL_MAX_SESSIONS)
     }
 
     /// 从指定路径读取并解析 Agent 配置。
@@ -365,6 +406,7 @@ allow_read_config = true
 allow_edit_config = false
 allow_execute = true
 allow_http_request = true
+allow_docker_tunnel = true
 allow_ip = true
 allow_dns = true
 allow_version = true
@@ -377,6 +419,10 @@ server_uuid = "660e8400-e29b-41d4-a716-446655440002"
 token = "key2:secret2"
 ws_url = "wss://dev.example.com/nodeget/rpc"
 allow_task_type = ["ping", "tcp_ping", "version"]
+
+[docker_tunnel]
+socket_path = "/run/docker.sock"
+max_sessions = 8
 "#;
         let config: AgentConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.log_level, Some("debug".to_owned()));
@@ -396,6 +442,11 @@ allow_task_type = ["ping", "tcp_ping", "version"]
             config.dynamic_summary_select_network_interface,
             Some(vec!["eth0".to_owned()])
         );
+        assert_eq!(
+            config.docker_tunnel_socket_path_or_default(),
+            "/run/docker.sock"
+        );
+        assert_eq!(config.docker_tunnel_max_sessions_or_default(), 8);
 
         let servers = config.server.unwrap();
         assert_eq!(servers.len(), 2);
@@ -516,6 +567,22 @@ agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
     }
 
     #[test]
+    fn agent_config_docker_tunnel_defaults() {
+        let toml_str = r#"
+agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
+"#;
+        let config: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.docker_tunnel_socket_path_or_default(),
+            DEFAULT_DOCKER_SOCKET_PATH
+        );
+        assert_eq!(
+            config.docker_tunnel_max_sessions_or_default(),
+            DEFAULT_DOCKER_TUNNEL_MAX_SESSIONS
+        );
+    }
+
+    #[test]
     fn server_debug_redacts_token() {
         let server = Server {
             name: "test".to_owned(),
@@ -531,6 +598,7 @@ agent_uuid = "550e8400-e29b-41d4-a716-446655440000"
             allow_edit_config: None,
             allow_execute: None,
             allow_http_request: None,
+            allow_docker_tunnel: None,
             allow_ip: None,
             allow_dns: None,
             allow_version: None,

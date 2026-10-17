@@ -32,6 +32,10 @@ tokio = { version = "1.52.3", default-features = false, features = ["macros", "r
 anyhow = { version = "1.0.102", default-features = false }
 jsonrpsee = { git = "https://github.com/infinitefield/jsonrpsee.git", default-features = false, features = ["macros", "server-core"] }
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "ws", "http1", "query"] }
+hyper = { version = "1.10.1", default-features = false, features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+# D1-B：把上游（Docker daemon）响应体与本地构造的错误响应体统一装箱
+http-body-util = { version = "0.1.3", default-features = false }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "json"] }
 uuid = { version = "1.23.2", default-features = false, features = ["std", "serde", "v4", "v5", "fast-rng"] }
 thiserror = { version = "2.0.18", default-features = false }

@@ -1,13 +1,16 @@
 //! fork 专属的启动注入点，集中存放本 fork 在服务启动流程里的挂钩。
 //!
 //! 本仓库是 NodeSeekDev/NodeGet 的 fork，比上游多出几项功能：crontab 派发策略、
-//! 数据库保留期清理 worker。这些功能都要嵌进 [`crate::subcommands::serve`] 的启动流程，
+//! 数据库保留期清理 worker、Docker 隧道（仅 Unix，Windows 上是空实现）。
+//! 这些功能都要嵌进 [`crate::subcommands::serve`] 的启动流程，
 //! 而上游的 `serve.rs` 一直在重构（初始化顺序、路由拼装、收尾流程都改过），
 //! 把 hook 直接写在那里，每次同步上游都要在同一批位置反复解决冲突。
 //!
 //! 所以把 fork 的注入点收敛到本模块，`serve.rs` 里只留一行调用：
 //! - [`inject_rpc_policies`]：注册策略，必须在 `get_modules()` 之前
 //! - [`spawn_background_workers`]：拉起后台任务
+//! - [`docker_tunnel_router`]：合并 fork 自己的路由
+//! - [`stop`]：收尾后台监听器
 //!
 //! 以后新增 fork 功能优先加在这里，不要直接改 `serve.rs`。
 
@@ -46,10 +49,31 @@ pub fn inject_rpc_policies(config: &ServerConfig) {
 ///
 /// 当前拉起的后台任务：
 /// - 保留期清理 worker（默认 dry-run，只统计并打日志）
+/// - Docker 隧道监听器（每个启用隧道的 Agent 一个 unix socket；非 Unix 平台为空实现）
 ///
 /// - `config`：本轮使用的服务器配置
 pub fn spawn_background_workers(config: &ServerConfig) {
     spawn_retention_worker(config);
+    // 幂等：重复调用会先 stop 再重建，因此配置热重载时直接重新拉起即可
+    crate::docker_tunnel::start(config);
+}
+
+/// 合并 fork 自己的路由。
+///
+/// 调用方必须把它接在主 Router 的 `.fallback()` 之前。
+///
+/// 当前合并的路由：
+/// - `/docker-tunnel`：Docker 隧道 WebSocket（Agent 拨入；非 Unix 平台为空 Router）
+pub fn docker_tunnel_router() -> axum::Router {
+    crate::docker_tunnel::router()
+}
+
+/// 收尾 fork 的后台监听器。
+///
+/// 服务停止、配置热重载、服务异常退出三种收尾路径都会调用：
+/// 关闭所有 Docker 隧道监听器，清理 socket 文件与待认领表。
+pub fn stop() {
+    crate::docker_tunnel::stop();
 }
 
 /// 拉起数据库保留期清理 worker。
