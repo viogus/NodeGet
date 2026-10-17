@@ -34,9 +34,11 @@
 //!
 //! # 失败处理
 //!
-//! 扩展检测或 now 函数创建失败会返回错误（阻断启动，提示环境问题）；
-//! 单表转换/策略失败仅记录 error 日志并继续（服务以普通表运行），但会输出
-//! 醒目的失败横幅，避免"以为启用了压缩/保留实际没有"的静默降级。
+//! `TimescaleDB` 是**可选优化**：任何一步失败都只降级、不阻断启动。
+//! - 扩展探测失败 / 未安装 / 配置非法 / `enabled = false` → 打日志后直接跳过；
+//! - `now()` 函数创建失败（缺 CREATE 权限）→ 跳过，服务以普通表运行；
+//! - 单表转换失败 → 只影响该表；压缩失败不影响保留策略（两者独立应用）；
+//! - 单表失败会输出醒目的失败横幅，避免"以为启用了压缩/保留实际没有"的静默降级。
 //!
 //! # 为什么不在 migration 里做
 //!
@@ -44,10 +46,9 @@
 //! 而 `SeaORM` migration 默认在事务中运行。因此本模块放在 `Migrator::up`
 //! 之后的非事务初始化阶段，与 `SQLite` `PRAGMA` 优化属于同一层。
 
-use anyhow::Context;
 use ng_core::config::TimescaleConfig;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// 需要转换为 `hypertable` 的时序表。
 struct TimescaleTable {
@@ -184,12 +185,46 @@ pub async fn setup_timescale_if_available(
     if db.get_database_backend() != DatabaseBackend::Postgres {
         return Ok(());
     }
-    if !has_timescale_extension(db).await? {
-        debug!(target: "db", "timescaledb extension not installed; skipping timescale setup");
+
+    let config = config.cloned().unwrap_or_default();
+    // 显式开关：装了扩展不代表想转换（主键加宽不可逆），允许用配置关掉
+    if !config.is_enabled() {
+        info!(
+            target: "db",
+            "timescaledb setup disabled by config ([database.timescale] enabled = false)"
+        );
         return Ok(());
     }
 
-    let config = config.cloned().unwrap_or_default();
+    // 扩展探测失败（权限/连接抖动）按「不可用」处理：这是可选优化，不能因为探测不到
+    // 就让整个服务起不来；真正的连接问题会在后续 init 步骤暴露。
+    match has_timescale_extension(db).await {
+        Ok(true) => {}
+        Ok(false) => {
+            // info 级：默认 log_filter 可见；"镜像里有扩展、库里没 CREATE EXTENSION"
+            // 是最常见的误配置，不能只打 debug 让人以为功能不支持。
+            info!(target: "db", "timescaledb extension not installed; skipping timescale setup");
+            return Ok(());
+        }
+        Err(e) => {
+            error!(
+                target: "db",
+                error = %e,
+                "failed to probe timescaledb extension; skipping timescale setup"
+            );
+            return Ok(());
+        }
+    }
+
+    if let Err(e) = config.validate() {
+        error!(
+            target: "db",
+            error = %e,
+            "invalid [database.timescale] config; skipping timescale setup"
+        );
+        return Ok(());
+    }
+
     info!(
         target: "db",
         chunk_interval_hours = config.effective_chunk_interval_hours(),
@@ -200,18 +235,36 @@ pub async fn setup_timescale_if_available(
 
     // 当前连接的默认 schema（search_path 第一个）。所有 DDL / 查询都显式
     // 限定该 schema，消除对 search_path 的隐式依赖。
-    let schema = current_schema(db).await?;
+    let schema = match current_schema(db).await {
+        Ok(schema) => schema,
+        Err(e) => {
+            error!(target: "db", error = %e, "failed to resolve current schema; skipping timescale setup");
+            return Ok(());
+        }
+    };
     let func_ref = format!("{}.{}", quote_ident(&schema), quote_ident(NOW_FUNC));
 
     // 创建毫秒 epoch now() 函数（幂等，固定建在当前 schema）。
     // STABLE：事务内返回值一致，满足 TimescaleDB 对 now 函数的要求。
-    db.execute_unprepared(&format!(
-        "CREATE OR REPLACE FUNCTION {func_ref}() RETURNS BIGINT \
-         LANGUAGE SQL STABLE PARALLEL SAFE \
-         AS $$ SELECT (extract(epoch FROM now()) * 1000)::BIGINT $$;",
-    ))
-    .await
-    .context("failed to create timescale now() function")?;
+    // 失败只降级不阻断：整数时间列需要这个函数，但缺少 CREATE 权限（例如 PG15+
+    // public schema 归 pg_database_owner、应用角色只是普通成员）时，整机不该因为
+    // 一个可选优化起不来。跳过之后各表会以普通表继续运行，横幅会说明原因。
+    if let Err(e) = db
+        .execute_unprepared(&format!(
+            "CREATE OR REPLACE FUNCTION {func_ref}() RETURNS BIGINT \
+             LANGUAGE SQL STABLE PARALLEL SAFE \
+             AS $$ SELECT (extract(epoch FROM now()) * 1000)::BIGINT $$;",
+        ))
+        .await
+    {
+        error!(
+            target: "db",
+            error = %e,
+            "failed to create timescale now() function (needs CREATE on the current schema); \
+             skipping timescale setup"
+        );
+        return Ok(());
+    }
 
     let mut failures = 0;
     for table in TIMESCALE_TABLES {
@@ -302,9 +355,10 @@ async fn setup_table(
             hours_to_ms(config.effective_chunk_interval_hours())?,
         );
 
-        // 防御性检查：时间列在迁移定义中为 NOT NULL，正常情况下不存在 NULL；
-        // 一旦旧库/脏数据出现 NULL，ADD PRIMARY KEY (id, <时间列>) 会永久失败
-        // 且每次启动重复报错。此处提前检查并给出明确错误。
+        // 时间列并非全部 NOT NULL：`dynamic_monitoring.timestamp` 是 NOT NULL，
+        // 而 `dynamic_monitoring_summary.timestamp`、`traffic_snapshot.snapshot_time`
+        // 在迁移里可空。`ADD PRIMARY KEY (id, <时间列>)` 隐含 NOT NULL，一旦存在 NULL 行
+        // 该表会永久转换失败。这里提前检查并给出可执行的补救 SQL，而不是让它每轮启动空转。
         let has_null_ts = db
             .query_one_raw(Statement::from_string(
                 DatabaseBackend::Postgres,
@@ -313,11 +367,11 @@ async fn setup_table(
             .await?;
         if has_null_ts.is_some() {
             anyhow::bail!(
-                "table {} contains rows with NULL {}; cannot convert to hypertable \
-                 (primary key (id, {}) requires a non-null time column)",
-                table.name,
-                table.time_column,
-                table.time_column
+                "table {table} has rows with NULL {ts}; cannot convert to hypertable. \
+                 Remediation: `UPDATE \"{table}\" SET \"{ts}\" = 0 WHERE \"{ts}\" IS NULL` \
+                 (or delete those rows), then restart",
+                table = table.name,
+                ts = table.time_column,
             );
         }
 
@@ -327,9 +381,10 @@ async fn setup_table(
         // 注意：pk_name 依赖 SeaORM 建表时生成的默认约束名 `<table>_pkey`；
         // 若主键约束曾被手工改名，此 DROP 不命中、下方 ADD PRIMARY KEY 会
         // 因主键已存在而失败（错误信息会提示，需按实际约束名调整）。
-        // 注意：此 DDL 与下方 create_hypertable 分属两个隐式事务，进程
-        // 间隙被杀时表会短暂无主键（下次启动可自愈，因为再跑会先检查
-        // is_hypertable 再重建主键）。
+        // 注意：两条 ALTER 共用一次隐式事务，所以不存在"短暂无主键"；真正的
+        // 半状态是「主键已加宽为 (id, 时间列)、但还不是 hypertable」——从这一刻起
+        // id 不再唯一，直到 create_hypertable 成功。若后者永久失败，该状态会保留。
+        // 重跑可自愈（先检查 is_hypertable，再重建主键）。
         db.execute_unprepared(&pk_widen_sql).await?;
 
         // migrate_data => true：把表内已有数据迁入 hypertable。
@@ -348,9 +403,98 @@ async fn setup_table(
         info!(target: "db", table = table.name, now_func = %NOW_FUNC, "integer_now_func registered");
     }
 
+    // 保留策略放在压缩之前：`retention_days = 0` 时唯一的作用就是移除已有策略
+    // （"停止删除"），一旦排在被压缩步骤 return 之后，压缩一失败就再也执行不到，
+    // chunk 会被继续删除——这个方向的失败是丢数据，必须优先且独立。
+    apply_retention_policy(db, table, &config, &table_regclass).await;
+
     // 压缩设置（仅首次开启；开启后 segmentby/orderby 不可随意变更）。
+    // 失败只记 error：保留策略已经独立应用，压缩失败不该连带影响它。
+    if let Err(e) = apply_compression(db, table, &config, &table_ref, &table_regclass).await {
+        error!(
+            target: "db",
+            table = table.name,
+            error = %e,
+            "failed to apply compression settings/policy; retention was applied independently"
+        );
+    }
+
+    Ok(())
+}
+
+/// 应用保留策略；`retention_days = 0` 时移除已有策略（"停止删除"）。
+///
+/// 失败只记 `error!`：它不影响其它表，也不该让整轮 setup 返回错误。
+async fn apply_retention_policy(
+    db: &DatabaseConnection,
+    table: &TimescaleTable,
+    config: &TimescaleConfig,
+    table_regclass: &str,
+) {
+    if config.retention_days > 0 {
+        let Ok(ms) = days_to_ms(config.retention_days) else {
+            error!(
+                target: "db",
+                table = table.name,
+                retention_days = config.retention_days,
+                "retention_days overflows milliseconds; retention policy not applied"
+            );
+            return;
+        };
+        match db
+            .execute_unprepared(&format!(
+                "SELECT remove_retention_policy({table_regclass}, if_exists => true); \
+                 SELECT add_retention_policy({table_regclass}, drop_after => {ms});",
+            ))
+            .await
+        {
+            Ok(_) => info!(
+                target: "db",
+                table = table.name,
+                retention_days = config.retention_days,
+                "retention policy applied"
+            ),
+            Err(e) => error!(
+                target: "db",
+                table = table.name,
+                error = %e,
+                "failed to apply retention policy"
+            ),
+        }
+    } else {
+        // 显式关闭：从 >0 改回 0 时必须把残留策略删掉，否则会继续删 chunk。
+        // 这里失败要显式告警——「以为停了但还在删」是最危险的状态。
+        match db
+            .execute_unprepared(&format!(
+                "SELECT remove_retention_policy({table_regclass}, if_exists => true);",
+            ))
+            .await
+        {
+            Ok(_) => debug!(target: "db", table = table.name, "retention disabled (retention_days = 0)"),
+            Err(e) => error!(
+                target: "db",
+                table = table.name,
+                error = %e,
+                "failed to remove retention policy; chunks may keep being dropped"
+            ),
+        }
+    }
+}
+
+/// 应用压缩设置与压缩策略。
+///
+/// # Errors
+///
+/// 探测/启用压缩或应用策略失败时返回错误；调用方只记日志，不影响保留策略。
+async fn apply_compression(
+    db: &DatabaseConnection,
+    table: &TimescaleTable,
+    config: &TimescaleConfig,
+    table_ref: &str,
+    table_regclass: &str,
+) -> anyhow::Result<()> {
     if !is_compression_enabled(db, table.name).await? {
-        db.execute_unprepared(&compression_enable_sql(table, &table_ref))
+        db.execute_unprepared(&compression_enable_sql(table, table_ref))
             .await?;
         info!(target: "db", table = table.name, "compression enabled");
     }
@@ -359,9 +503,27 @@ async fn setup_table(
     // compress_after_hours = 0 表示已结束的 chunk 立即可压缩。
     // schedule_interval 与 chunk 间隔对齐（见 compression_schedule_ms），
     // 否则重启后策略会被重建为默认的 1 天调度，把多个到期 chunk 堆到一次。
-    let chunk_ms = hours_to_ms(config.effective_chunk_interval_hours())?;
-    let schedule_ms = compression_schedule_ms(chunk_interval_ms(db, table.name).await?, chunk_ms);
+    let configured_chunk_ms = hours_to_ms(config.effective_chunk_interval_hours())?;
+    let actual_chunk_ms = chunk_interval_ms(db, table.name).await?;
+    let schedule_ms = compression_schedule_ms(actual_chunk_ms, configured_chunk_ms);
     let compress_after_ms = hours_to_ms(config.effective_compress_after_hours())?;
+
+    // chunk 间隔只在 create_hypertable 时生效，之后改配置不会动已有 hypertable；
+    // 这里把差异显式说出来，免得运维以为改了配置就生效了。
+    if let Some(actual) = actual_chunk_ms
+        && actual > 0
+        && u64::try_from(actual).ok() != Some(configured_chunk_ms)
+    {
+        warn!(
+            target: "db",
+            table = table.name,
+            actual_chunk_ms = actual,
+            configured_chunk_ms,
+            "hypertable chunk interval differs from config; it only applies at creation, \
+             use SELECT set_chunk_time_interval('<table>', <ms>) to change it"
+        );
+    }
+
     db.execute_unprepared(&format!(
         "SELECT remove_compression_policy({table_regclass}, if_exists => true); \
          SELECT add_compression_policy({table_regclass}, compress_after => {ms}, \
@@ -372,26 +534,8 @@ async fn setup_table(
     .await?;
     info!(target: "db", table = table.name,
           compress_after_hours = config.effective_compress_after_hours(),
-          compress_after_ms = compress_after_ms, schedule_interval_ms = schedule_ms,
+          compress_after_ms, schedule_interval_ms = schedule_ms,
           "compression policy applied");
-
-    if config.retention_days > 0 {
-        db.execute_unprepared(&format!(
-            "SELECT remove_retention_policy({table_regclass}, if_exists => true); \
-             SELECT add_retention_policy({table_regclass}, drop_after => {ms});",
-            ms = days_to_ms(config.retention_days)?,
-        ))
-        .await?;
-        info!(target: "db", table = table.name, retention_days = config.retention_days, "retention policy applied");
-    } else {
-        // 显式关闭：确保不留残留策略（例如从 >0 改回 0）。
-        db.execute_unprepared(&format!(
-            "SELECT remove_retention_policy({table_regclass}, if_exists => true);",
-        ))
-        .await?;
-        debug!(target: "db", table = table.name, "retention disabled (retention_days = 0)");
-    }
-
     Ok(())
 }
 
@@ -424,13 +568,12 @@ async fn current_schema(db: &DatabaseConnection) -> anyhow::Result<String> {
 /// 表是否已是 `hypertable`（限定当前 schema，避免多 schema 同名表误判）。
 async fn is_hypertable(db: &DatabaseConnection, table: &str) -> anyhow::Result<bool> {
     let row = db
-        .query_one_raw(Statement::from_string(
+        .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            format!(
-                "SELECT 1 FROM timescaledb_information.hypertables \
-                 WHERE hypertable_name = '{table}' \
-                   AND hypertable_schema = current_schema() LIMIT 1"
-            ),
+            "SELECT 1 FROM timescaledb_information.hypertables \
+             WHERE hypertable_name = $1 \
+               AND hypertable_schema = current_schema() LIMIT 1",
+            [table.into()],
         ))
         .await?;
     Ok(row.is_some())
@@ -439,14 +582,13 @@ async fn is_hypertable(db: &DatabaseConnection, table: &str) -> anyhow::Result<b
 /// 表是否已启用压缩（限定当前 schema）。
 async fn is_compression_enabled(db: &DatabaseConnection, table: &str) -> anyhow::Result<bool> {
     let row = db
-        .query_one_raw(Statement::from_string(
+        .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            format!(
-                "SELECT 1 FROM timescaledb_information.hypertables \
-                 WHERE hypertable_name = '{table}' \
-                   AND hypertable_schema = current_schema() \
-                   AND compression_enabled LIMIT 1"
-            ),
+            "SELECT 1 FROM timescaledb_information.hypertables \
+             WHERE hypertable_name = $1 \
+               AND hypertable_schema = current_schema() \
+               AND compression_enabled LIMIT 1",
+            [table.into()],
         ))
         .await?;
     Ok(row.is_some())
@@ -455,14 +597,13 @@ async fn is_compression_enabled(db: &DatabaseConnection, table: &str) -> anyhow:
 /// 时间维度是否已注册 `integer_now_func`（限定当前 schema）。
 async fn has_integer_now_func(db: &DatabaseConnection, table: &str) -> anyhow::Result<bool> {
     let row = db
-        .query_one_raw(Statement::from_string(
+        .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            format!(
-                "SELECT 1 FROM timescaledb_information.dimensions \
-                 WHERE hypertable_name = '{table}' \
-                   AND hypertable_schema = current_schema() \
-                   AND integer_now_func IS NOT NULL LIMIT 1"
-            ),
+            "SELECT 1 FROM timescaledb_information.dimensions \
+             WHERE hypertable_name = $1 \
+               AND hypertable_schema = current_schema() \
+               AND integer_now_func IS NOT NULL LIMIT 1",
+            [table.into()],
         ))
         .await?;
     Ok(row.is_some())
@@ -474,16 +615,15 @@ async fn has_integer_now_func(db: &DatabaseConnection, table: &str) -> anyhow::R
 /// 限定当前 schema，避免多 schema 同名表误判。
 async fn chunk_interval_ms(db: &DatabaseConnection, table: &str) -> anyhow::Result<Option<i64>> {
     let row = db
-        .query_one_raw(Statement::from_string(
+        .query_one_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            format!(
-                "SELECT COALESCE(integer_interval, \
-                        (extract(epoch FROM time_interval) * 1000))::BIGINT AS ms \
-                 FROM timescaledb_information.dimensions \
-                 WHERE hypertable_name = '{table}' \
-                   AND hypertable_schema = current_schema() \
-                 ORDER BY dimension_number LIMIT 1"
-            ),
+            "SELECT COALESCE(integer_interval, \
+                    (extract(epoch FROM time_interval) * 1000))::BIGINT AS ms \
+             FROM timescaledb_information.dimensions \
+             WHERE hypertable_name = $1 \
+               AND hypertable_schema = current_schema() \
+             ORDER BY dimension_number LIMIT 1",
+            [table.into()],
         ))
         .await?;
     let ms = row

@@ -32,7 +32,15 @@ const HOURS_PER_DAY: u64 = 24;
 /// 尖峰；小时级 `chunk` 让压缩/保留的粒度与"未压缩数据"的总量都可控
 /// （生产库实测：6 小时块的压缩耗时约 85 s，1 天块约 340 s）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TimescaleConfig {
+    /// 总开关，默认 `true`。
+    ///
+    /// 置 `false` 时完全跳过 `TimescaleDB` 初始化：不转换 hypertable、不动压缩与
+    /// 保留策略。注意转换是**不可逆**的（主键会被加宽为 `(id, 时间列)`），所以
+    /// 只是"库里恰好装了扩展"并不等于想启用它，可以用这个开关关掉。
+    #[serde(default)]
+    pub enabled: Option<bool>,
     /// `hypertable` 分块间隔（小时），默认 [`DEFAULT_CHUNK_INTERVAL_HOURS`]。
     /// 优先于已废弃的 `chunk_interval_days`。
     #[serde(default)]
@@ -60,6 +68,31 @@ const fn default_retention_days() -> u64 {
 }
 
 impl TimescaleConfig {
+    /// 是否启用 `TimescaleDB` 初始化（默认启用）。
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    /// 校验时长配置，非法时返回人话原因。
+    ///
+    /// `chunk_interval_hours = 0` 会被 TimescaleDB 拒绝（chunk 间隔必须大于 0），
+    /// 而 `0 * INTERVAL '1 millisecond'` 作 `schedule_interval` 也没有意义；
+    /// 这类值应当在启动时明确报错并跳过初始化，而不是让每张表各报一次错。
+    ///
+    /// # Errors
+    ///
+    /// 分块间隔换算后为 0 时返回错误。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.effective_chunk_interval_hours() == 0 {
+            return Err(
+                "chunk_interval_hours / chunk_interval_days 必须大于 0（当前换算为 0 小时）"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     /// 生效的分块间隔（小时）：`chunk_interval_hours` 优先，其次由旧键
     /// `chunk_interval_days` 换算，都没有时用默认值。
     #[must_use]
@@ -88,7 +121,7 @@ impl TimescaleConfig {
 mod tests {
     use super::*;
 
-    #[derive(Deserialize)]
+    #[derive(Debug, Deserialize)]
     struct Wrapper {
         timescale: TimescaleConfig,
     }
@@ -152,5 +185,44 @@ mod tests {
         // 整段省略（只有 [timescale] 表头）
         let cfg = parse("[timescale]\n");
         assert_eq!(cfg, TimescaleConfig::default());
+    }
+
+    /// 对抗性：`chunk_interval_hours = 0` 必须在启动前被拦下，而不是让每张表各报一次错。
+    #[test]
+    fn validate_rejects_zero_chunk_interval() {
+        let mut cfg = TimescaleConfig::default();
+        assert!(cfg.validate().is_ok(), "默认配置必须合法");
+
+        cfg.chunk_interval_hours = Some(0);
+        assert!(cfg.validate().is_err(), "0 小时分块必须被拒绝");
+
+        cfg.chunk_interval_hours = None;
+        cfg.chunk_interval_days = Some(0);
+        assert!(cfg.validate().is_err(), "旧键换算为 0 小时同样必须被拒绝");
+
+        // compress_after = 0 是合法值（已结束的 chunk 立即可压缩）
+        cfg.chunk_interval_hours = Some(6);
+        cfg.compress_after_hours = Some(0);
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// 未配置 `enabled` 时默认启用，显式 false 才跳过。
+    #[test]
+    fn enabled_defaults_to_true() {
+        assert!(TimescaleConfig::default().is_enabled());
+        assert!(
+            !parse("[timescale]\nenabled = false\n").is_enabled(),
+            "显式关闭必须生效"
+        );
+        assert!(parse("[timescale]\nenabled = true\n").is_enabled());
+    }
+
+    /// 对抗性：键名拼错（`chunk_interval_hour`）必须报错，而不是静默用默认值。
+    #[test]
+    fn unknown_timescale_keys_are_rejected() {
+        let err = toml::from_str::<Wrapper>("[timescale]\nchunk_interval_hour = 6\n")
+            .expect_err("拼错的键必须被拒绝");
+        let text = err.to_string();
+        assert!(text.contains("chunk_interval_hour"), "错误信息应指出未知键：{text}");
     }
 }
