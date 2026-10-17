@@ -132,6 +132,9 @@ pub async fn run(config: &ServerConfig, stop_signal: &mut StopSignal) -> ServeEx
     ng_crontab::task::set_js_worker_scheduler(std::sync::Arc::new(CronJsWorkerScheduler));
     debug!(target: "server", "ng-crontab JsWorkerScheduler registered");
 
+    // fork：注册 fork 自己的策略（crontab 派发策略等）
+    crate::fork_ext::inject_rpc_policies(config);
+
     let rpc_module = get_modules();
 
     let (stop_handle, _server_handle) = jsonrpsee::server::stop_channel();
@@ -204,6 +207,9 @@ pub async fn run(config: &ServerConfig, stop_signal: &mut StopSignal) -> ServeEx
 
     ng_crontab::init_crontab_worker();
     debug!(target: "server", "Crontab worker initialized");
+
+    // fork：拉起 fork 的后台任务（保留期清理等）
+    crate::fork_ext::spawn_background_workers(config);
 
     // Unix Socket 服务；未启用、绑定失败、或在 Windows 上时为 None
     // Windows 上不会进入下面的启动代码，变量不会被赋值，故压掉 unused_mut

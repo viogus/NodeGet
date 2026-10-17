@@ -22,6 +22,8 @@ use crate::stop_signal::StopSignal;
 use crate::subcommands::serve::ServeExit;
 
 // 服务器专属模块（不属于任何 ng-* crate）
+// fork 专属的启动注入点（详见模块文档）
+mod fork_ext;
 mod logging;
 mod rpc_nodeget;
 mod rpc_timing;
@@ -196,6 +198,7 @@ async fn init_db_connection() {
             idle_timeout_ms: config_guard.database.idle_timeout_ms.unwrap_or(3000),
             max_lifetime_ms: config_guard.database.max_lifetime_ms.unwrap_or(30000),
             max_connections: config_guard.database.max_connections.unwrap_or(10),
+            timescale: config_guard.database.timescale.clone(),
         }
     };
 
