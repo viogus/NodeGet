@@ -45,6 +45,12 @@ NodeGet defines a unified error enum `NodegetError` with the following error typ
     - Thrown when requested UUID doesn't exist
 
 - **ConfigNotFound(String)** - Config Not Found (Error Code: 107)
+    - Thrown when the configuration file cannot be read or parsed
+
+- **AgentOffline(String)** - Agent Offline (Error Code: 109)
+    - Thrown when the target agent has no active task subscription (caught by the pre-dispatch check,
+      or the agent disconnected between the check and the send)
+    - Message looks like `Agent <uuid> is not connected` (no prefix) so clients can match it directly
     - Thrown when requested configuration doesn't exist
 
 - **SerializationError(String)** - Serialization Error (Error Code: 101)

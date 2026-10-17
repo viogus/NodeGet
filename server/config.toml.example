@@ -101,3 +101,21 @@ max_lifetime_ms = 30000
 # 若是大型服务器，请务必调大该项，否则将严重影响性能
 # 若是小型服务器，保持默认即可，过大该数值可能导致内存占用激增
 max_connections = 10
+
+# 数据库保留期清理（fork 功能）
+#
+# 默认 dry-run：只统计并打 warn 日志，不删任何行；确认无误后再打开 enabled。
+# 各表的保留期来自 kv 里的 database_limit_*（毫秒，UI 可改），这里只管「清理器本身」。
+# 注意：低于下限的值会被忽略并告警（task 10 分钟 / crontab_result、js_result 1 小时），
+# 避免把「天」误填成毫秒或填 0 导致整表被清空。
+[retention]
+enabled = false          # true 才真正删除
+interval_secs = 3600     # 清理间隔
+initial_delay_secs = 30  # 首次清理延迟，避开启动高峰
+legacy_id_margin = 100000 # created_at 为空的历史行按 id 水位回收，最小 1000
+
+# 定时任务派发策略（fork 功能）
+[crontab]
+# 成功结果是否按「每次运行一条汇总行」写入 crontab_result，默认 true
+# false 则回退为每个 Agent 一条成功行（行数约 59 万/天时再考虑调整）
+aggregate_success_result = true

@@ -44,6 +44,9 @@ pub use cache::CrontabCache;
 pub use server_cron::{delete_crontab_by_name, init_crontab_worker, set_crontab_enable_by_name};
 
 #[cfg(feature = "server")]
+pub use task::{DispatchPolicy, set_dispatch_policy};
+
+#[cfg(feature = "server")]
 /// 构建并返回合并了 `crontab` 和 `crontab_result` 两个 RPC 命名空间的模块。
 ///
 /// 调用方应在启动时将其合并到主 RPC 模块：

@@ -29,6 +29,17 @@ pub enum NodegetError {
     #[error("Unable to connect agent: {0}")]
     AgentConnectionError(String),
 
+    /// 目标 Agent 当前离线（无活动任务会话），本次派发被跳过而非失败。
+    ///
+    /// 与 [`NodegetError::AgentConnectionError`] 的区别是语义而非措辞：离线是
+    /// 「预期内、可跳过」的状态（时间敏感任务对离线 Agent 无意义），而连接错误是
+    /// 「预期外」的失败。调用方可据此决定是否记录失败行 / 是否重试。
+    ///
+    /// 消息体直接透传（不加前缀），与现有客户端已匹配的文案
+    /// `Agent {uuid} is not connected` 保持一致。
+    #[error("{0}")]
+    AgentOffline(String),
+
     /// 数据库中未找到指定记录
     #[error("Not found in database: {0}")]
     NotFound(String),
@@ -60,7 +71,7 @@ impl NodegetError {
     /// - 解析/序列化/IO 类共享 101
     /// - 权限拒绝 102
     /// - 数据库 103、Agent 连接 104、未找到 105、UUID 未找到 106、配置未找到 107
-    /// - 输入校验 108
+    /// - 输入校验 108、Agent 离线 109
     /// - 其他 999
     #[must_use]
     pub const fn error_code(&self) -> i128 {
@@ -72,6 +83,7 @@ impl NodegetError {
             Self::NotFound(_) => 105,
             Self::UuidNotFound(_) => 106,
             Self::ConfigNotFound(_) => 107,
+            Self::AgentOffline(_) => 109,
             Self::Other(_) => 999,
             Self::ParseError(_) | Self::SerializationError(_) | Self::IoError(_) => 101,
         }
@@ -218,6 +230,19 @@ mod tests {
             NodegetError::AgentConnectionError("".into()).error_code(),
             104
         );
+    }
+
+    #[test]
+    fn error_code_agent_offline_109() {
+        assert_eq!(NodegetError::AgentOffline("".into()).error_code(), 109);
+    }
+
+    #[test]
+    fn agent_offline_message_is_passed_through_verbatim() {
+        // 客户端按文案匹配 `Agent <uuid> is not connected`，因此不加前缀。
+        let uuid = "176e55db-e565-46dd-9d43-790688f4a981";
+        let err = NodegetError::AgentOffline(format!("Agent {uuid} is not connected"));
+        assert_eq!(err.to_string(), format!("Agent {uuid} is not connected"));
     }
 
     #[test]

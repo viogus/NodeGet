@@ -51,9 +51,31 @@
     - `metadata_longitude` `metadata_latitude`: 经纬度
     - `metadata_hidden`: 前端中隐藏，不代表没有权限访问
 
+### 保留期下限（防止误清空）
+
+`database_limit_task` / `database_limit_crontab_result` / `database_limit_js_result`
+供服务端保留期清理器（`[retention] enabled = true` 时真正删除）读取。为避免把「天」误填成
+毫秒、或填 `0` 导致整表被清空，低于下限的值会被**忽略并打 warn**：
+
+| 键 | 下限 |
+| --- | --- |
+| `database_limit_task` | 10 分钟（600000） |
+| `database_limit_crontab_result` | 1 小时（3600000） |
+| `database_limit_js_result` | 1 小时（3600000） |
+
+Agent 级的非法值会回退到 `global` 级；两级都没有则不清理该 Agent（保守策略）。
+
+### 保留命名空间
+
+以 `__` 开头的命名空间由服务端内部使用（如审计数据 `__js_audit`、审计开关 `__js_policy`），
+`kv_create` / `kv_set_value` / `kv_delete_key` / `kv_delete_namespace` 一律返回 `102` 拒绝写入；
+读取不受限制，方便排查。
+
 ### Server Namespace
 
 - `database_limit_crontab_result`: 与 `database_limit_*` 类似，Crontab 执行记录，但必须存在于 `global` Kv 中，其他位置无效
+- `database_limit_js_result`: 同上，JS Worker 执行记录（时间基准 `start_time`），同样必须存在于 `global` Kv 中。
+  服务端保留期清理器会读取它；未配置时该表不清理
 - `database_limit_traffic_snapshot`: 单位毫秒。流量统计快照的保留时长，同样必须存在于 `global` Kv 中，其他位置无效。由流量统计 Worker（
   `traffic-snapshot-worker`）读取，每小时删除比 `现在 - 该值` 更早的快照以及整段早于该时间的"可能丢失数据"记录。没有配置时默认 365 天；小于 1
   小时或不是整数的值视为不合法，同样回退为默认值（避免把"天数"误填成毫秒而清空所有快照）
