@@ -996,6 +996,33 @@ mod tests {
         assert_eq!(report.total(), 0, "非法保留期不得删除任何行");
     }
 
+    /// 单目标失败必须被隔离：js_result 表不存在时，crontab_result 仍然要被清理，
+    /// 失败计入 `report.errors` 而不是让整轮返回 Err。
+    #[tokio::test]
+    async fn failing_target_is_isolated_and_counted() {
+        let db = setup_db().await;
+        let now = crate::now_millis();
+        insert_limit(&db, "global", "database_limit_crontab_result", DAY_MS).await;
+        insert_limit(&db, "global", "database_limit_js_result", DAY_MS).await;
+        insert_crontab_result(&db, Some(now - 2 * DAY_MS)).await;
+
+        // 制造真实失败：缺表
+        db.execute_unprepared(r#"DROP TABLE "js_result""#)
+            .await
+            .expect("drop js_result");
+
+        let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("单个目标失败不应让整轮返回 Err");
+        assert_eq!(report.js_result, 0);
+        assert_eq!(report.errors, 1, "失败目标必须计数");
+        assert_eq!(
+            report.crontab_result, 1,
+            "其它目标必须照常清理（失败被隔离）"
+        );
+        assert_eq!(count::<crontab_result::Entity>(&db).await, 0);
+    }
+
     /// 热重载会重复调用 spawn_worker：第二个 worker 必须顶掉第一个，不叠加。
     #[tokio::test]
     async fn spawn_worker_is_idempotent() {
