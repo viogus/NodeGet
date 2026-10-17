@@ -28,7 +28,7 @@ mod edit;
 mod get;
 mod list_all_tokens;
 mod roll_token_secret;
-mod utils;
+pub(crate) mod utils;
 
 /// Token RPC trait 定义，namespace 为 `token`。
 ///

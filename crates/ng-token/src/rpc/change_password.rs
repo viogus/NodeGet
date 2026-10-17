@@ -10,7 +10,7 @@ use sea_orm::{ActiveModelTrait, Set};
 use serde_json::value::RawValue;
 use tracing::debug;
 
-use super::utils::{find_target_token, verify_supertoken};
+use super::utils::{find_target_token, is_board_agent_token, verify_supertoken};
 use crate::cache::TokenCache;
 use crate::hash_string;
 
@@ -48,16 +48,20 @@ pub async fn change_password(
             )
             .into());
         }
-        // 拒绝含分隔符的 password，与 generate_token 一致（见 REVIEW L27）：
-        // `username|password` 中 password 含 `:` 会被 TokenOrAuth 冒号优先误判为 Token 模式。
-        if new_password.contains(':') || new_password.contains('|') {
+        // 先解析目标：下面的分隔符豁免要按**目标 token 的用户名**判断。
+        let target_model = find_target_token(&target_token).await?;
+
+        // 拒绝含分隔符的 password：`username|password` 中 password 含 `:`
+        // 会被 TokenOrAuth 冒号优先误判为 Token 模式（fail-safe，但用户登录不了）。
+        // 例外与 generate_token 对齐：board 生成的 `[agent]:<uuid>` token 密码字符集
+        // 本身含 `:` / `|`，这类 token 只走 key:secret 认证，轮换密码时必须放行。
+        let board_agent_token = is_board_agent_token(target_model.username.as_deref());
+        if (new_password.contains(':') || new_password.contains('|')) && !board_agent_token {
             return Err(NodegetError::InvalidInput(
                 "Password cannot contain ':' or '|' characters".to_owned(),
             )
             .into());
         }
-
-        let target_model = find_target_token(&target_token).await?;
 
         let new_password_hash = hash_string(&new_password);
 
