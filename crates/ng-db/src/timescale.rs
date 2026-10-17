@@ -176,8 +176,8 @@ fn regclass_literal(schema: &str, name: &str) -> String {
 ///
 /// # Errors
 ///
-/// 当扩展检测或 now 函数创建失败时返回错误（阻断启动，提示环境问题）；
-/// 单表转换/策略失败仅记录 error 日志并继续，不影响服务启动。
+/// 正常路径不会返回错误：探测、`current_schema`、`now()` 函数、配置校验失败都只
+/// 打日志并降级（可选优化不得阻断启动）。保留 `Result` 只为兼容调用方签名。
 pub async fn setup_timescale_if_available(
     db: &DatabaseConnection,
     config: Option<&TimescaleConfig>,
@@ -189,6 +189,10 @@ pub async fn setup_timescale_if_available(
     let config = config.cloned().unwrap_or_default();
     // 显式开关：装了扩展不代表想转换（主键加宽不可逆），允许用配置关掉
     if !config.is_enabled() {
+        // 关闭 setup 不等于「数据库侧的策略会停」：TimescaleDB 的保留 job 是库里的后台任务，
+        // 与我们进程无关。若 operator 正是想停止删除（retention_days = 0），必须把它摘掉，
+        // 否则关了开关反而继续删 chunk —— 这个方向是丢数据，不能只打一条 info。
+        reconcile_retention_on_skip(db, &config, "setup disabled by config", false).await;
         info!(
             target: "db",
             "timescaledb setup disabled by config ([database.timescale] enabled = false)"
@@ -222,6 +226,8 @@ pub async fn setup_timescale_if_available(
             error = %e,
             "invalid [database.timescale] config; skipping timescale setup"
         );
+        // 配置已不可信：把删除策略摘掉（只减少删除，不会增加）
+        reconcile_retention_on_skip(db, &config, "invalid config", true).await;
         return Ok(());
     }
 
@@ -263,14 +269,25 @@ pub async fn setup_timescale_if_available(
             "failed to create timescale now() function (needs CREATE on the current schema); \
              skipping timescale setup"
         );
+        // 跳过前先把删除策略拉回安全侧：operator 若刚把 retention_days 改成 0，
+        // 这条早退会让旧策略继续删 chunk。
+        reconcile_retention_on_skip(db, &config, "now() function unavailable", false).await;
         return Ok(());
     }
 
     let mut failures = 0;
     for table in TIMESCALE_TABLES {
-        if let Err(e) = setup_table(db, table, &config, &schema).await {
-            failures += 1;
-            error!(target: "db", table = table.name, error = %e, "timescale setup failed for table");
+        match setup_table(db, table, &config, &schema).await {
+            Ok(true) => {}
+            Ok(false) => {
+                // 转换成功但压缩/保留策略有失败：必须计入横幅，
+                // 否则「策略没生效」会被下面的 completed 日志掩盖。
+                failures += 1;
+            }
+            Err(e) => {
+                failures += 1;
+                error!(target: "db", table = table.name, error = %e, "timescale setup failed for table");
+            }
         }
     }
     if failures > 0 {
@@ -338,7 +355,7 @@ async fn setup_table(
     table: &TimescaleTable,
     config: &TimescaleConfig,
     schema: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let table_ref = format!("{}.{}", quote_ident(schema), quote_ident(table.name));
     let pk_ref = quote_ident(table.pk_name);
     // Timescale 的 regclass 文本参数（create_hypertable / 策略函数），
@@ -406,11 +423,13 @@ async fn setup_table(
     // 保留策略放在压缩之前：`retention_days = 0` 时唯一的作用就是移除已有策略
     // （"停止删除"），一旦排在被压缩步骤 return 之后，压缩一失败就再也执行不到，
     // chunk 会被继续删除——这个方向的失败是丢数据，必须优先且独立。
-    apply_retention_policy(db, table, config, &table_regclass).await;
+    let retention_ok = apply_retention_policy(db, table, config, &table_regclass).await;
 
     // 压缩设置（仅首次开启；开启后 segmentby/orderby 不可随意变更）。
     // 失败只记 error：保留策略已经独立应用，压缩失败不该连带影响它。
+    let mut strategies_ok = true;
     if let Err(e) = apply_compression(db, table, config, &table_ref, &table_regclass).await {
+        strategies_ok = false;
         error!(
             target: "db",
             table = table.name,
@@ -419,7 +438,68 @@ async fn setup_table(
         );
     }
 
-    Ok(())
+    Ok(strategies_ok && retention_ok)
+}
+
+/// 在跳过 `TimescaleDB` 初始化时，尽力把「删除策略」拉回安全侧。
+///
+/// 背景：`retention_days = 0` 的唯一作用就是移除库里已有的删除策略。任何一条跳过
+/// 路径（开关关闭、配置非法、依赖语句失败）如果直接 return，旧策略会继续按 `TimescaleDB`
+/// 的后台 job 删 chunk——**关掉开关反而继续删数据**。移除策略只会减少删除，方向安全。
+///
+/// - `db`：数据库连接
+/// - `config`：本轮配置
+/// - `reason`：跳过原因（进日志）
+/// - `config_invalid`：配置是否已不可信（此时无论 `retention_days` 取值都摘掉策略）
+async fn reconcile_retention_on_skip(
+    db: &DatabaseConnection,
+    config: &TimescaleConfig,
+    reason: &'static str,
+    config_invalid: bool,
+) {
+    if !config_invalid && config.retention_days > 0 {
+        // 配置仍然要求保留：不要擅自改动它，但要说清「本轮没管它」
+        warn!(
+            target: "db",
+            reason,
+            retention_days = config.retention_days,
+            "timescale setup skipped; an existing retention policy is left untouched and may keep dropping chunks"
+        );
+        return;
+    }
+
+    let Ok(schema) = current_schema(db).await else {
+        warn!(
+            target: "db",
+            reason,
+            "timescale setup skipped and the current schema is unknown; an existing retention policy may still be dropping chunks"
+        );
+        return;
+    };
+
+    for table in TIMESCALE_TABLES {
+        let table_regclass = regclass_literal(&schema, table.name);
+        match db
+            .execute_unprepared(&format!(
+                "SELECT remove_retention_policy({table_regclass}, if_exists => true);"
+            ))
+            .await
+        {
+            Ok(_) => warn!(
+                target: "db",
+                reason,
+                table = table.name,
+                "timescale setup skipped: retention policy removed so chunks stop being dropped"
+            ),
+            Err(e) => warn!(
+                target: "db",
+                reason,
+                table = table.name,
+                error = %e,
+                "timescale setup skipped; could not remove the retention policy, it may keep dropping chunks"
+            ),
+        }
+    }
 }
 
 /// 应用保留策略；`retention_days = 0` 时移除已有策略（"停止删除"）。
@@ -430,16 +510,17 @@ async fn apply_retention_policy(
     table: &TimescaleTable,
     config: &TimescaleConfig,
     table_regclass: &str,
-) {
+) -> bool {
     if config.retention_days > 0 {
         let Ok(ms) = days_to_ms(config.retention_days) else {
             error!(
                 target: "db",
                 table = table.name,
                 retention_days = config.retention_days,
-                "retention_days overflows milliseconds; retention policy not applied"
+                "retention_days overflows milliseconds; retention policy not applied \
+                 (an existing policy, if any, is still active)"
             );
-            return;
+            return false;
         };
         match db
             .execute_unprepared(&format!(
@@ -448,18 +529,24 @@ async fn apply_retention_policy(
             ))
             .await
         {
-            Ok(_) => info!(
-                target: "db",
-                table = table.name,
-                retention_days = config.retention_days,
-                "retention policy applied"
-            ),
-            Err(e) => error!(
-                target: "db",
-                table = table.name,
-                error = %e,
-                "failed to apply retention policy"
-            ),
+            Ok(_) => {
+                info!(
+                    target: "db",
+                    table = table.name,
+                    retention_days = config.retention_days,
+                    "retention policy applied"
+                );
+                true
+            }
+            Err(e) => {
+                error!(
+                    target: "db",
+                    table = table.name,
+                    error = %e,
+                    "failed to apply retention policy"
+                );
+                false
+            }
         }
     } else {
         // 显式关闭：从 >0 改回 0 时必须把残留策略删掉，否则会继续删 chunk。
@@ -470,13 +557,19 @@ async fn apply_retention_policy(
             ))
             .await
         {
-            Ok(_) => debug!(target: "db", table = table.name, "retention disabled (retention_days = 0)"),
-            Err(e) => error!(
-                target: "db",
-                table = table.name,
-                error = %e,
-                "failed to remove retention policy; chunks may keep being dropped"
-            ),
+            Ok(_) => {
+                debug!(target: "db", table = table.name, "retention disabled (retention_days = 0)");
+                true
+            }
+            Err(e) => {
+                error!(
+                    target: "db",
+                    table = table.name,
+                    error = %e,
+                    "failed to remove retention policy; chunks may keep being dropped"
+                );
+                false
+            }
         }
     }
 }

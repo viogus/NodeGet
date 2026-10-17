@@ -820,8 +820,6 @@ pub fn prepare_invoke_globals(
 /// 将 `__nodeget_run_params`、`__nodeget_env` 等大对象设为 `null`，
 /// 让 `QuickJS` GC 在 `idle` 阶段回收这些引用的数据。
 fn cleanup_invoke_globals(ctx: &Ctx<'_>) {
-    // 审计归属只在单次执行内有效
-    crate::js_audit::clear_current_worker();
     // 清理大对象全局变量，释放 JS 堆内存；失败时静默忽略（Runtime 即将销毁）
     ctx.eval::<(), _>(
         r"globalThis.__nodeget_run_params = null;
@@ -900,6 +898,9 @@ pub fn js_runner(
     limits: RuntimeLimits,
 ) -> Result<Value, Error> {
     debug!(target: "js_runtime", run_type = ?run_type, has_inline_caller = inline_caller.is_some(), max_run_time_ms = limits.max_run_time_ms, max_stack_size_bytes = limits.max_stack_size_bytes, max_heap_size_bytes = limits.max_heap_size_bytes, "executing JS runner");
+    // 审计归属作用域覆盖整次执行（模块求值 → 调用 → 收尾 drain），Drop 时清除；
+    // 手工 set/clear 会漏掉 `?` 提前返回与超时路径。
+    let _audit_scope = crate::js_audit::enter_worker(current_script_name.as_deref());
     let host_rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1054,6 +1055,7 @@ pub fn js_runner_source_mode(
     limits: RuntimeLimits,
 ) -> Result<Value, Error> {
     debug!(target: "js_runtime", script_name = %script_name, run_type = ?run_type, max_run_time_ms = limits.max_run_time_ms, "executing JS runner in source mode");
+    let _audit_scope = crate::js_audit::enter_worker(Some(script_name));
     let host_rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

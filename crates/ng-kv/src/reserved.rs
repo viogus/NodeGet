@@ -2,7 +2,11 @@
 //!
 //! 背景：JS Worker 的 `env.token` 是 ID 为 1 的超级令牌（见 `ng_js_runtime::js_audit`
 //! 的模块文档），因此 `check_kv_*` 权限校验对它一律放行。审计这类「为了监管而存在」
-//! 的数据如果落在普通可写命名空间里，被审计方自己就能把它关掉或抹掉。
+//! 的数据如果落在普通可写命名空间里，被审计方一条 `kv_set_value` 就能关掉或抹掉。
+//!
+//! **能力边界**：这里挡的只是 KV RPC 这条常规路径。持有超级令牌的调用方仍可用
+//! `nodeget-server_exec_sql` 直接对 `kv` 表执行任意 SQL——那是完全信任接口，
+//! 属于 `CLAUDE.md` 明确记录的既有设计，不在本模块能封堵的范围内。
 //!
 //! 约定：命名空间以 [`RESERVED_NAMESPACE_PREFIX`] 开头即为服务端保留。
 //! 写入类 RPC（`kv_create` / `kv_set_value` / `kv_delete_namespace` / `kv_delete_key`）

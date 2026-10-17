@@ -11,6 +11,9 @@ pub const DEFAULT_COMPRESS_AFTER_HOURS: u64 = 12;
 /// 一天的小时数（把已废弃的 `*_days` 旧配置键换算成小时）。
 const HOURS_PER_DAY: u64 = 24;
 
+/// `retention_days` 的上限：换算成毫秒后必须能放进 `i64`。
+const MAX_RETENTION_DAYS: u64 = i64::MAX as u64 / (HOURS_PER_DAY * 3_600 * 1_000);
+
 /// TimescaleDB 时序优化配置（可选）。
 ///
 /// 仅当主库连接指向安装了 `timescaledb` 扩展的 PostgreSQL 时生效；
@@ -85,6 +88,12 @@ impl TimescaleConfig {
     ///
     /// 分块间隔换算后为 0 时返回错误。
     pub fn validate(&self) -> Result<(), String> {
+        if self.retention_days > MAX_RETENTION_DAYS {
+            return Err(format!(
+                "retention_days（{}）过大：换算成毫秒会溢出（上限 {} 天）",
+                self.retention_days, MAX_RETENTION_DAYS
+            ));
+        }
         if self.effective_chunk_interval_hours() == 0 {
             return Err(
                 "chunk_interval_hours / chunk_interval_days 必须大于 0（当前换算为 0 小时）"
@@ -216,6 +225,13 @@ mod tests {
             "显式关闭必须生效"
         );
         assert!(parse("[timescale]\nenabled = true\n").is_enabled());
+    }
+
+    /// `enable` 是兼容别名（仓库里的上游草案用的是这个拼写）。
+    #[test]
+    fn enable_alias_is_accepted() {
+        assert!(!parse("[timescale]\nenable = false\n").is_enabled());
+        assert!(parse("[timescale]\nenable = true\n").is_enabled());
     }
 
     /// 对抗性：键名拼错（`chunk_interval_hour`）必须报错，而不是静默用默认值。

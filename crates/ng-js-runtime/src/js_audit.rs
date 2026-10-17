@@ -29,7 +29,7 @@
 //!
 //!   **能力边界（必须知道）**：worker 仍可通过 `nodeget-server_exec_sql` 直接对
 //!   `kv` 表执行任意 SQL（该 RPC 本身就是完全信任的，见 CLAUDE.md）。也就是说
-//!   保留命名空间挡住的是「顺手一条 kv_set_value」这条廉价路径，不是有决心的对手。
+//!   保留命名空间挡住的是「顺手一条 `kv_set_value`」这条廉价路径，不是有决心的对手。
 //!   能对抗它的只有两件事：其一，`execSql` 属于敏感方法，调用本身会先留下 WARN；
 //!   其二，根治办法是不把超级令牌交给 JS（属于 board/上游的改动）。
 //!
@@ -55,7 +55,8 @@ use crate::spawn_on_server_runtime::spawn_detached_on_server_runtime;
 ///
 /// 以 `__` 开头是**服务端保留**前缀：`kv_create` / `kv_set_value` / `kv_delete_*`
 /// 一律拒绝写入（见 `ng_kv::reserved`）。被审计的 worker 持超级令牌，
-/// 若不保留，它自己就能把审计开关关掉、把证据删掉。
+/// 若不保留，一条 `kv_set_value` 就能把审计开关关掉、把证据删掉。
+/// 注意这挡不住 `nodeget-server_exec_sql`（详见模块文档的能力边界）。
 pub const AUDIT_NAMESPACE: &str = "__js_audit";
 /// 运行时开关所在的 KV 命名空间（同样保留，worker 改不了）
 pub const POLICY_NAMESPACE: &str = "__js_policy";
@@ -72,6 +73,9 @@ const MAX_ENTRIES: usize = 4_096;
 
 /// 超出容量后所有新键折叠到这个占位键上，保证内存有界且不丢「有异常」这个信号。
 const OVERFLOW_WORKER: &str = "<overflow>";
+/// 溢出桶的方法名：固定常量，保证表大小严格封顶在 `MAX_ENTRIES + 1`。
+/// 若把溢出键写成 `(OVERFLOW_WORKER, 原方法名)`，那本身又是一个新键，表仍会无界增长。
+const OVERFLOW_METHOD: &str = "<overflow>";
 
 /// 单个键组成部分的最大长度（字符）。日志与 KV key 都要用它，避免一行变几兆。
 const MAX_KEY_CHARS: usize = 128;
@@ -126,6 +130,15 @@ struct Entry {
 
 type AuditTable = HashMap<(String, String), Entry>;
 
+/// 仅测试用：真实条目数（不是 snapshot 的 worker 桶数）。
+#[cfg(test)]
+pub(crate) fn table_len_for_test() -> usize {
+    table()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .len()
+}
+
 /// 仅测试用：清空聚合表（表是进程级全局状态）。
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
@@ -171,8 +184,30 @@ pub fn set_current_worker(name: Option<&str>) {
     });
 }
 
-/// 清除当前线程的 worker 记录（执行结束时调用，避免下一次执行串味）。
-pub fn clear_current_worker() {
+/// 一次执行的归属作用域：进入时登记，Drop 时清除。
+///
+/// 用它而不是手工 set/clear：执行路径上有 `?` 提前返回、超时、panic 展开等多种出口，
+/// 手工清理必然漏；漏掉之后同一线程的下一次执行会继承上一个名字。
+pub struct WorkerScope(());
+
+/// 在 Rust 侧登记当前线程正在执行的 worker，返回 RAII 守卫。
+///
+/// 必须覆盖**整次执行**（含模块求值与执行后的 pending job drain），
+/// 否则微任务里的 `__nodeget_rpc_raw` 会在身份为空时被记录。
+#[must_use]
+pub fn enter_worker(name: Option<&str>) -> WorkerScope {
+    set_current_worker(name);
+    WorkerScope(())
+}
+
+impl Drop for WorkerScope {
+    fn drop(&mut self) {
+        clear_current_worker();
+    }
+}
+
+/// 清除当前线程的 worker 记录（交给 [`WorkerScope`] 的 Drop 调用）。
+fn clear_current_worker() {
     CURRENT_WORKER.with(|cell| {
         *cell.borrow_mut() = None;
     });
@@ -200,21 +235,30 @@ pub fn record(worker_hint: Option<&str>, method: &str) {
     }
 
     let authoritative = CURRENT_WORKER.with(|cell| cell.borrow().clone());
-    let (worker, mismatch) = match (authoritative.as_deref(), worker_hint) {
-        (Some(real), Some(hint)) if real != hint => (real, Some(hint)),
-        (Some(real), _) => (real, None),
-        (None, Some(hint)) => (hint, None),
-        (None, None) => (UNKNOWN_WORKER, None),
+    // 归属**只**用 Rust 侧身份。线程本地为空说明这次调用没有登记身份
+    // （理论上不该发生），此时记 `<unknown>` 并把 JS 自报的名字放进 hint 字段——
+    // 绝不能拿 hint 当归属，否则脚本一改名字就能嫁祸他人。
+    let (worker, mismatch) = match authoritative.as_deref() {
+        Some(real) if worker_hint.is_some_and(|hint| hint != real) => (real, worker_hint),
+        Some(real) => (real, None),
+        None => (UNKNOWN_WORKER, worker_hint),
     };
     if let Some(hint) = mismatch {
-        // 脚本改了 `__nodeget_current_script_name`：单独告警，不随采样限流丢弃
-        warn!(
-            target: "js_audit",
-            worker,
-            hint,
-            method = bounded(method),
-            "js worker identity mismatch: script reported a different name"
-        );
+        // 脚本改过 `__nodeget_current_script_name`：这是高价值信号，但要限流，
+        // 否则脚本每次调用都制造一行 WARN。
+        static MISMATCH_WARNED: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let seen = MISMATCH_WARNED.fetch_add(1, Ordering::Relaxed) + 1;
+        if seen <= 10 || seen.is_multiple_of(1_000) {
+            warn!(
+                target: "js_audit",
+                worker,
+                hint,
+                method = bounded(method),
+                occurred = seen,
+                "js worker identity mismatch: script reported a different name"
+            );
+        }
     }
 
     let now = now_ms();
@@ -226,7 +270,7 @@ pub fn record(worker_hint: Option<&str>, method: &str) {
         // 容量上限：新键在表满后折叠进溢出桶，避免脚本用随机方法名撑爆内存
         let key = (worker.clone(), method.clone());
         let key = if counters.len() >= MAX_ENTRIES && !counters.contains_key(&key) {
-            (OVERFLOW_WORKER.to_owned(), method.clone())
+            (OVERFLOW_WORKER.to_owned(), OVERFLOW_METHOD.to_owned())
         } else {
             key
         };
@@ -403,9 +447,14 @@ mod tests {
         // 本模块共享全局状态（聚合表 + 开关），因此把断言合成单个测试，避免并行测试
         // 在「关闭开关」的窗口内互相干扰；worker 名保持唯一，避免与其它测试串味。
         let worker = "test-worker-agg";
-        super::record(Some(worker), "task_create_task_blocking");
-        super::record(Some(worker), "task_create_task_blocking");
-        super::record(None, "kv_get_value");
+        // 归属只认 Rust 侧身份，因此这里必须先登记执行作用域
+        {
+            let _scope = super::enter_worker(Some(worker));
+            super::record(Some(worker), "task_create_task_blocking");
+            super::record(Some(worker), "task_create_task_blocking");
+        }
+        // 没有执行作用域时（异常情况）记到 <unknown>，绝不采信 JS 自报的名字
+        super::record(Some("attacker-claimed"), "kv_get_value");
 
         let snap = snapshot();
         let entry = snap
@@ -422,13 +471,20 @@ mod tests {
         assert_eq!(count, 2, "同一方法应累加计数");
         assert!(
             snap.iter().any(|(name, _)| name == super::UNKNOWN_WORKER),
-            "unknown worker should be recorded under placeholder"
+            "没有 Rust 侧身份时必须记到占位桶"
+        );
+        assert!(
+            !snap.iter().any(|(name, _)| name == "attacker-claimed"),
+            "JS 自报的名字不得成为归属键"
         );
 
         // 关闭开关后不应再记录任何调用
         let disabled_worker = "test-worker-disabled";
         super::ENABLED.store(false, Ordering::Relaxed);
-        super::record(Some(disabled_worker), "kv_get_value");
+        {
+            let _scope = super::enter_worker(Some(disabled_worker));
+            super::record(Some(disabled_worker), "kv_get_value");
+        }
         super::ENABLED.store(true, Ordering::Relaxed);
 
         let snap_after = snapshot();
@@ -461,6 +517,27 @@ mod tests {
         );
     }
 
+    /// RAII 作用域退出后必须清除身份，且清除后的调用记到 `<unknown>`。
+    #[test]
+    fn worker_scope_clears_on_drop() {
+        let _guard = lock();
+        super::reset_for_test();
+        super::ENABLED.store(true, Ordering::Relaxed);
+
+        {
+            let _scope = super::enter_worker(Some("scoped-worker"));
+            super::record(Some("scoped-worker"), "kv_get_value");
+        }
+        super::record(Some("scoped-worker"), "kv_get_value");
+
+        let snap = snapshot();
+        assert!(snap.iter().any(|(name, _)| name == "scoped-worker"));
+        assert!(
+            snap.iter().any(|(name, _)| name == super::UNKNOWN_WORKER),
+            "作用域结束后不得继承旧身份"
+        );
+    }
+
     /// 对抗性：脚本用随机方法名灌内存时必须被容量上限挡住。
     #[test]
     fn audit_table_is_bounded() {
@@ -474,13 +551,14 @@ mod tests {
 
         let snap = snapshot();
         assert!(
-            snap.len() <= 2,
-            "超出容量后新方法必须折叠进溢出桶，实际 worker 桶数：{}",
-            snap.len()
-        );
-        assert!(
             snap.iter().any(|(name, _)| name == super::OVERFLOW_WORKER),
             "溢出桶必须存在，否则等于静默丢数据"
+        );
+        // 关键断言：真实条目数必须封顶，而不是只看 worker 桶数（后者会掩盖无界增长）
+        assert!(
+            super::table_len_for_test() <= MAX_ENTRIES + 1,
+            "表必须严格封顶，实际条目数：{}",
+            super::table_len_for_test()
         );
     }
 

@@ -75,9 +75,11 @@ pub async fn find_target_token(identifier: &str) -> Result<token::Model, Nodeget
         }
     }
 
-    warn!(target: "token", target = %identifier, "target token not found by key or username");
+    // 只回显切分后的 key/username：identifier 可能是 `key:secret`，
+    // 把原文写进日志或错误响应等于泄露目标 token 的 secret。
+    warn!(target: "token", target = %extracted, "target token not found by key or username");
     Err(NodegetError::NotFound(format!(
-        "Target token not found by key/username: {identifier}"
+        "Target token not found by key/username: {extracted}"
     )))
 }
 

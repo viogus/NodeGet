@@ -13,7 +13,7 @@ use ng_db::get_db;
 use ng_infra::server::RpcHelper;
 use ng_js_runtime::RunType;
 use ng_task::{TaskEvent, TaskEventType, TaskManager};
-use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, error, info, info_span, warn};
 use uuid::Uuid;
@@ -57,13 +57,35 @@ pub fn js_worker_scheduler() -> Option<&'static std::sync::Arc<dyn JsWorkerSched
 
 // ── 派发策略注入 ──────────────────────────────────────────────────
 
+/// 全部离线时的上报节流窗口（毫秒）。
+///
+/// 20 秒周期的 cron 打到离线 Agent 上，一天是 4320 次运行；如果每次都写一条失败行，
+/// 单个 cron 就是 4320 行/天，正是派发前置预检要消除的那个量级。窗口内只保留一条。
+const ALL_OFFLINE_THROTTLE_MS: i64 = 10 * 60 * 1000;
+
+/// 全部离线失败行的消息前缀（用于识别上一条是否同类）。
+const ALL_OFFLINE_MESSAGE_PREFIX: &str = "全部目标 Agent 离线";
+
+/// 判断一条结果行是否就是「全部离线」失败。
+///
+/// 用于节流：同一 cron 在窗口内已有同类失败行时不再重复写。
+fn is_all_offline_failure(row: &crontab_result::Model) -> bool {
+    row.success == Some(false)
+        && row
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with(ALL_OFFLINE_MESSAGE_PREFIX))
+}
+
 /// Agent 定时任务的派发策略，由 Server 二进制在启动时通过 [`set_dispatch_policy`] 注入。
 #[derive(Debug, Clone, Copy)]
 pub struct DispatchPolicy {
     /// `crontab_result` 的成功行是否按「每次运行一条汇总行」写入。
     ///
-    /// `true`（默认）时一次派发只写一条 `relative_id = NULL` 的成功行，记录成功下发的
-    /// Agent 数；`false` 时回退为每个 Agent 一条成功行。失败行始终逐个 Agent 记录。
+    /// `true`（默认）时一次派发只写一条成功行，记录成功下发的 Agent 数；
+    /// 单 Agent 派发时该行仍保留 `relative_id = task_id`（多 Agent 聚合行没有单一
+    /// task_id，置 `NULL`）。`false` 时回退为每个 Agent 一条成功行。
+    /// 失败行始终逐个 Agent 记录。
     pub aggregate_success_result: bool,
 }
 
@@ -165,23 +187,52 @@ pub async fn crontab_task(
             // 全部离线也要写一条结果行：`last_run_time` 在调度前就已落库，
             // 这一轮不会重试，如果这里什么都不写，UI 上只会看到「cron 没跑」，
             // 而真实原因是 Agent 没连上（常见于 allow_task = false）。
-            warn!(
-                target: "crontab",
-                requested_count,
-                skipped_at_precheck,
-                task_type = ?task_event_type,
-                "all target agents offline, task dispatch skipped"
-            );
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            // 同一 cron 在节流窗口内已经留过同类失败行就不再重复写，避免把
+            // crontab_result 变成每 20 秒一行的日志表（离线 Agent 一天 2.6 万行）。
+            let recently_reported = match crontab_result::Entity::find()
+                .filter(crontab_result::Column::CronId.eq(cron_id))
+                .filter(crontab_result::Column::Success.eq(Some(false)))
+                .filter(crontab_result::Column::RunTime.gte(now_ms - ALL_OFFLINE_THROTTLE_MS))
+                .order_by_desc(crontab_result::Column::RunTime)
+                .one(db)
+                .await
+            {
+                Ok(row) => row.is_some_and(|row| is_all_offline_failure(&row)),
+                Err(e) => {
+                    error!(target: "crontab", error = %e, "failed to check recent all-offline result");
+                    false
+                }
+            };
+            if recently_reported {
+                debug!(
+                    target: "crontab",
+                    requested_count,
+                    skipped_at_precheck,
+                    "all target agents offline; failure already reported within throttle window"
+                );
+            } else {
+                warn!(
+                    target: "crontab",
+                    requested_count,
+                    skipped_at_precheck,
+                    task_type = ?task_event_type,
+                    "all target agents offline, task dispatch skipped"
+                );
+            }
+            if recently_reported {
+                return;
+            }
             let result = crontab_result::ActiveModel {
                 id: ActiveValue::NotSet,
                 cron_id: Set(cron_id),
                 cron_name: Set(cron_name.clone()),
                 relative_id: Set(None),
-                run_time: Set(Some(chrono::Utc::now().timestamp_millis())),
+                run_time: Set(Some(now_ms)),
                 success: Set(Some(false)),
                 message: Set(Some(format!(
                     "全部目标 Agent 离线（{skipped_at_precheck} 个），本次未下发；\
-                     请检查 Agent 是否在线且 allow_task 已开启"
+                     请检查 Agent 是否在线且 allow_task 已开启（同一 cron 10 分钟内只记一条）"
                 ))),
             };
             if let Err(e) = crontab_result::Entity::insert(result).exec(db).await {
@@ -529,13 +580,15 @@ mod tests {
             super::dispatch_policy().aggregate_success_result,
             "热重载注入必须生效，不能被首次写入锁死"
         );
+        // 恢复默认，避免污染同进程内其它测试
+        super::set_dispatch_policy(super::DispatchPolicy::default());
     }
 
     /// 未注入时 `dispatch_policy()` 必须回落到该默认值，否则线上会退回逐 Agent 写成功行。
     #[test]
     fn dispatch_policy_defaults_to_aggregate_success() {
+        // 只断言类型级默认值：另一个测试会改写全局，并行执行时读全局必然有竞态
         assert!(super::DispatchPolicy::default().aggregate_success_result);
-        assert!(super::dispatch_policy().aggregate_success_result);
     }
 
     /// 长度守恒：N 个 model → N 个元组。
