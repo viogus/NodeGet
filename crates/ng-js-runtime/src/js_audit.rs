@@ -442,6 +442,9 @@ mod tests {
     #[test]
     fn record_aggregates_and_respects_runtime_switch() {
         let _guard = lock();
+        // 必须先清空：容量测试会把表填满，若它先跑，本测试的新键会被折进溢出桶，
+        // 断言「worker 出现在快照里」就会失败（这正是之前一次偶发失败的根因）。
+        super::reset_for_test();
         // 本模块共享全局状态（聚合表 + 开关），因此把断言合成单个测试，避免并行测试
         // 在「关闭开关」的窗口内互相干扰；worker 名保持唯一，避免与其它测试串味。
         let worker = "test-worker-agg";
