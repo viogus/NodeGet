@@ -31,7 +31,8 @@
 //!   `id <= max(id) - legacy_id_margin` 的行，默认 100_000 行（约数小时写入量），
 //!   以免误删刚刚派发、结果还在回传途中的任务。
 //! - 软删除 Agent（`monitoring_uuid.soft_delete = true`）的保留期视为 0，但保留
-//!   `SOFT_DELETE_GRACE_MS`（60 秒）宽限，避免删掉仍在途的任务行。
+//!   `SOFT_DELETE_GRACE_MS`（10 分钟）宽限。宽限必须覆盖 `create_task_blocking`
+//!   的 5 分钟等待上限，否则会删掉调用方还在等的任务行。
 //! - 时间列本身为 NULL 的 `crontab_result` / `js_result` 行不会被清理：没有可用的时间
 //!   基准，删除它们可能误伤刚写入的记录。
 //! - 每轮清扫开始前对三张目标表执行 `ANALYZE`，避免新增列缺少统计信息时规划器退化成
@@ -89,6 +90,30 @@ const MIN_TASK_LIMIT_MS: i64 = 600_000;
 /// 与流量快照 Worker 对 `database_limit_traffic_snapshot` 的处理保持一致
 /// （见 `docs/api/kv/special.md`：小于 1 小时或非整数视为不合法）。
 const MIN_RESULT_LIMIT_MS: i64 = 3_600_000;
+
+/// 当前存活的 sweeper 数（仅测试用：验证 respawn 会中止旧 worker）。
+#[cfg(test)]
+pub(crate) static ALIVE_WORKERS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// 测试用的存活探针：future 被 drop（abort）时自动减一。
+#[cfg(test)]
+struct AliveGuard;
+
+#[cfg(test)]
+impl AliveGuard {
+    fn new() -> Self {
+        ALIVE_WORKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        ALIVE_WORKERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// 当前 sweeper 的句柄。
 ///
@@ -197,8 +222,9 @@ async fn refresh_statistics(db: &DatabaseConnection) {
 ///
 /// # Errors
 ///
-/// 任一数据库操作失败时返回 [`DbErr`]；调用方（[`spawn_worker`]）会记录错误并在下一个
-/// 周期重试，不会中断服务。
+/// 只有「读配置 / 读 Agent 列表 / 取水位」这类前置查询失败才返回 [`DbErr`]；
+/// 单个清理目标的 DELETE 失败由 `purge_isolated` 吞掉并计入
+/// [`SweepReport::errors`]，不会中断其余目标，也不会让整轮失败。
 pub async fn sweep_once(
     db: &DatabaseConnection,
     dry_run: bool,
@@ -372,6 +398,8 @@ pub fn spawn_worker(db: &'static DatabaseConnection, options: RetentionOptions) 
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .replace(tokio::spawn(async move {
+        #[cfg(test)]
+        let _alive = AliveGuard::new();
         tokio::time::sleep(options.initial_delay).await;
         loop {
             match sweep_once(db, dry_run, options.legacy_id_margin).await {
@@ -996,48 +1024,64 @@ mod tests {
         assert_eq!(report.total(), 0, "非法保留期不得删除任何行");
     }
 
-    /// 单目标失败必须被隔离：js_result 表不存在时，crontab_result 仍然要被清理，
-    /// 失败计入 `report.errors` 而不是让整轮返回 Err。
+    /// 单目标失败必须被隔离，且**靠前**目标失败不能让后续目标被跳过。
+    ///
+    /// 删掉的是 `crontab_result`（第 4 步），断言 `js_result`（第 5 步）仍被清理；
+    /// 若把失败放在最后一个目标，就测不出「后续目标还会不会跑」。
     #[tokio::test]
     async fn failing_target_is_isolated_and_counted() {
         let db = setup_db().await;
         let now = crate::now_millis();
         insert_limit(&db, "global", "database_limit_crontab_result", DAY_MS).await;
         insert_limit(&db, "global", "database_limit_js_result", DAY_MS).await;
-        insert_crontab_result(&db, Some(now - 2 * DAY_MS)).await;
+        insert_js_result(&db, Some(now - 2 * DAY_MS)).await;
 
-        // 制造真实失败：缺表
-        db.execute_unprepared(r#"DROP TABLE "js_result""#)
+        // 制造真实失败：缺表（靠前的目标）
+        db.execute_unprepared(r#"DROP TABLE "crontab_result""#)
             .await
-            .expect("drop js_result");
+            .expect("drop crontab_result");
 
         let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
             .await
             .expect("单个目标失败不应让整轮返回 Err");
-        assert_eq!(report.js_result, 0);
+        assert_eq!(report.crontab_result, 0);
         assert_eq!(report.errors, 1, "失败目标必须计数");
-        assert_eq!(
-            report.crontab_result, 1,
-            "其它目标必须照常清理（失败被隔离）"
-        );
-        assert_eq!(count::<crontab_result::Entity>(&db).await, 0);
+        assert_eq!(report.js_result, 1, "后续目标必须照常清理（失败被隔离）");
+        assert_eq!(count::<js_result::Entity>(&db).await, 0);
     }
 
     /// 热重载会重复调用 spawn_worker：第二个 worker 必须顶掉第一个，不叠加。
+    ///
+    /// 用「存活 worker 数」断言，而不是「重新 spawn 不 panic」——后者在 abort 被
+    /// 删掉时同样成立，等于没有测试。轮询等待而不是固定 sleep，避免机器慢时误报。
     #[tokio::test]
     async fn spawn_worker_is_idempotent() {
+        use std::sync::atomic::Ordering;
         let db = Box::leak(Box::new(setup_db().await));
         let options = super::RetentionOptions {
+            // interval 取 1 小时：worker 不会自己跑完退出，存活数只受 abort 影响
             enabled: false,
-            interval: std::time::Duration::from_millis(5),
-            initial_delay: std::time::Duration::from_millis(1),
+            interval: std::time::Duration::from_secs(3_600),
+            initial_delay: std::time::Duration::from_secs(3_600),
             legacy_id_margin: super::DEFAULT_LEGACY_ID_MARGIN,
         };
+
         super::spawn_worker(db, options);
-        tokio::task::yield_now().await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(super::ALIVE_WORKERS.load(Ordering::SeqCst), 1);
+
         super::spawn_worker(db, options);
-        tokio::task::yield_now().await;
-        // 只有一个句柄：再 spawn 不会 panic，也不会累积（句柄被替换并 abort）
-        assert!(super::WORKER.lock().is_ok());
+        // abort 是异步的：轮询等被中止的 future 被 drop
+        let mut alive = 2;
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+            alive = super::ALIVE_WORKERS.load(Ordering::SeqCst);
+            if alive == 1 {
+                break;
+            }
+        }
+        assert_eq!(alive, 1, "重复 spawn 必须中止旧 worker，存活数不能变成 2");
     }
 }

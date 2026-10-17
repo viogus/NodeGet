@@ -188,29 +188,27 @@ pub fn set_current_worker(name: Option<&str>) {
 ///
 /// 用它而不是手工 set/clear：执行路径上有 `?` 提前返回、超时、panic 展开等多种出口，
 /// 手工清理必然漏；漏掉之后同一线程的下一次执行会继承上一个名字。
-pub struct WorkerScope(());
+pub struct WorkerScope(Option<String>);
 
 /// 在 Rust 侧登记当前线程正在执行的 worker，返回 RAII 守卫。
 ///
 /// 必须覆盖**整次执行**（含模块求值与执行后的 pending job drain），
 /// 否则微任务里的 `__nodeget_rpc_raw` 会在身份为空时被记录。
+///
+/// Drop 时恢复进入前的身份而不是直接清空：目前没有同线程嵌套执行，
+/// 但将来若出现（例如内联调用改回同线程），也不会把外层身份弄丢。
 #[must_use]
 pub fn enter_worker(name: Option<&str>) -> WorkerScope {
-    set_current_worker(name);
-    WorkerScope(())
+    let previous = CURRENT_WORKER
+        .with(|cell| std::mem::replace(&mut *cell.borrow_mut(), name.map(str::to_owned)));
+    WorkerScope(previous)
 }
 
 impl Drop for WorkerScope {
     fn drop(&mut self) {
-        clear_current_worker();
+        let previous = self.0.take();
+        CURRENT_WORKER.with(|cell| *cell.borrow_mut() = previous);
     }
-}
-
-/// 清除当前线程的 worker 记录（交给 [`WorkerScope`] 的 Drop 调用）。
-fn clear_current_worker() {
-    CURRENT_WORKER.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 /// 截断过长的键组成部分，保证日志行与 KV key 有界。
@@ -502,9 +500,10 @@ mod tests {
         super::reset_for_test();
         super::ENABLED.store(true, Ordering::Relaxed);
 
-        super::set_current_worker(Some("real-worker"));
-        super::record(Some("victim-worker"), "kv_get_value");
-        super::clear_current_worker();
+        {
+            let _scope = super::enter_worker(Some("real-worker"));
+            super::record(Some("victim-worker"), "kv_get_value");
+        }
 
         let snap = snapshot();
         assert!(

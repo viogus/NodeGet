@@ -13,7 +13,7 @@ use ng_db::get_db;
 use ng_infra::server::RpcHelper;
 use ng_js_runtime::RunType;
 use ng_task::{TaskEvent, TaskEventType, TaskManager};
-use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, error, info, info_span, warn};
 use uuid::Uuid;
@@ -66,15 +66,13 @@ const ALL_OFFLINE_THROTTLE_MS: i64 = 10 * 60 * 1000;
 /// 全部离线失败行的消息前缀（用于识别上一条是否同类）。
 const ALL_OFFLINE_MESSAGE_PREFIX: &str = "全部目标 Agent 离线";
 
-/// 判断一条结果行是否就是「全部离线」失败。
+/// 节流查询用的 `LIKE` 模式（`<全部离线前缀>%`）。
 ///
-/// 用于节流：同一 cron 在窗口内已有同类失败行时不再重复写。
-fn is_all_offline_failure(row: &crontab_result::Model) -> bool {
-    row.success == Some(false)
-        && row
-            .message
-            .as_deref()
-            .is_some_and(|m| m.starts_with(ALL_OFFLINE_MESSAGE_PREFIX))
+/// 抽成函数是为了让它可测：判定必须与真正写入的消息前缀一致，
+/// 否则节流会失效（每次都写一行）。前缀匹配下推到 SQL，避免「最新一条是别的
+/// 失败原因」就把节流重新计时。
+fn all_offline_like_pattern() -> String {
+    format!("{ALL_OFFLINE_MESSAGE_PREFIX}%")
 }
 
 /// Agent 定时任务的派发策略，由 Server 二进制在启动时通过 [`set_dispatch_policy`] 注入。
@@ -190,15 +188,17 @@ pub async fn crontab_task(
             let now_ms = chrono::Utc::now().timestamp_millis();
             // 同一 cron 在节流窗口内已经留过同类失败行就不再重复写，避免把
             // crontab_result 变成每 20 秒一行的日志表（离线 Agent 一天 2.6 万行）。
+            // 前缀条件必须下推到 SQL：只在 Rust 侧检查「最新一条失败行」的话，
+            // 中间夹杂一条其它原因的失败行就会让节流重新计时，又变成每次运行写一行。
             let recently_reported = match crontab_result::Entity::find()
                 .filter(crontab_result::Column::CronId.eq(cron_id))
                 .filter(crontab_result::Column::Success.eq(Some(false)))
                 .filter(crontab_result::Column::RunTime.gte(now_ms - ALL_OFFLINE_THROTTLE_MS))
-                .order_by_desc(crontab_result::Column::RunTime)
+                .filter(crontab_result::Column::Message.like(all_offline_like_pattern()))
                 .one(db)
                 .await
             {
-                Ok(row) => row.is_some_and(|row| is_all_offline_failure(&row)),
+                Ok(row) => row.is_some(),
                 Err(e) => {
                     error!(target: "crontab", error = %e, "failed to check recent all-offline result");
                     false
@@ -584,7 +584,26 @@ mod tests {
         super::set_dispatch_policy(super::DispatchPolicy::default());
     }
 
-    /// 未注入时 `dispatch_policy()` 必须回落到该默认值，否则线上会退回逐 Agent 写成功行。
+    /// 节流用的 LIKE 模式必须与真正写入的消息前缀一致，否则节流失效。
+    #[test]
+    fn all_offline_like_pattern_matches_written_message() {
+        let pattern = super::all_offline_like_pattern();
+        assert_eq!(
+            pattern,
+            format!("{}%", super::ALL_OFFLINE_MESSAGE_PREFIX)
+        );
+        // 真正写入的消息（见 all-offline 分支）必须以该前缀开头
+        let prefix = super::ALL_OFFLINE_MESSAGE_PREFIX;
+        let written = format!("{prefix}（3 个），本次未下发；请检查…");
+        assert!(
+            written.starts_with(prefix),
+            "写入的消息必须命中节流模式，否则每次都写一行"
+        );
+        // 其它失败原因不应命中
+        assert!(!format!("任务下发失败，Agent：[a]").starts_with(prefix));
+    }
+
+    /// 默认值必须是聚合成功行，否则线上会退回逐 Agent 写成功行。
     #[test]
     fn dispatch_policy_defaults_to_aggregate_success() {
         // 只断言类型级默认值：另一个测试会改写全局，并行执行时读全局必然有竞态

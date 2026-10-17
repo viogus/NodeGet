@@ -192,7 +192,10 @@ pub async fn setup_timescale_if_available(
         // 关闭 setup 不等于「数据库侧的策略会停」：TimescaleDB 的保留 job 是库里的后台任务，
         // 与我们进程无关。若 operator 正是想停止删除（retention_days = 0），必须把它摘掉，
         // 否则关了开关反而继续删 chunk —— 这个方向是丢数据，不能只打一条 info。
-        reconcile_retention_on_skip(db, &config, "setup disabled by config", false).await;
+        // 但在没装扩展的库上不必去摘（只会产生 3 条「摘不掉」的假告警）。
+        if matches!(has_timescale_extension(db).await, Ok(true)) {
+            reconcile_retention_on_skip(db, &config, "setup disabled by config").await;
+        }
         info!(
             target: "db",
             "timescaledb setup disabled by config ([database.timescale] enabled = false)"
@@ -226,8 +229,8 @@ pub async fn setup_timescale_if_available(
             error = %e,
             "invalid [database.timescale] config; skipping timescale setup"
         );
-        // 配置已不可信：把删除策略摘掉（只减少删除，不会增加）
-        reconcile_retention_on_skip(db, &config, "invalid config", true).await;
+        // 配置已不可信：按下面的统一规则尽力把删除策略摘掉（只减少删除，不会增加）
+        reconcile_retention_on_skip(db, &config, "invalid config").await;
         return Ok(());
     }
 
@@ -271,7 +274,7 @@ pub async fn setup_timescale_if_available(
         );
         // 跳过前先把删除策略拉回安全侧：operator 若刚把 retention_days 改成 0，
         // 这条早退会让旧策略继续删 chunk。
-        reconcile_retention_on_skip(db, &config, "now() function unavailable", false).await;
+        reconcile_retention_on_skip(db, &config, "now() function unavailable").await;
         return Ok(());
     }
 
@@ -450,14 +453,16 @@ async fn setup_table(
 /// - `db`：数据库连接
 /// - `config`：本轮配置
 /// - `reason`：跳过原因（进日志）
-/// - `config_invalid`：配置是否已不可信（此时无论 `retention_days` 取值都摘掉策略）
 async fn reconcile_retention_on_skip(
     db: &DatabaseConnection,
     config: &TimescaleConfig,
     reason: &'static str,
-    config_invalid: bool,
 ) {
-    if !config_invalid && config.retention_days > 0 {
+    // 只有两种「应当停止删除」的意图才去摘策略：
+    // 显式 retention_days = 0，或该值本身不可用（换算溢出，无法表达保留期）。
+    // 其它情况（如只是 chunk 间隔非法）保持原策略不动，只告警。
+    let retention_unusable = config.retention_days > 0 && days_to_ms(config.retention_days).is_err();
+    if !(config.retention_days == 0 || retention_unusable) {
         // 配置仍然要求保留：不要擅自改动它，但要说清「本轮没管它」
         warn!(
             target: "db",
