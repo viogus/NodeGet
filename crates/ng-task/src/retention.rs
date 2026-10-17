@@ -960,6 +960,42 @@ mod tests {
         assert_eq!(count::<task::Entity>(&db).await, 1, "未过期行必须留下");
     }
 
+    /// 对抗性：字符串形态的非法保留期（"0" / 负数 / 小数）同样不得触发删除。
+    #[tokio::test]
+    async fn malformed_limit_values_are_ignored() {
+        let db = setup_db().await;
+        let agent = Uuid::from_u128(1);
+        insert_agent(&db, agent, false).await;
+
+        // 直接写 kv 行，覆盖字符串/负数/小数三种形态
+        for (key, value) in [
+            ("database_limit_task", serde_json::json!("0")),
+            ("database_limit_task", serde_json::json!(-1)),
+            ("database_limit_crontab_result", serde_json::json!("7")),
+            ("database_limit_js_result", serde_json::json!(0.5)),
+        ] {
+            kv::Entity::insert(kv::ActiveModel {
+                id: ActiveValue::default(),
+                namespace: Set("global".to_owned()),
+                key: Set(key.to_owned()),
+                value: Set(value),
+            })
+            .exec(&db)
+            .await
+            .expect("insert kv");
+        }
+
+        let now = crate::now_millis();
+        insert_task(&db, agent, Some(now - 2 * HOUR_MS)).await;
+        insert_crontab_result(&db, Some(now - 2 * DAY_MS)).await;
+        insert_js_result(&db, Some(now - 2 * DAY_MS)).await;
+
+        let report = sweep_once(&db, false, super::DEFAULT_LEGACY_ID_MARGIN)
+            .await
+            .expect("sweep");
+        assert_eq!(report.total(), 0, "非法保留期不得删除任何行");
+    }
+
     /// 热重载会重复调用 spawn_worker：第二个 worker 必须顶掉第一个，不叠加。
     #[tokio::test]
     async fn spawn_worker_is_idempotent() {
