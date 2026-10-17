@@ -19,6 +19,7 @@
 //! - [`runtime_pool`] 模块 —— `QuickJS` 实例的 OS 线程池
 //! - [`server_runtime`] 模块 —— 服务器级运行时操作（`spawn_on_server_runtime`）
 //! - [`nodeget`] 模块 —— 向 JS 上下文注入 `nodeget()` API
+//! - [`js_audit`] 模块 —— JS→RPC 调用审计（观察模式，为后续按 worker 强制授权取证）
 //! - [`inline_call`] 模块 —— 内联 JS 执行
 //! - [`js_worker_service`] 模块 —— `JsWorkerService` trait（依赖注入点）
 //! - [`RuntimeLimits`] —— 运行时资源限制
@@ -32,6 +33,8 @@ pub use types::*;
 
 #[cfg(feature = "server")]
 pub mod inline_call;
+#[cfg(feature = "server")]
+pub mod js_audit;
 #[cfg(feature = "server")]
 pub mod js_worker_service;
 #[cfg(feature = "server")]

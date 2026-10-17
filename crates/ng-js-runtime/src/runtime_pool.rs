@@ -600,6 +600,9 @@ async fn execute_on_worker(
     max_run_time_ms: u64,
 ) -> Result<Value, Error> {
     trace!(target: "js_runtime", script_name = %script_name, "executing on worker");
+    // 审计归属覆盖模块求值 + 调用 + 收尾 drain；必须早于 eval，
+    // 否则顶层 await 里发起的 RPC 会在身份为空时被记录。
+    let _audit_scope = crate::js_audit::enter_worker(Some(script_name));
     if runtime_state.is_none() {
         *runtime_state = Some(create_runtime_state(limits).await?);
     }

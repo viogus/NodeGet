@@ -343,7 +343,9 @@ globalThis.nodeget = async (...args) => {
         const id = args.length >= 3 ? args[2] : globalThis.randomUUID();
         input = JSON.stringify({ jsonrpc: "2.0", method, params, id });
     }
-    const raw = await globalThis.__nodeget_rpc_raw(input);
+    // 第二个参数是发起调用的 Worker 名，仅用于服务端审计（不参与鉴权）。
+    // 用传参而不是 Rust 侧捕获：runtime_pool 会复用 JS context，捕获会拿到过期的名字。
+    const raw = await globalThis.__nodeget_rpc_raw(input, globalThis.__nodeget_current_script_name ?? null);
     return JSON.parse(raw);
 };
 globalThis.__nodeget_inline_call = async (name, paramsJson, timeoutSec, caller) => {
@@ -787,6 +789,9 @@ pub fn prepare_invoke_globals(
         .map_err(|e| js_error("js_runner", format!("Failed to build env in JS: {e}")))?;
     global.set("__nodeget_env", env_js)?;
 
+    // 审计用：Rust 侧的权威归属取自这里（线程本地），不信任 JS 自报的名字
+    crate::js_audit::set_current_worker(script_name);
+
     match script_name {
         Some(name) => global.set("__nodeget_current_script_name", name.to_owned())?,
         None => {
@@ -893,6 +898,9 @@ pub fn js_runner(
     limits: RuntimeLimits,
 ) -> Result<Value, Error> {
     debug!(target: "js_runtime", run_type = ?run_type, has_inline_caller = inline_caller.is_some(), max_run_time_ms = limits.max_run_time_ms, max_stack_size_bytes = limits.max_stack_size_bytes, max_heap_size_bytes = limits.max_heap_size_bytes, "executing JS runner");
+    // 审计归属作用域覆盖整次执行（模块求值 → 调用 → 收尾 drain），Drop 时清除；
+    // 手工 set/clear 会漏掉 `?` 提前返回与超时路径。
+    let _audit_scope = crate::js_audit::enter_worker(current_script_name.as_deref());
     let host_rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1047,6 +1055,7 @@ pub fn js_runner_source_mode(
     limits: RuntimeLimits,
 ) -> Result<Value, Error> {
     debug!(target: "js_runtime", script_name = %script_name, run_type = ?run_type, max_run_time_ms = limits.max_run_time_ms, "executing JS runner in source mode");
+    let _audit_scope = crate::js_audit::enter_worker(Some(script_name));
     let host_rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

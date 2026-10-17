@@ -25,6 +25,8 @@ pub async fn delete_key(token: String, namespace: String, key: String) -> RpcRes
         debug!(target: "kv", namespace = %namespace, key = %key, "Processing delete_key request");
 
         // 检查删除权限
+        // 保留命名空间由服务端内部维护，RPC 一律不可写
+        crate::reserved::ensure_namespace_writable(&namespace)?;
         check_kv_delete_permission(&token, &namespace, &key).await?;
         debug!(target: "kv", namespace = %namespace, key = %key, "delete_key permission check passed");
 

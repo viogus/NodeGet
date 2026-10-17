@@ -32,6 +32,8 @@ pub async fn set_value(
         debug!(target: "kv", namespace = %namespace, key = %key, "Processing set_value request");
 
         // 检查写权限
+        // 保留命名空间由服务端内部维护（如审计数据），RPC 一律不可写
+        crate::reserved::ensure_namespace_writable(&namespace)?;
         check_kv_write_permission(&token, &namespace, &key).await?;
         debug!(target: "kv", namespace = %namespace, key = %key, "set_value permission check passed");
 

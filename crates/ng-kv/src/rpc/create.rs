@@ -24,6 +24,8 @@ pub async fn create(token: String, name: String) -> RpcResult<Box<RawValue>> {
         debug!(target: "kv", namespace = %name, "Processing create namespace request");
 
         // 检查创建命名空间的权限
+        // 保留命名空间由服务端内部维护（如审计数据），RPC 一律不可写
+        crate::reserved::ensure_namespace_writable(&name)?;
         check_kv_create_permission(&token).await?;
         debug!(target: "kv", namespace = %name, "Create namespace permission check passed");
 
