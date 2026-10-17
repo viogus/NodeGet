@@ -75,17 +75,37 @@ impl Default for DispatchPolicy {
     }
 }
 
-/// 全局派发策略单例，启动时由 Server 二进制通过 `set_dispatch_policy` 注入。
-static DISPATCH_POLICY: std::sync::OnceLock<DispatchPolicy> = std::sync::OnceLock::new();
+/// 全局派发策略，启动时由 Server 二进制通过 `set_dispatch_policy` 注入。
+///
+/// 用可写锁而非 `OnceLock`：`serve` 在配置热重载时会重新注入一遍，`OnceLock`
+/// 的第二次 `set` 会被静默忽略——改了 `[crontab] aggregate_success_result` 却要
+/// 重启才生效，且没有任何告警。这里允许覆盖，并在值发生变化时打一条 warn。
+static DISPATCH_POLICY: std::sync::RwLock<Option<DispatchPolicy>> = std::sync::RwLock::new(None);
 
-/// 设置全局派发策略（启动时调用一次）。
+/// 设置（或热重载更新）全局派发策略。
 pub fn set_dispatch_policy(policy: DispatchPolicy) {
-    let _ = DISPATCH_POLICY.set(policy);
+    let mut slot = DISPATCH_POLICY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(previous) = *slot
+        && previous.aggregate_success_result != policy.aggregate_success_result
+    {
+        warn!(
+            target: "crontab",
+            previous = previous.aggregate_success_result,
+            current = policy.aggregate_success_result,
+            "dispatch policy changed at runtime"
+        );
+    }
+    *slot = Some(policy);
 }
 
 /// 获取全局派发策略；未注入时使用 [`DispatchPolicy::default`]。
 pub fn dispatch_policy() -> DispatchPolicy {
-    DISPATCH_POLICY.get().copied().unwrap_or_default()
+    DISPATCH_POLICY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_default()
 }
 
 // ── Agent 任务下发 ────────────────────────────────────────────────
@@ -140,21 +160,39 @@ pub async fn crontab_task(
         // 不依赖这里的失败重试（原实现也从不重试）。
         let uuids = TaskManager::global().connected_uuids(&uuids).await;
         let agent_count = uuids.len();
-        let skipped_offline = requested_count - agent_count;
+        let skipped_at_precheck = requested_count - agent_count;
         if agent_count == 0 {
-            info!(
+            // 全部离线也要写一条结果行：`last_run_time` 在调度前就已落库，
+            // 这一轮不会重试，如果这里什么都不写，UI 上只会看到「cron 没跑」，
+            // 而真实原因是 Agent 没连上（常见于 allow_task = false）。
+            warn!(
                 target: "crontab",
                 requested_count,
-                skipped_offline,
+                skipped_at_precheck,
                 task_type = ?task_event_type,
                 "all target agents offline, task dispatch skipped"
             );
+            let result = crontab_result::ActiveModel {
+                id: ActiveValue::NotSet,
+                cron_id: Set(cron_id),
+                cron_name: Set(cron_name.clone()),
+                relative_id: Set(None),
+                run_time: Set(Some(chrono::Utc::now().timestamp_millis())),
+                success: Set(Some(false)),
+                message: Set(Some(format!(
+                    "全部目标 Agent 离线（{skipped_at_precheck} 个），本次未下发；\
+                     请检查 Agent 是否在线且 allow_task 已开启"
+                ))),
+            };
+            if let Err(e) = crontab_result::Entity::insert(result).exec(db).await {
+                error!(target: "crontab", error = %e, "failed to record all-offline crontab result");
+            }
             return;
         }
         info!(
             target: "crontab",
             agent_count,
-            skipped_offline,
+            skipped_at_precheck,
             task_type = ?task_event_type,
             "dispatching task to agents"
         );
@@ -238,8 +276,11 @@ pub async fn crontab_task(
         let mut undelivered_task_ids: Vec<i64> = Vec::new();
         let aggregate_success = dispatch_policy().aggregate_success_result;
         let mut success_count: u64 = 0;
-        // 预检通过后仍离线而跳过的 Agent 数（预期内，不记失败）
-        let mut skipped_offline: u64 = 0;
+        // 预检通过后仍离线而跳过的 Agent 数（预期内，不记失败）。
+        // 与预检阶段的 skipped_at_precheck 是两个独立计数，不能同名遮蔽。
+        let mut skipped_on_send: u64 = 0;
+        // 单 Agent 派发时保留 task_id，供聚合行的 relative_id 使用
+        let mut sole_success_task_id: Option<i64> = None;
         // 仅在非聚合模式下逐 Agent 记录成功行；聚合模式下不构造这些字符串，避免无谓分配
         let mut success_rows: Vec<crontab_result::ActiveModel> = Vec::new();
 
@@ -255,6 +296,9 @@ pub async fn crontab_task(
             match send_result {
                 Ok(()) => {
                     debug!(target: "crontab", agent_uuid = %uuid, task_id, "task event sent to agent");
+                    if requested_count == 1 {
+                        sole_success_task_id = Some(task_id);
+                    }
                     success_count += 1;
                     if !aggregate_success {
                         success_rows.push(crontab_result::ActiveModel {
@@ -282,7 +326,7 @@ pub async fn crontab_task(
                             task_id,
                             "agent went offline between precheck and send, task skipped"
                         );
-                        skipped_offline += 1;
+                        skipped_on_send += 1;
                     } else {
                         // 队列满等真正的发送失败：保留 WARN 与失败行
                         let detail = send_err.message();
@@ -316,9 +360,11 @@ pub async fn crontab_task(
         // 失败行始终逐 Agent 记录，不受该策略影响。
         if aggregate_success {
             if success_count > 0 {
-                // 离线跳过数只在非零时附注，保持既有文案前缀不变（UI/机器人按前缀展示）
-                let offline_note = if skipped_offline > 0 {
-                    format!("，离线跳过：{skipped_offline}")
+                // 离线跳过数只在非零时附注，保持既有文案前缀不变（UI/机器人按前缀展示）。
+                // 预检跳过 + 发送期跳过都算「没送到的 Agent」，两段计数都要体现出来。
+                let skipped_total = skipped_at_precheck + usize::try_from(skipped_on_send).unwrap_or(0);
+                let offline_note = if skipped_total > 0 {
+                    format!("，离线跳过：{skipped_total}")
                 } else {
                     String::new()
                 };
@@ -326,7 +372,13 @@ pub async fn crontab_task(
                     id: ActiveValue::NotSet,
                     cron_id: Set(cron_id),
                     cron_name: Set(cron_name.clone()),
-                    relative_id: Set(None),
+                    // 单 Agent 派发时保留 run→task 的关联（文档承诺 relative_id = task_id）；
+                    // 多 Agent 聚合行没有单一 task_id，只能置 None。
+                    relative_id: Set(if requested_count == 1 {
+                        sole_success_task_id
+                    } else {
+                        None
+                    }),
                     run_time: Set(Some(now_ms)),
                     success: Set(Some(true)),
                     message: Set(Some(format!(
@@ -463,6 +515,22 @@ mod tests {
     }
 
     /// 默认派发策略：成功行按「每次运行一条汇总行」写入。
+    /// 热重载会重复注入：第二次 `set` 必须覆盖第一次（OnceLock 会静默忽略）。
+    #[test]
+    fn dispatch_policy_can_be_updated_at_runtime() {
+        super::set_dispatch_policy(super::DispatchPolicy {
+            aggregate_success_result: false,
+        });
+        assert!(!super::dispatch_policy().aggregate_success_result);
+        super::set_dispatch_policy(super::DispatchPolicy {
+            aggregate_success_result: true,
+        });
+        assert!(
+            super::dispatch_policy().aggregate_success_result,
+            "热重载注入必须生效，不能被首次写入锁死"
+        );
+    }
+
     /// 未注入时 `dispatch_policy()` 必须回落到该默认值，否则线上会退回逐 Agent 写成功行。
     #[test]
     fn dispatch_policy_defaults_to_aggregate_success() {
