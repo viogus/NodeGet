@@ -22,9 +22,19 @@
 //!   敏感方法（执行 SQL / token / terminal / db / delete 类）**每次都打**；
 //! - 每 [`FLUSH_INTERVAL`] 把累计快照写入 KV 命名空间 [`AUDIT_NAMESPACE`]
 //!   （key = worker 名），便于 `psql` 或 KV 编辑器直接查看；
-//! - 运行时开关：KV `js_policy/__audit` 设为 `{"enabled": false}` 即关闭审计，
+//! - 运行时开关：KV `__js_policy/__audit` 设为 `{"enabled": false}` 即关闭审计，
 //!   无需重新发版；读取失败时保持当前值（默认开启）。
+//!   两个命名空间都以 `__` 开头，`kv_*` RPC 不可写，因此被审计的 worker
+//!   （`env.token` 是超级令牌）无法自己关闭审计或抹掉落盘数据。
+//!
+//! ## 归属与容量
+//!
+//! - worker 名以 Rust 侧线程本地为准（`prepare_invoke_globals` 写入），JS 自报的值
+//!   只作对照，不一致时记 `worker_mismatch`；
+//! - 聚合表有容量上限，超出的新键折叠进 `<overflow>`，键组成部分截断到 128 字符；
+//! - 敏感方法按「前 3 次 + 每 60 次」限流告警，避免路由处理器每请求刷一行 WARN。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -35,10 +45,14 @@ use tracing::{debug, warn};
 
 use crate::spawn_on_server_runtime::spawn_detached_on_server_runtime;
 
-/// 审计数据落盘的 KV 命名空间
-pub const AUDIT_NAMESPACE: &str = "js_audit";
-/// 运行时开关所在的 KV 命名空间
-pub const POLICY_NAMESPACE: &str = "js_policy";
+/// 审计数据落盘的 KV 命名空间。
+///
+/// 以 `__` 开头是**服务端保留**前缀：`kv_create` / `kv_set_value` / `kv_delete_*`
+/// 一律拒绝写入（见 `ng_kv::reserved`）。被审计的 worker 持超级令牌，
+/// 若不保留，它自己就能把审计开关关掉、把证据删掉。
+pub const AUDIT_NAMESPACE: &str = "__js_audit";
+/// 运行时开关所在的 KV 命名空间（同样保留，worker 改不了）
+pub const POLICY_NAMESPACE: &str = "__js_policy";
 /// 运行时开关的 key（value 形如 `{"enabled": false}`）
 pub const AUDIT_SWITCH_KEY: &str = "__audit";
 /// 落盘间隔
@@ -46,18 +60,47 @@ const FLUSH_INTERVAL: Duration = Duration::from_mins(5);
 /// 未取到 worker 名时使用的占位（例如绕过包装器直调 `__nodeget_rpc_raw`）
 const UNKNOWN_WORKER: &str = "<unknown>";
 
+/// 聚合表容量上限。键的组成部分（worker / method）都来自脚本一侧，
+/// 不设上限时脚本可以无限制造新键把内存撑爆。
+const MAX_ENTRIES: usize = 4_096;
+
+/// 超出容量后所有新键折叠到这个占位键上，保证内存有界且不丢「有异常」这个信号。
+const OVERFLOW_WORKER: &str = "<overflow>";
+
+/// 单个键组成部分的最大长度（字符）。日志与 KV key 都要用它，避免一行变几兆。
+const MAX_KEY_CHARS: usize = 128;
+
 /// 每次都告警的敏感方法（前缀匹配）：执行 SQL、凭据管理、终端、任意库操作、
 /// 删除类操作。观察期一旦出现这些调用就应当人工确认。
 const SENSITIVE_METHODS: &[&str] = &[
+    // 执行 SQL / 数据库
     "nodeget-server_exec_sql",
     "nodeget-server_get_database_type",
-    "token_",
-    "terminal",
     "db_",
+    // 配置与自更新
+    "nodeget-server_edit_config",
+    "nodeget-server_self_update",
+    "nodeget-server_read_config",
+    // 凭据
+    "token_",
+    // 终端
+    "terminal",
+    // 删除类（含 KV / Agent / 静态资源 / 结果）
+    "kv_delete",
+    "kv_set_value",
+    "task_delete",
     "js-worker_delete",
     "js-worker_update",
+    "js-worker_create",
+    "js-worker_run",
+    "js-result_delete",
     "crontab_delete",
-    "kv_delete",
+    "crontab-result_delete",
+    "static-bucket_delete",
+    "static-bucket-file_delete",
+    "static-bucket-file_upload",
+    "agent_delete",
+    "agent-uuid_delete",
 ];
 
 /// 审计开关，默认开启；由 [`refresh_switch`] 周期性从 KV 刷新。
@@ -71,9 +114,20 @@ struct Entry {
     count: u64,
     first_seen_ms: i64,
     last_seen_ms: i64,
+    /// 已就此组合打过多少次 WARN；用于做频率限制（敏感方法原来每次都打）
+    warned: u32,
 }
 
 type AuditTable = HashMap<(String, String), Entry>;
+
+/// 仅测试用：清空聚合表（表是进程级全局状态）。
+#[cfg(test)]
+pub(crate) fn reset_for_test() {
+    table()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
 
 fn table() -> &'static Mutex<AuditTable> {
     static TABLE: OnceLock<Mutex<AuditTable>> = OnceLock::new();
@@ -95,36 +149,101 @@ pub fn is_sensitive(method: &str) -> bool {
         .any(|prefix| method.starts_with(prefix))
 }
 
+thread_local! {
+    /// 当前 OS 线程上正在执行的 worker 名，由 [`set_current_worker`] 在每次执行前写入。
+    ///
+    /// 运行时池是「一个 worker 一个 OS 线程、一个 QuickJS context」，所以线程本地
+    /// 就是 Rust 侧的**权威**归属。JS 侧传上来的名字只是 hint：被审计的脚本可以
+    /// 自己改 `globalThis.__nodeget_current_script_name`，不能作为取证依据。
+    static CURRENT_WORKER: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// 记录当前线程正在执行的 worker（由 `prepare_invoke_globals` 在每次执行前调用）。
+pub fn set_current_worker(name: Option<&str>) {
+    CURRENT_WORKER.with(|cell| {
+        *cell.borrow_mut() = name.map(str::to_owned);
+    });
+}
+
+/// 清除当前线程的 worker 记录（执行结束时调用，避免下一次执行串味）。
+pub fn clear_current_worker() {
+    CURRENT_WORKER.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
+/// 截断过长的键组成部分，保证日志行与 KV key 有界。
+fn bounded(value: &str) -> String {
+    if value.chars().count() <= MAX_KEY_CHARS {
+        return value.to_owned();
+    }
+    let truncated: String = value.chars().take(MAX_KEY_CHARS).collect();
+    format!("{truncated}…({} chars)", value.chars().count())
+}
+
 /// 记录一次 JS 发起的 RPC 调用。**不做任何拦截**，只聚合与告警。
 ///
-/// - `worker` —— 发起调用的 worker 名；`None` 表示未能取得（记为 `<unknown>`）
+/// worker 归属以 Rust 侧线程本地为准（见 [`set_current_worker`]）；`worker_hint`
+/// 是 JS 传上来的值，只作为对照：不一致时记 `worker_mismatch`，这本身就是要看的信号。
+///
+/// - `worker_hint` —— JS 侧自称的 worker 名
 /// - `method` —— JSON-RPC 方法名（形如 `task_create_task_blocking`）
-pub fn record(worker: Option<&str>, method: &str) {
+pub fn record(worker_hint: Option<&str>, method: &str) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let worker = worker.unwrap_or(UNKNOWN_WORKER);
+
+    let authoritative = CURRENT_WORKER.with(|cell| cell.borrow().clone());
+    let (worker, mismatch) = match (authoritative.as_deref(), worker_hint) {
+        (Some(real), Some(hint)) if real != hint => (real, Some(hint)),
+        (Some(real), _) => (real, None),
+        (None, Some(hint)) => (hint, None),
+        (None, None) => (UNKNOWN_WORKER, None),
+    };
+    if let Some(hint) = mismatch {
+        // 脚本改了 `__nodeget_current_script_name`：单独告警，不随采样限流丢弃
+        warn!(
+            target: "js_audit",
+            worker,
+            hint,
+            method = bounded(method),
+            "js worker identity mismatch: script reported a different name"
+        );
+    }
+
     let now = now_ms();
+    let worker = bounded(worker);
+    let method = bounded(method);
 
     let is_first_seen = {
         let mut counters = table().lock().unwrap_or_else(PoisonError::into_inner);
-        let entry = counters
-            .entry((worker.to_owned(), method.to_owned()))
-            .or_insert_with(|| Entry {
-                count: 0,
-                first_seen_ms: now,
-                last_seen_ms: now,
-            });
+        // 容量上限：新键在表满后折叠进溢出桶，避免脚本用随机方法名撑爆内存
+        let key = (worker.clone(), method.clone());
+        let key = if counters.len() >= MAX_ENTRIES && !counters.contains_key(&key) {
+            (OVERFLOW_WORKER.to_owned(), method.clone())
+        } else {
+            key
+        };
+        let entry = counters.entry(key).or_insert(Entry {
+            count: 0,
+            first_seen_ms: now,
+            last_seen_ms: now,
+            warned: 0,
+        });
         entry.count += 1;
         entry.last_seen_ms = now;
         let first = entry.count == 1;
-        // 显式释放锁：下面的告警日志可能较慢，不应持锁
-        drop(counters);
-        first
+        // 频率限制：前 3 次都报，之后每 60 次报一次，避免每个 HTTP 请求刷一行 WARN
+        let should_warn = entry.count <= 3 || entry.count % 60 == 0;
+        if should_warn {
+            entry.warned += 1;
+        }
+        (first, should_warn)
     };
 
-    let sensitive = is_sensitive(method);
-    if is_first_seen || sensitive {
+    let (is_first_seen, should_warn) = is_first_seen;
+    let sensitive = is_sensitive(&method);
+    if sensitive && should_warn || is_first_seen {
         warn!(
             target: "js_audit",
             worker,
@@ -142,8 +261,10 @@ pub fn ensure_flusher() {
         return;
     }
     if let Err(e) = spawn_detached_on_server_runtime(flush_loop()) {
-        // Handle 未初始化（例如测试环境）：退化为「只在日志里告警、不落盘」
-        warn!(target: "js_audit", error = %e, "js audit flusher not started");
+        // Handle 未初始化（例如测试环境）：退化为「只在日志里告警、不落盘」。
+        // 必须把标志复位，否则这一次失败会让本进程内再也不会尝试启动 flush。
+        FLUSH_STARTED.store(false, Ordering::Release);
+        warn!(target: "js_audit", error = %e, "js audit flusher not started, will retry");
     }
 }
 
@@ -188,10 +309,15 @@ async fn flush_once() -> anyhow::Result<()> {
     // 命名空间不存在时 set_v_to_kv 会报错，这里先确保其存在（幂等）
     ng_kv::get_or_create_kv(AUDIT_NAMESPACE.to_owned()).await?;
     let workers = snapshot.len();
+    let mut failed = 0_u32;
     for (worker, payload) in snapshot {
-        ng_kv::set_v_to_kv(AUDIT_NAMESPACE.to_owned(), worker, payload).await?;
+        // 单个 worker 失败不该连累其余 worker（原来 `?` 会让后面的全部跳过）
+        if let Err(e) = ng_kv::set_v_to_kv(AUDIT_NAMESPACE.to_owned(), worker, payload).await {
+            failed += 1;
+            warn!(target: "js_audit", error = %e, "failed to persist js audit row");
+        }
     }
-    debug!(target: "js_audit", workers, "js audit flushed");
+    debug!(target: "js_audit", workers, failed, "js audit flushed");
     Ok(())
 }
 
@@ -232,8 +358,16 @@ fn snapshot() -> Vec<(String, Value)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SENSITIVE_METHODS, is_sensitive, snapshot};
+    use super::{MAX_ENTRIES, MAX_KEY_CHARS, SENSITIVE_METHODS, is_sensitive, snapshot};
+    use std::sync::Mutex;
     use std::sync::atomic::Ordering;
+
+    /// 聚合表与开关都是进程级全局状态，测试之间必须串行，否则互相污染。
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn sensitive_methods_match_by_prefix() {
@@ -257,6 +391,7 @@ mod tests {
 
     #[test]
     fn record_aggregates_and_respects_runtime_switch() {
+        let _guard = lock();
         // 本模块共享全局状态（聚合表 + 开关），因此把断言合成单个测试，避免并行测试
         // 在「关闭开关」的窗口内互相干扰；worker 名保持唯一，避免与其它测试串味。
         let worker = "test-worker-agg";
@@ -293,5 +428,93 @@ mod tests {
             !snap_after.iter().any(|(name, _)| name == disabled_worker),
             "关闭审计后不应记录任何调用"
         );
+    }
+
+    /// 对抗性：脚本篡改 `__nodeget_current_script_name` 嫁祸他人时，
+    /// 归属必须仍取 Rust 侧线程本地的真名。
+    #[test]
+    fn forged_worker_name_does_not_change_attribution() {
+        let _guard = lock();
+        super::reset_for_test();
+        super::ENABLED.store(true, Ordering::Relaxed);
+
+        super::set_current_worker(Some("real-worker"));
+        super::record(Some("victim-worker"), "kv_get_value");
+        super::clear_current_worker();
+
+        let snap = snapshot();
+        assert!(
+            snap.iter().any(|(name, _)| name == "real-worker"),
+            "必须记到真实执行者名下"
+        );
+        assert!(
+            !snap.iter().any(|(name, _)| name == "victim-worker"),
+            "被冒名的 worker 不应出现"
+        );
+    }
+
+    /// 对抗性：脚本用随机方法名灌内存时必须被容量上限挡住。
+    #[test]
+    fn audit_table_is_bounded() {
+        let _guard = lock();
+        super::reset_for_test();
+        super::ENABLED.store(true, Ordering::Relaxed);
+
+        for index in 0..(MAX_ENTRIES + 64) {
+            super::record(None, &format!("method_{index}"));
+        }
+
+        let snap = snapshot();
+        assert!(
+            snap.len() <= 2,
+            "超出容量后新方法必须折叠进溢出桶，实际 worker 桶数：{}",
+            snap.len()
+        );
+        assert!(
+            snap.iter().any(|(name, _)| name == super::OVERFLOW_WORKER),
+            "溢出桶必须存在，否则等于静默丢数据"
+        );
+    }
+
+    /// 对抗性：超长方法名不得让日志行/KV key 无界增长。
+    #[test]
+    fn long_keys_are_truncated() {
+        let _guard = lock();
+        super::reset_for_test();
+        super::ENABLED.store(true, Ordering::Relaxed);
+
+        let long_method = "m".repeat(MAX_KEY_CHARS * 4);
+        super::record(None, &long_method);
+
+        let snap = snapshot();
+        let methods = snap
+            .iter()
+            .find(|(name, _)| name == super::UNKNOWN_WORKER)
+            .map(|(_, payload)| payload)
+            .expect("对未知 worker 也要记录");
+        let key = methods
+            .get("methods")
+            .and_then(|m| m.as_object())
+            .and_then(|m| m.keys().next())
+            .expect("方法名存在");
+        assert!(
+            key.chars().count() <= MAX_KEY_CHARS + 16,
+            "方法名必须被截断，实际长度 {}",
+            key.chars().count()
+        );
+    }
+
+    /// 敏感名单要覆盖真正危险的方法（含关闭审计自身的 kv_set_value）。
+    #[test]
+    fn sensitive_list_covers_high_risk_methods() {
+        for method in [
+            "kv_set_value",
+            "nodeget-server_self_update",
+            "nodeget-server_edit_config",
+            "task_delete",
+            "static-bucket-file_upload",
+        ] {
+            assert!(is_sensitive(method), "{method} 必须视为敏感方法");
+        }
     }
 }

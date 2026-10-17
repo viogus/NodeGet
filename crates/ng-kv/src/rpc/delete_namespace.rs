@@ -24,6 +24,8 @@ pub async fn delete_namespace(token: String, namespace: String) -> RpcResult<Box
         debug!(target: "kv", namespace = %namespace, "Processing delete_namespace request");
 
         // 检查对该命名空间的全局删除权限
+        // 保留命名空间由服务端内部维护，RPC 一律不可写
+        crate::reserved::ensure_namespace_writable(&namespace)?;
         check_kv_delete_namespace_permission(&token, &namespace).await?;
         debug!(target: "kv", namespace = %namespace, "delete_namespace permission check passed");
 

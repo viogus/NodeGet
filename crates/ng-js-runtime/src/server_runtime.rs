@@ -789,6 +789,9 @@ pub fn prepare_invoke_globals(
         .map_err(|e| js_error("js_runner", format!("Failed to build env in JS: {e}")))?;
     global.set("__nodeget_env", env_js)?;
 
+    // 审计用：Rust 侧的权威归属取自这里（线程本地），不信任 JS 自报的名字
+    crate::js_audit::set_current_worker(script_name);
+
     match script_name {
         Some(name) => global.set("__nodeget_current_script_name", name.to_owned())?,
         None => {
@@ -817,6 +820,8 @@ pub fn prepare_invoke_globals(
 /// 将 `__nodeget_run_params`、`__nodeget_env` 等大对象设为 `null`，
 /// 让 `QuickJS` GC 在 `idle` 阶段回收这些引用的数据。
 fn cleanup_invoke_globals(ctx: &Ctx<'_>) {
+    // 审计归属只在单次执行内有效
+    crate::js_audit::clear_current_worker();
     // 清理大对象全局变量，释放 JS 堆内存；失败时静默忽略（Runtime 即将销毁）
     ctx.eval::<(), _>(
         r"globalThis.__nodeget_run_params = null;
