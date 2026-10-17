@@ -8,13 +8,6 @@ on:
         required: false
         default: false
         type: boolean
-      # fork-local：版本号严格跟随上游（Cargo.toml 不改），用后缀区分 fork 的构建，
-      # 例如 f.1cc44d2 → 版本 0.6.1-beta.2-f.1cc44d2、tag 与镜像 tag 同名。
-      version_suffix:
-        description: "追加到版本号后的后缀（如 f.1cc44d2），留空则完全等同上游"
-        required: false
-        default: ""
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref_name || github.run_id }}
@@ -41,19 +34,9 @@ jobs:
       - name: Resolve release mode
         id: release
         shell: bash
-        env:
-          # 用 env 传值：不要把输入直接插值进脚本
-          VERSION_SUFFIX: ${{ inputs.version_suffix }}
         run: |
           publish="false"
           tag=""
-          suffix="${VERSION_SUFFIX:-}"
-
-          # 后缀只允许字母数字与 . _ -，避免进入 tag/镜像名后变成非法字符
-          if [[ -n "${suffix}" && ! "${suffix}" =~ ^[0-9A-Za-z._-]+$ ]]; then
-            echo "version_suffix may only contain [0-9A-Za-z._-], got: ${suffix}" >&2
-            exit 1
-          fi
 
           # push tag 触发 → 自动发布；手动触发 → 读取 inputs
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
@@ -64,11 +47,6 @@ jobs:
             # 从 Cargo.toml workspace.package.version 读取版本号，加上 v 前缀
             version=$(awk '/^\[workspace\.package\]/{found=1; next} found && /^version/{sub(/^version[[:space:]]*=[[:space:]]*"/, ""); sub(/".*/, ""); print; exit}' Cargo.toml)
             tag="v${version}"
-          fi
-
-          # fork-local：版本号保持与上游一致，用后缀区分 fork 的构建
-          if [[ -n "${suffix}" ]]; then
-            tag="${tag}-${suffix}"
           fi
 
           # 发布时校验 tag 格式：v + 语义版本，允许 pre-release 后缀如 -rc1, +build123
@@ -118,15 +96,11 @@ jobs:
     name: Build Linux server
     needs: prepare
     uses: ./.github/workflows/build-server-linux.yml
-    with:
-      version_suffix: ${{ inputs.version_suffix }}
 
   build:
     name: Build
     needs: prepare
     uses: ./.github/workflows/build.yml
-    with:
-      version_suffix: ${{ inputs.version_suffix }}
 
   publish-release:
     name: Publish GitHub Release
