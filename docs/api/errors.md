@@ -51,6 +51,11 @@ NodeGet 定义了一个统一的错误枚举 `NodegetError`，包含以下错误
     - 当请求的 UUID 不存在时抛出
 
 - **ConfigNotFound(String)** - 配置未找到（错误码: 107）
+    - 当读取/解析配置文件失败时抛出
+
+- **AgentOffline(String)** - Agent 离线（错误码: 109）
+    - 当目标 Agent 没有活动的任务订阅会话时抛出（派发前置预检拦下，或预检通过后发送时掉线）
+    - 消息形如 `Agent <uuid> is not connected`，不带前缀，便于客户端匹配
     - 当请求的配置不存在时抛出
 
 - **SerializationError(String)** - 序列化错误（错误码: 101）
@@ -82,6 +87,8 @@ pub struct JsonError {
 - `105` - NotFound
 - `106` - UuidNotFound
 - `107` - ConfigNotFound
+- `108` - InvalidInput
+- `109` - AgentOffline（Agent 未连接；与队列满的 `104` 区分，便于客户端决定是否重试）
 - `108` - InvalidInput
 - `999` - Other
 

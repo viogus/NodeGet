@@ -57,7 +57,7 @@ crates/ng-kv/src/
 | `NAMESPACE_MARKER_KEY` | `pub const NAMESPACE_MARKER_KEY: &str = "__nodeget_namespace_marker__"`（`db.rs:22`） | `create_kv` 写入的标记键（值为 JSON `null`，存于 NOT NULL JSON/JSONB 列），用于标记命名空间已存在。**保留键名，勿用作真实 key**。 |
 | `create_kv` | `pub async fn create_kv(namespace: String) -> Result<KVStore>`（`db.rs:63`） | 命名空间已存在则报 `DatabaseError`；否则插入 marker 行，返回空 KVStore。 |
 | `get_v_from_kv` | `pub async fn get_v_from_kv(namespace: String, key: String) -> Result<Option<Value>>`（`db.rs:124`） | 调 `ensure_namespace_exists`（命名空间缺失则报错），按 `(namespace, key)` 单行查询。 |
-| `get_v_from_kv_lenient` | `pub async fn get_v_from_kv_lenient(namespace: &str, key: &str) -> Result<Option<Value>>`（`db.rs:104`） | **不**确保命名空间存在；缺失返回 `None`。被 `get_multi_value` 精确键快速路径使用。**未在 `lib.rs` 再导出，仅 crate 内可见**。 |
+| `get_v_from_kv_lenient` | `pub async fn get_v_from_kv_lenient(namespace: &str, key: &str) -> Result<Option<Value>>`（`db.rs:104`） | **不**确保命名空间存在；缺失返回 `None`。被 `get_multi_value` 精确键快速路径使用。已由 `lib.rs` 再导出（fork 的 `js_audit` 需要跨 crate 读取，见 `crates/ng-kv/src/lib.rs` 的 `pub use db::{...}`）。 |
 | `set_v_to_kv` | `pub async fn set_v_to_kv(namespace: String, key: String, value: Value) -> Result<()>`（`db.rs:152`） | 调 `ensure_namespace_exists` 后用 `insert(...).on_conflict(OnConflict::columns([Namespace, Key]).update_column(Value))` upsert；**不会**隐式创建命名空间。 |
 | `get_or_create_kv` | `pub async fn get_or_create_kv(namespace: String) -> Result<KVStore>`（`db.rs:185`） | 存在则 `get_kv_store`，否则 `create_kv`。 |
 | `delete_key_from_kv` | `pub async fn delete_key_from_kv(namespace: String, key: String) -> Result<()>`（`db.rs:205`） | 确保命名空间存在，按 namespace AND key `delete_many`。 |
@@ -104,7 +104,7 @@ crates/ng-kv/src/
 | `lib.rs` 模块门控 | `crates/ng-kv/src/lib.rs:11` | `mod kv; pub use kv::KVStore;`（常驻）。 |
 | `#[cfg(feature = "server")]` 模块门 | `crates/ng-kv/src/lib.rs:14` | 条件声明 `auth`、`db`、`rpc`。 |
 | `pub use auth::{...}` | `crates/ng-kv/src/lib.rs:21` | server 再导出权限/校验助手（**不含** `validate_namespace`；导出的校验函数为 `validate_key`、`validate_key_pattern`）。 |
-| `pub use db::{...}` | `crates/ng-kv/src/lib.rs:29` | server 再导出 DB ops；**`get_v_from_kv_lenient` 未在列**。 |
+| `pub use db::{...}` | `crates/ng-kv/src/lib.rs:29` | server 再导出 DB ops；`get_v_from_kv_lenient` 亦在列（fork 的 `js_audit` 依赖）。 |
 | `pub use rpc::{...}` | `crates/ng-kv/src/lib.rs:35` | server 再导出 `KvValueItem`、`NamespaceKeyItem`、`rpc_module`。 |
 
 ## 内部机制

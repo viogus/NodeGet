@@ -179,8 +179,8 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 
 ```json
 {
-  "error_id": 104,
-  "error_message": "Error sending task event: Agent AGENT_UUID_HERE is not connected"
+  "error_id": 109,
+  "error_message": "Agent AGENT_UUID_HERE is not connected"
 }
 ```
 
@@ -191,8 +191,11 @@ SelfUpdate 任务触发 Agent 从 `https://install.nodeget.com/` 下载对应架
 }
 ```
 
-> 任务下发采用有界队列（容量 32）。Agent 离线时返回 `not connected`;Agent 在线但任务积压队列已满时返回 `task queue is full`
-> （不再阻塞等待排空,调用方可稍后重试）。两者错误码均为 `104`。
+> 任务下发采用有界队列（容量 32）。
+> - **Agent 离线**：派发前预检直接返回 **`109`**（`AgentOffline`），消息 `Agent <uuid> is not connected`，不带前缀；
+> - **队列已满**：Agent 在线但任务积压时返回 **`104`**，消息 `Error sending task event: ... task queue is full`（不阻塞等待排空，调用方可稍后重试）。
+>
+> 两者错误码不同，客户端可据此区分「目标不在线」与「目标在线但忙」——前者重试也没用，后者适合退避重试。
 
 ## Create Task Blocking
 

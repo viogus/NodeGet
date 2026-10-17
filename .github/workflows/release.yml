@@ -108,8 +108,10 @@ jobs:
       - prepare
       - build-server-linux
       - build
-    # fork-local：即使个别平台构建失败也照常发布（上游为 needs 全部成功后发布）
-    if: always() && needs.prepare.outputs.publish == 'true'
+      - test
+    # fork-local：个别平台构建失败也照常发布（上游为 needs 全部成功后发布），
+    # 但测试必须是绿的——否则「测试不过照样发版」等于没有测试门禁。
+    if: always() && needs.test.result == 'success' && needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -86,10 +86,15 @@ rquickjs = { git = "https://github.com/delskayn/rquickjs.git" }
 rquickjs-core = { git = "https://github.com/delskayn/rquickjs.git" }
 rquickjs-sys = { git = "https://github.com/delskayn/rquickjs.git" }
 
+# `minimal` / `minimal_debug` 的 `build-override = { strip = "none" }` 不是可选项：
+# `strip = true` 会连带剥离 proc-macro 的 dylib（rquickjs_macro），rustc 随后报
+# "can't find crate for `rquickjs_macro`"，`--profile minimal` 直接构建失败
+# （Docker 镜像与 Release 都走这个 profile）。proc-macro / build script 属于
+# build-override，单独关掉 strip 即可，最终二进制仍然被 strip。
 [profile]
 dev = { opt-level = 0, debug = true, debug-assertions = true, overflow-checks = true, lto = false, panic = "unwind", incremental = true, codegen-units = 256, rpath = false }
 release = { opt-level = 3, debug = false, debug-assertions = false, overflow-checks = false, lto = false, panic = "unwind", incremental = false, codegen-units = 16, rpath = false }
 release_debug = { inherits = "release", debug = true }
 fastest = { inherits = "dev", opt-level = 0, debug = 0, debug-assertions = true, overflow-checks = true, lto = false, panic = "unwind", incremental = true, codegen-units = 512, rpath = false }
-minimal = { inherits = "release", opt-level = "z", lto = true, codegen-units = 1, panic = "abort", debug = false, strip = true, debug-assertions = false, overflow-checks = false }
-minimal_debug = { inherits = "release", opt-level = "z", lto = true, codegen-units = 1, panic = "abort", debug = true, strip = true, debug-assertions = false, overflow-checks = false }
+minimal = { inherits = "release", opt-level = "z", lto = true, codegen-units = 1, panic = "abort", debug = false, strip = true, debug-assertions = false, overflow-checks = false, build-override = { strip = "none" } }
+minimal_debug = { inherits = "release", opt-level = "z", lto = true, codegen-units = 1, panic = "abort", debug = true, strip = true, debug-assertions = false, overflow-checks = false, build-override = { strip = "none" } }
