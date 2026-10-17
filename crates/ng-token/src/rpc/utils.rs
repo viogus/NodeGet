@@ -6,7 +6,7 @@
 use ng_core::error::NodegetError;
 use ng_core::permission::token_auth::TokenOrAuth;
 use ng_db::entity::token;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tracing::{debug, warn};
 
 use crate::super_token::check_super_token;
@@ -17,6 +17,10 @@ use crate::super_token::check_super_token;
 /// - `key:secret` 格式 → 提取 key 部分（忽略 secret）
 /// - `username|password` 格式 → 提取 username 部分（忽略 password）
 /// - 纯 key/username → 原样返回
+///
+/// **注意**：调用方若需要支持含分隔符的用户名（如 `[agent]:<uuid>`），
+/// 必须先用原始字符串做精确匹配，再回退到本函数的切分结果，
+/// 见 [`find_target_token`]。
 ///
 /// - `identifier`：原始标识符字符串
 /// - 返回：提取后的 token_key 或 username
@@ -29,8 +33,12 @@ pub fn extract_target_identifier(identifier: &str) -> &str {
 
 /// 按 token_key 或 username 在数据库中查找目标 Token 记录。
 ///
-/// 查找顺序：先按 token_key 精确匹配，再按 username 精确匹配。
-/// 每次只返回一条记录（token_key 和 username 均有唯一约束）。
+/// 查找顺序：
+/// 1. 先用**原始**标识符精确匹配 token_key，再匹配 username；
+/// 2. 都没有时才回退到 [`extract_target_identifier`] 的切分结果。
+///
+/// 顺序不能反过来：`[agent]:<uuid>` 这类用户名本身含 `:`，先切分会解析成 `[agent]`，
+/// 静默命中另一个 token——改密码/换 secret 就会作用到它身上。
 ///
 /// - `identifier`：目标标识符，支持 `key:secret`、`username|password` 或纯标识符
 /// - 返回：匹配的 token::Model
@@ -40,9 +48,31 @@ pub async fn find_target_token(identifier: &str) -> Result<token::Model, Nodeget
         NodegetError::DatabaseError("Database connection not initialized".to_owned())
     })?;
 
-    let key_or_name = extract_target_identifier(identifier);
+    let extracted = extract_target_identifier(identifier);
+    let mut candidates: Vec<&str> = vec![identifier];
+    if extracted != identifier {
+        candidates.push(extracted);
+    }
 
-    // 优先按 token_key 查找
+    for candidate in candidates {
+        if let Some(model) = find_by_key_or_username(db, candidate).await? {
+            return Ok(model);
+        }
+    }
+
+    // 只回显切分后的 key/username：identifier 可能是 `key:secret`，
+    // 把原文写进日志或错误响应等于泄露目标 token 的 secret。
+    warn!(target: "token", target = %extracted, "target token not found by key or username");
+    Err(NodegetError::NotFound(format!(
+        "Target token not found by key/username: {extracted}"
+    )))
+}
+
+/// 依次按 token_key、username 精确查找单条记录。
+async fn find_by_key_or_username(
+    db: &DatabaseConnection,
+    key_or_name: &str,
+) -> Result<Option<token::Model>, NodegetError> {
     if let Some(model) = token::Entity::find()
         .filter(token::Column::TokenKey.eq(key_or_name))
         .one(db)
@@ -50,24 +80,18 @@ pub async fn find_target_token(identifier: &str) -> Result<token::Model, Nodeget
         .map_err(|e| NodegetError::DatabaseError(format!("DB query error: {e}")))?
     {
         debug!(target: "token", target_key = %key_or_name, "found target token by token_key");
-        return Ok(model);
+        return Ok(Some(model));
     }
 
-    // 回退按 username 查找
-    if let Some(model) = token::Entity::find()
+    let model = token::Entity::find()
         .filter(token::Column::Username.eq(key_or_name))
         .one(db)
         .await
-        .map_err(|e| NodegetError::DatabaseError(format!("DB query error: {e}")))?
-    {
+        .map_err(|e| NodegetError::DatabaseError(format!("DB query error: {e}")))?;
+    if model.is_some() {
         debug!(target: "token", target_username = %key_or_name, "found target token by username");
-        return Ok(model);
     }
-
-    warn!(target: "token", target = %key_or_name, "target token not found by key or username");
-    Err(NodegetError::NotFound(format!(
-        "Target token not found by key/username: {key_or_name}"
-    )))
+    Ok(model)
 }
 
 /// 校验调用者是否为超级令牌，非超级令牌返回 PermissionDenied 错误。

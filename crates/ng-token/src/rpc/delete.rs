@@ -13,6 +13,7 @@ use tracing::{debug, warn};
 
 use crate::cache::TokenCache;
 use crate::super_token::check_super_token;
+use crate::rpc::utils::extract_target_identifier;
 
 /// 按 token_key 从数据库删除令牌（排除 ID=1 的超级令牌）。
 ///
@@ -167,7 +168,8 @@ pub async fn delete(token: String, target_token: String) -> RpcResult<Box<RawVal
                     .map_err(NodegetError::from)?
             } else {
                 return Err(NodegetError::NotFound(format!(
-                    "Token not found by key/username: {target_token_to_delete}"
+                    "Token not found by key/username: {}",
+                    extract_target_identifier(&target_token_to_delete)
                 ))
                 .into());
             }

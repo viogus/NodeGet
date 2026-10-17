@@ -14,6 +14,7 @@ use tracing::{debug, warn};
 
 use crate::cache::TokenCache;
 use crate::super_token::check_super_token;
+use crate::rpc::utils::extract_target_identifier;
 
 /// 编辑指定令牌的权限限制（仅超级令牌可调用）。
 ///
@@ -73,7 +74,8 @@ pub async fn edit(
             model
         } else {
             return Err(NodegetError::NotFound(format!(
-                "Token not found by key/username: {target_token}"
+                "Token not found by key/username: {}",
+                extract_target_identifier(&target_token)
             ))
             .into());
         };
