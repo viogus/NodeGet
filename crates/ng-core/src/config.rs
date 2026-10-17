@@ -230,12 +230,17 @@ mod tests {
     /// 对抗性：`retention_days` 换算成毫秒溢出时必须被拒绝（否则旧策略会被留下继续删）。
     #[test]
     fn validate_rejects_retention_days_overflow() {
-        let mut cfg = TimescaleConfig::default();
-        cfg.retention_days = MAX_RETENTION_DAYS;
-        assert!(cfg.validate().is_ok(), "上限值本身必须合法");
+        let at_limit = TimescaleConfig {
+            retention_days: MAX_RETENTION_DAYS,
+            ..TimescaleConfig::default()
+        };
+        assert!(at_limit.validate().is_ok(), "上限值本身必须合法");
 
-        cfg.retention_days = MAX_RETENTION_DAYS + 1;
-        assert!(cfg.validate().is_err(), "超出上限必须被拒绝");
+        let over_limit = TimescaleConfig {
+            retention_days: MAX_RETENTION_DAYS + 1,
+            ..TimescaleConfig::default()
+        };
+        assert!(over_limit.validate().is_err(), "超出上限必须被拒绝");
     }
 
     /// `enable` 是兼容别名（仓库里的上游草案用的是这个拼写）。

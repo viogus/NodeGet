@@ -483,6 +483,11 @@ async fn reconcile_retention_on_skip(
     };
 
     for table in TIMESCALE_TABLES {
+        // 普通表（从未转换过 / 已 untable）不可能挂着 TimescaleDB 的策略，
+        // 跳过以免每次启动都刷一条「摘不掉」的假告警。
+        if matches!(is_hypertable(db, table.name).await, Ok(false)) {
+            continue;
+        }
         let table_regclass = regclass_literal(&schema, table.name);
         match db
             .execute_unprepared(&format!(

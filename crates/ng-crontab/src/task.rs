@@ -231,7 +231,7 @@ pub async fn crontab_task(
                 run_time: Set(Some(now_ms)),
                 success: Set(Some(false)),
                 message: Set(Some(format!(
-                    "全部目标 Agent 离线（{skipped_at_precheck} 个），本次未下发；\
+                    "{ALL_OFFLINE_MESSAGE_PREFIX}（{skipped_at_precheck} 个），本次未下发；\
                      请检查 Agent 是否在线且 allow_task 已开启（同一 cron 10 分钟内只记一条）"
                 ))),
             };
