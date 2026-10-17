@@ -406,11 +406,11 @@ async fn setup_table(
     // 保留策略放在压缩之前：`retention_days = 0` 时唯一的作用就是移除已有策略
     // （"停止删除"），一旦排在被压缩步骤 return 之后，压缩一失败就再也执行不到，
     // chunk 会被继续删除——这个方向的失败是丢数据，必须优先且独立。
-    apply_retention_policy(db, table, &config, &table_regclass).await;
+    apply_retention_policy(db, table, config, &table_regclass).await;
 
     // 压缩设置（仅首次开启；开启后 segmentby/orderby 不可随意变更）。
     // 失败只记 error：保留策略已经独立应用，压缩失败不该连带影响它。
-    if let Err(e) = apply_compression(db, table, &config, &table_ref, &table_regclass).await {
+    if let Err(e) = apply_compression(db, table, config, &table_ref, &table_regclass).await {
         error!(
             target: "db",
             table = table.name,

@@ -234,10 +234,12 @@ pub fn record(worker_hint: Option<&str>, method: &str) {
         entry.last_seen_ms = now;
         let first = entry.count == 1;
         // 频率限制：前 3 次都报，之后每 60 次报一次，避免每个 HTTP 请求刷一行 WARN
-        let should_warn = entry.count <= 3 || entry.count % 60 == 0;
+        let should_warn = entry.count <= 3 || entry.count.is_multiple_of(60);
         if should_warn {
             entry.warned += 1;
         }
+        // 显式释放锁：下面的告警日志可能较慢，不应持锁
+        drop(counters);
         (first, should_warn)
     };
 
@@ -504,7 +506,7 @@ mod tests {
         );
     }
 
-    /// 敏感名单要覆盖真正危险的方法（含关闭审计自身的 kv_set_value）。
+    /// 敏感名单要覆盖真正危险的方法（含关闭审计自身的 `kv_set_value`）。
     #[test]
     fn sensitive_list_covers_high_risk_methods() {
         for method in [
