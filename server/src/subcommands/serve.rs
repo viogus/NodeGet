@@ -146,6 +146,14 @@ pub async fn run(config: &ServerConfig, stop_signal: &mut StopSignal) -> ServeEx
             }
         });
 
+    // 入站数据静默检测：连接上超过该秒数没有收到任何入站数据帧就主动断开，让对端重连。
+    // 只能检测“接收方向”的静默（pong 仍在、业务数据卡死），0 或未设置表示关闭。
+    let inbound_idle = std::env::var("NODEGET_INBOUND_IDLE_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs);
+
     let jsonrpc_service = jsonrpsee::server::Server::builder()
         .set_rpc_middleware(rpc_middleware)
         .set_config(
@@ -153,6 +161,7 @@ pub async fn run(config: &ServerConfig, stop_signal: &mut StopSignal) -> ServeEx
                 .max_connections(config.jsonrpc_max_connections.unwrap_or(100))
                 .max_response_body_size(config.max_response_body_size.unwrap_or(100 * 1024 * 1024))
                 .max_request_body_size(config.max_request_body_size.unwrap_or(10 * 1024 * 1024))
+                .set_inbound_idle(inbound_idle)
                 .build(),
         )
         .to_service_builder()

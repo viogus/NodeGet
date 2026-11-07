@@ -717,7 +717,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2025,7 +2025,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee"
 version = "0.26.0"
-source = "git+https://github.com/infinitefield/jsonrpsee.git#c98acaa6f4438beca30ecf15d8637561d0101917"
+source = "git+https://github.com/viogus/jsonrpsee.git?rev=21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449#21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449"
 dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-proc-macros",
@@ -2038,7 +2038,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-core"
 version = "0.26.0"
-source = "git+https://github.com/infinitefield/jsonrpsee.git#c98acaa6f4438beca30ecf15d8637561d0101917"
+source = "git+https://github.com/viogus/jsonrpsee.git?rev=21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449#21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2062,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-proc-macros"
 version = "0.26.0"
-source = "git+https://github.com/infinitefield/jsonrpsee.git#c98acaa6f4438beca30ecf15d8637561d0101917"
+source = "git+https://github.com/viogus/jsonrpsee.git?rev=21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449#21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate",
@@ -2074,7 +2074,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-server"
 version = "0.26.0"
-source = "git+https://github.com/infinitefield/jsonrpsee.git#c98acaa6f4438beca30ecf15d8637561d0101917"
+source = "git+https://github.com/viogus/jsonrpsee.git?rev=21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449#21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449"
 dependencies = [
  "futures-util",
  "http",
@@ -2099,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-types"
 version = "0.26.0"
-source = "git+https://github.com/infinitefield/jsonrpsee.git#c98acaa6f4438beca30ecf15d8637561d0101917"
+source = "git+https://github.com/viogus/jsonrpsee.git?rev=21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449#21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449"
 dependencies = [
  "http",
  "serde",
@@ -5732,7 +5732,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

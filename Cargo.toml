@@ -30,7 +30,7 @@ serde = { version = "1.0.228", default-features = false, features = ["std", "der
 serde_json = { version = "1.0.150", default-features = false, features = ["std", "raw_value"] }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 anyhow = { version = "1.0.102", default-features = false }
-jsonrpsee = { git = "https://github.com/infinitefield/jsonrpsee.git", default-features = false, features = ["macros", "server-core"] }
+jsonrpsee = { git = "https://github.com/viogus/jsonrpsee.git", rev = "21ec7dcb2b8fa8fecf812aeef2080c5cf8d8c449", default-features = false, features = ["macros", "server-core"] }
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "ws", "http1", "query"] }
 hyper = { version = "1.10.1", default-features = false, features = ["http1", "client", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
